@@ -11,7 +11,7 @@
 
 <p align="center">
   <b>Watch your code run. Change it while it runs.</b><br/>
-  Iroh Redux is a dynamic code analysis tool for JavaScript — record your code flow
+  IrohRedux is a dynamic code analysis tool for JavaScript — record your code flow
   in realtime, intercept runtime information, and manipulate program behaviour
   on the fly. And now you don't even have to write JavaScript to use it.
 </p>
@@ -26,7 +26,7 @@
 
 ### Why dynamic analysis?
 
-Static analysis (Babel, ESLint) reads your code. Iroh Redux *runs* it — and tells you
+Static analysis (Babel, ESLint) reads your code. IrohRedux *runs* it — and tells you
 what actually happened: which functions were called with what, which branches
 were taken, what every variable held, moment by moment. That data only exists
 at runtime, and Iroh Redux hands it to you while the code is still running, so you
