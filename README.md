@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="//github.com/andyle777/IrohRedux">Website</a> |
-  <a href="//github.com/andyle777/IrohReduxexamples/index.html">Examples</a> |
+  <a href="//github.com/andyle777/IrohRedux/blob/master/GETTING_STARTED.md">Examples</a> |
   <a href="//github.com/andyle777/IrohRedux/blob/master/API.md">API</a>
 </p>
 
@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  ☕ Dynamic code analysis for JavaScript
+  ☕ Dynamic code analysis for JavaScript — from JavaScript, Python, and C++
 </p>
 
 <br/>
@@ -23,7 +23,13 @@
 #### Description
 
 Iroh is a dynamic code analysis tool for JavaScript.
-Iroh allows to record your code flow in realtime, intercept runtime informations and manipulate program behaviour on the fly. 
+Iroh allows to record your code flow in realtime, intercept runtime informations and manipulate program behaviour on the fly.
+
+The engine is JavaScript, but you don't have to write JavaScript to use it:
+the `iroh` CLI (`cli/iroh.js`) runs a program through Iroh and streams its
+trace events as JSON lines, and thin clients in [`python/`](python/) and
+[`cpp/`](cpp/) speak that protocol from Python and C++. See
+[Use it from Python and C++](#use-it-from-python-and-c) below.
 
 #### What is Dynamic analysis?
 
@@ -41,6 +47,49 @@ A summary of Iroh's API can be found [here](//github.com/andyle777/IrohRedux/blo
 npm install iroh
 ````
 or alternatively the browser distribution built from this repo: `npm run browser` produces `dist/iroh-browser.js`.
+
+### Use it from Python and C++
+
+The CLI is the bridge: it runs JavaScript through Iroh and streams trace
+events as one JSON object per line, followed by a result line.
+
+````
+$ node cli/iroh.js program.js --events CALL,IF
+{"type":"event","event":"FUNCTION_CALL","category":"CALL","trigger":"before","hash":11,"indent":1,"name":"factorial","arguments":[3],"external":false}
+{"type":"event","event":"FUNCTION_CALL_END","category":"CALL","trigger":"after","hash":11,"indent":1,"name":"factorial","return":6,"arguments":[3],"external":false}
+{"type":"result","value":6}
+````
+
+It also reads a program from stdin (`cat program.js | node cli/iroh.js`),
+takes `--events ALL` (the default) or a comma list of categories, and
+`--no-result` to skip the result line. Parse and runtime errors come back
+as a final `{"type":"error",...}` line with a non-zero exit code.
+
+**Python** — a thin client in [`python/`](python/) (stdlib only, needs
+Node.js and the CLI):
+
+````python
+from iroh import run
+
+events, result = run("[1, 2, 3].map(v => v * 2);", events=["VAR"])
+# result == [2, 4, 6]
+````
+
+**C++** — a header-only client in [`cpp/`](cpp/) (C++17, no dependencies):
+
+````cpp
+#include "iroh.hpp"
+
+iroh::Client client;
+auto trace = client.run("[1, 2, 3].map(v => v * 2);", {"VAR"});
+// trace.result.as_array() == [2, 4, 6]
+````
+
+Both clients find the CLI automatically in a checkout, or via `IROH_CLI`
+(and `IROH_NODE` for the Node binary). Each has its own README and tests:
+`python/tests/` (`npm run test:python`) and `cpp/` (`npm run test:cpp`).
+`npm test` runs the Node suite plus both clients when `python3` and `g++`
+are available.
 
 ### Examples
 

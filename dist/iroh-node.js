@@ -17,7 +17,7 @@ var extend = function(cls, prot) {
   }
 };
 
-var version = "0.4.0";
+var version = "0.5.0";
 
 // indent factor
 const INDENT_FACTOR = 1;
@@ -4068,6 +4068,13 @@ Stage.prototype.patch = function(input) {
 
 function setup() {
   this.generateCategoryBits();
+  // Expose the label tables on the singleton, so consumers (notably the
+  // CLI, which needs to turn event type/category numbers back into
+  // names) can read them without the dist bundle changing its export
+  // shape — `require("iroh")` still returns this object directly.
+  this.INSTR = INSTR;
+  this.CATEGORY = CATEGORY;
+  this.OP = OP;
   // Test assertions, for code running inside a stage. The 2017 fixtures
   // in tests/expressions/ and tests/other/ were written against this API,
   // but it was never implemented — `Iroh.assert` was undefined at runtime.

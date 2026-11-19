@@ -22,6 +22,23 @@
 
 ``assertions``: The recorded assertions from ``Iroh.assert`` calls, in order.
 
+``INSTR`` / ``CATEGORY`` / ``OP``: The label tables — instruction numbers,
+category numbers and operator numbers, keyed by name. Exposed so consumers
+can turn event type/category numbers back into names; the CLI
+(`cli/iroh.js`) uses them to print `"event":"FUNCTION_CALL"` instead of a
+raw number. `Iroh.CALL`, `Iroh.IF`, etc. are the category numbers
+themselves (see [Listener Specification](#specification)).
+
+#### Using Iroh from Python and C++:
+
+The engine traces JavaScript only, but the `iroh` CLI (`cli/iroh.js`)
+streams trace events as JSON lines, so other languages can consume Iroh
+without speaking JavaScript. Thin clients live in `python/` (stdlib only:
+`run(code, events=None)` → `(events, result)`) and `cpp/` (header-only
+C++17: `iroh::Client::run(code, events)` → `iroh::Trace`). Both find the
+CLI in the checkout or via `IROH_CLI`. See the README and each client's
+own README for the full API.
+
 #### Iroh.Stage:
 
 ``key``: The stage's unique key.

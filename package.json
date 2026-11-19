@@ -1,7 +1,10 @@
 {
   "name": "iroh",
-  "version": "0.4.0",
-  "description": "Intercept, record and analyze JavaScript at runtime",
+  "version": "0.5.0",
+  "description": "Intercept, record and analyze JavaScript at runtime — from JavaScript, Python, and C++",
+  "bin": {
+    "iroh": "cli/iroh.js"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -17,7 +20,10 @@
     "runtime",
     "realtime",
     "debug",
-    "visual"
+    "visual",
+    "python",
+    "cpp",
+    "cli"
   ],
   "homepage": "https://github.com/andyle777/IrohRedux",
   "author": "Felix Maier <xilefmai@gmail.com>",
@@ -34,7 +40,9 @@
     "dist": "npm run build && npm run browser",
     "build": "rollup -c rollup/rollup.config.cjs.js && rollup -c rollup/rollup.config.es.js",
     "browser": "rollup -c rollup/rollup.config.iife.js",
-    "test": "node tests/index.js"
+    "test": "node tests/index.js",
+    "test:python": "python3 -m unittest discover -s python/tests -v",
+    "test:cpp": "make -C cpp test"
   },
   "devDependencies": {
     "rollup": "^0.47.2",

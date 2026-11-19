@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.5.0 — C++, JavaScript and Python friendly (19 Nov 2026)
+
+The engine is still JavaScript — Iroh traces JavaScript, and that hasn't
+changed. What changed is who can *use* it. One new piece unlocks the other
+two languages: a CLI that runs a program through Iroh and streams its
+trace events as JSON lines, with thin clients on top for Python and C++.
+
+### Added
+- **`cli/iroh.js` — the bridge.** `node cli/iroh.js program.js
+  [--events CALL,IF]` (or pipe a program on stdin, or `--file`) runs it
+  through a Stage and prints one JSON object per line: trace events
+  (`event`, `category`, `trigger`, `hash`, `indent`, plus the event's own
+  fields), then `{"type":"result","value":...}`. Parse/runtime errors are
+  a final `{"type":"error",...}` line with a non-zero exit code; async
+  programs are awaited before the result line. Values are serialized
+  safely (depth-capped, circular references and functions marked, promises
+  shown as `"[Promise]"`). Also wired as the `iroh` bin in `package.json`.
+- **`python/iroh` — Python client.** Stdlib only. `run(code, events=None)`
+  and `trace_file(path, events=None)` return `(events, result)` as plain
+  Python data; `TraceError` (with `.name` and the `.events` that fired
+  before the failure) on parse/runtime errors. Finds the CLI in the
+  checkout, or via `IROH_CLI` / `IROH_NODE`. `pyproject.toml` included;
+  `pip install -e python/`. 7 tests (`npm run test:python`).
+- **`cpp/iroh.hpp` — C++ client.** Header-only, C++17, no dependencies
+  (a minimal JSON parser is included). `iroh::Client::run(code, events)`
+  / `run_file(path, events)` return an `iroh::Trace` with `.events`
+  (`iroh::Json` values) and `.result`; `iroh::TraceError` on failure.
+  Writes the code to a temp file and runs the CLI with `popen`.
+  `cpp/example.cpp` traces factorial; 5 tests in `cpp/test_client.cpp`
+  (`npm run test:cpp`).
+- **Label tables on the singleton.** `Iroh.INSTR` / `Iroh.CATEGORY` /
+  `Iroh.OP` are now exposed (in `src/setup.js`) so consumers — notably
+  the CLI, which turns event type/category numbers back into names — can
+  read them. `require("iroh")` still returns the singleton directly; the
+  dist export shape is unchanged.
+
+### Changed
+- README: tagline and description now say JavaScript, Python and C++;
+  new "Use it from Python and C++" section with CLI, Python and C++
+  examples. Fixed the broken Examples link (it pointed at
+  `IrohReduxexamples/index.html`, which doesn't exist) — it now points at
+  `GETTING_STARTED.md`.
+- `package.json`: description updated, `iroh` bin added, keywords extended
+  (`python`, `cpp`, `cli`), `test:python` / `test:cpp` scripts added.
+- `npm test` now runs the Node suite (behaviour + fixtures + CLI, 39
+  tests) plus the Python and C++ suites when `python3` / `g++` are
+  available (skipped, not failed, when absent).
+
+### Not done — deliberately
+- Iroh still traces **JavaScript only**. A native Python tracer or C++
+  tracer would be a separate library each, not a next update. Python and
+  C++ programs trace JavaScript programs through the CLI; they don't get
+  their own code traced.
+
 ## 0.4.0 — Fix and extend (21 Nov 2026, AEDT 19 Nov 2026)
 
 Fork of Felix Maier's Iroh 0.3.0 (last upstream commit Jan 2018), kept under
