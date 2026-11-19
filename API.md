@@ -22,6 +22,28 @@
 
 ``assertions``: The recorded assertions from ``Iroh.assert`` calls, in order.
 
+``trace(code, options)``: One-shot tracing (0.6.0). Runs `code` through a
+Stage and returns `{ events, result }` — `events` is the list of plain,
+JSON-safe event objects (same shape as the CLI's JSON lines), `result` is
+the program's completion value, live (not serialized). Options: `events`
+(`"ALL"` by default, an array of category names, or a comma string) and
+`onEvent(event)` (called for every event as it fires). A parse error throws
+before running; a runtime error throws with the events that fired before it
+attached as `error.events`.
+
+``traceAsync(code, options)``: Async version of `trace()`. Awaits the
+program's completion value before returning, so events from async
+continuations (await, promises) are included. Returns a Promise of
+`{ events, result }`.
+
+``eventToJSON(event, trigger)``: Turns a live RuntimeEvent into the plain
+object `trace()` returns. The CLI uses this too, so its JSON lines and
+`trace()` events are the same shape.
+
+``safeValue(value, depth, seen)``: Serializes a runtime value safely —
+depth-capped, circular references marked `"[Circular]"`, functions as
+`"[Function name]"`, promises as `"[Promise]"`.
+
 ``INSTR`` / ``CATEGORY`` / ``OP``: The label tables — instruction numbers,
 category numbers and operator numbers, keyed by name. Exposed so consumers
 can turn event type/category numbers back into names; the CLI

@@ -14,7 +14,7 @@ var extend = function(cls, prot) {
   }
 };
 
-var version = "0.5.0";
+var version = "0.6.0";
 
 // indent factor
 var INDENT_FACTOR = 1;
@@ -7981,11 +7981,96 @@ function uBranchHash() {
 
 function parse$$1(input, options) {
   // Same default as helpers.parse: Acorn 8 requires ecmaVersion.
-  return acorn_1(input, Object.assign({ ecmaVersion: 2022 }, options));
+  // "latest" + allowHashBang: see helpers.parse.
+  return acorn_1(input, Object.assign({ ecmaVersion: "latest", allowHashBang: true }, options));
 }
 
 function generate$$1() {
   return astring_1.apply(null, arguments);
+}
+
+// --- Event projection (shared by Iroh.trace() and the CLI) ---------------
+
+// Event fields that are safe to copy onto a plain event object. Everything
+// else on a RuntimeEvent (instance, node, location) is an internal
+// reference and is never serialized.
+var TRACE_EVENT_FIELDS = [
+  "name", "value", "result", "return", "op", "test", "left", "right",
+  "arguments", "object", "property", "context", "scope", "kind", "label",
+  "prefix", "external", "sloppy", "isDefault", "default", "callee" ];
+
+function instructionName(type) {
+  for (var key in INSTR) {
+    if (INSTR[key] === type) { return key; }
+  }
+  return String(type);
+}
+
+function categoryName(category) {
+  for (var key in CATEGORY) {
+    if (CATEGORY[key] === category) { return key; }
+  }
+  return String(category);
+}
+
+function safeValue(value, depth, seen) {
+  if (value === null) { return null; }
+  switch (typeof value) {
+    case "undefined": return null;
+    case "function": return "[Function " + (value.name || "anonymous") + "]";
+    case "bigint": return value.toString() + "n";
+    case "symbol": return value.toString();
+    case "string":
+    case "number":
+    case "boolean":
+      return value;
+  }
+  if (value instanceof Error) { return { error: value.message }; }
+  if (typeof value.then === "function") { return "[Promise]"; }
+  if (depth <= 0) { return "[Object]"; }
+  if (seen.has(value)) { return "[Circular]"; }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.map(function (v) { return safeValue(v, depth - 1, seen); });
+  }
+  var out = {};
+  // Indexed loop, not for...of: the browser bundle is transpiled by
+  // buble, which cannot compile for...of.
+  var keys = Object.keys(value);
+  for (var ii = 0; ii < keys.length; ++ii) {
+    var key = keys[ii];
+    try {
+      out[key] = safeValue(value[key], depth - 1, seen);
+    } catch (e) {
+      out[key] = "[Unserializable]";
+    }
+  }
+  return out;
+}
+
+// Turn one RuntimeEvent into a plain, JSON-safe object:
+// { type: "event", event: "FUNCTION_CALL", category: "CALL",
+//   trigger: "before", hash, indent, ...event fields }.
+// The CLI (cli/iroh.js) uses this too, so its JSON lines and
+// Iroh.trace() events are the same shape.
+function eventToJSON(event, trigger) {
+  var line = {
+    type: "event",
+    event: instructionName(event.type),
+    category: categoryName(event.category),
+    trigger: trigger,
+    hash: event.hash,
+    indent: event.indent,
+  };
+  // Indexed loop, not for...of: the browser bundle is transpiled by
+  // buble, which cannot compile for...of.
+  for (var ii = 0; ii < TRACE_EVENT_FIELDS.length; ++ii) {
+    var field = TRACE_EVENT_FIELDS[ii];
+    if (event[field] !== void 0 && event[field] !== null) {
+      line[field] = safeValue(event[field], 3, new Set());
+    }
+  }
+  return line;
 }
 
 
@@ -7994,7 +8079,9 @@ var _utils = Object.freeze({
 	uid: uid,
 	uBranchHash: uBranchHash,
 	parse: parse$$1,
-	generate: generate$$1
+	generate: generate$$1,
+	safeValue: safeValue,
+	eventToJSON: eventToJSON
 });
 
 var walk = createCommonjsModule(function (module, exports) {
@@ -8716,8 +8803,12 @@ function deepMagicPatch(node) {
 function parse$1(input, options) {
   // Acorn 8 requires ecmaVersion; default it so every internal
   // parseExpression/parseExpressionStatement call parses modern syntax
-  // instead of warning and falling back to ES2020.
-  return acorn_1(input, Object.assign({ ecmaVersion: 2022 }, options));
+  // instead of warning and falling back to ES2020. "latest" tracks the
+  // newest syntax Acorn supports (ES2025 RegExp modifiers, `using`
+  // declarations, import attributes); allowHashBang lets traced scripts
+  // start with a #! line. Callers may still override ecmaVersion via
+  // options.
+  return acorn_1(input, Object.assign({ ecmaVersion: "latest", allowHashBang: true }, options));
 }
 
 function generate$1() {
@@ -12291,12 +12382,12 @@ Stage.prototype.getFrameByHashFrom = function(frm, hash) {
 
 Stage.prototype.patch = function(input) {
   var patcher = new Patcher(this);
-  // Pin the language level explicitly: Acorn 8 parses up to ES2022 here
-  // (optional chaining, nullish coalescing, async/await, class fields,
-  // private fields, logical assignment). Newer node types without a dedicated
+  // Parse at the newest language level Acorn supports ("latest": ES2025
+  // RegExp modifiers, `using` declarations, import attributes) plus
+  // allowHashBang for #! scripts. Newer node types without a dedicated
   // patch handler are still walked generically by acorn-walk's base visitors,
   // so they run — they just don't get their own listener yet.
-  var ast = parse$1(input, { locations: true, ecmaVersion: 2022 });
+  var ast = parse$1(input, { locations: true, ecmaVersion: "latest", allowHashBang: true });
   this.frame = new Frame(INSTR.PROGRAM, this.$$frameHash);
   patcher.applyPatches(ast);
   // link walk things to stage
@@ -12320,6 +12411,7 @@ function setup() {
   this.INSTR = INSTR;
   this.CATEGORY = CATEGORY;
   this.OP = OP;
+  this.VERSION = VERSION;
   // Test assertions, for code running inside a stage. The 2017 fixtures
   // in tests/expressions/ and tests/other/ were written against this API,
   // but it was never implemented — `Iroh.assert` was undefined at runtime.
@@ -12350,6 +12442,92 @@ function generateCategoryBits() {
   }
 }
 
+var TRACE_TRIGGERS = ["before", "after", "enter", "leave", "fire", "test", "return"];
+
+function resolveTraceCategories(iroh, events) {
+  if (events === void 0 || events === null || events === "ALL") {
+    return Object.keys(CATEGORY);
+  }
+  var names = Array.isArray(events) ? events : String(events).split(",");
+  names = names.map(function (s) { return String(s).trim().toUpperCase(); }).filter(Boolean);
+  // Indexed loop, not for...of: the browser bundle is transpiled by
+  // buble, which cannot compile for...of.
+  for (var ii = 0; ii < names.length; ++ii) {
+    var name = names[ii];
+    if (!(name in CATEGORY) || typeof iroh[name] !== "number") {
+      throw new Error("Unknown event category: " + name);
+    }
+  }
+  return names;
+}
+
+// One-shot tracing — the modern SDK entry point. Runs `code` through a
+// Stage and returns { events, result }: `events` is the list of plain
+// event objects (same shape as the CLI's JSON lines — see
+// Iroh.eventToJSON), `result` is the program's completion value, live
+// (not serialized). Options:
+//   events: "ALL" (default), an array of category names (["CALL","IF"]),
+//           or a comma string ("CALL,IF").
+//   onEvent(event): called for every event as it fires.
+// A parse error throws before running; a runtime error throws with the
+// events that fired before it attached as error.events.
+function trace(code, options) {
+  var this$1 = this;
+
+  options = options || {};
+  var stage = new this.Stage(code);
+  var events = [];
+  var onEvent = options.onEvent;
+  var names = resolveTraceCategories(this, options.events);
+  // Indexed loops, not for...of: the browser bundle is transpiled by
+  // buble, which cannot compile for...of.
+  for (var ii = 0; ii < names.length; ++ii) {
+    var listener = stage.addListener(this$1[names[ii]]);
+    var loop = function ( jj ) {
+      var trigger = TRACE_TRIGGERS[jj];
+      listener.on(trigger, function (event) {
+        var line = this$1.eventToJSON(event, trigger);
+        events.push(line);
+        if (onEvent) { onEvent(line); }
+      });
+    };
+
+    for (var jj = 0; jj < TRACE_TRIGGERS.length; ++jj) loop( jj );
+  }
+  // The generated script starts with `const $$STx1 = Iroh.stages[...]` —
+  // it needs an `Iroh` binding in scope that is this instance. eval()
+  // inside the library has no such binding (the class is named Iroh, the
+  // instance is not), so run the script through a fresh Function with the
+  // instance passed in as its `Iroh` parameter. The function is strict,
+  // matching the eval-based usage, and returns $$frameValue — the
+  // program's completion value, the same value eval() returns.
+  var run = new Function("Iroh", '"use strict";\n' + stage.script + "\n; return $$frameValue;");
+  var result;
+  try {
+    result = run(this);
+  } catch (e) {
+    e.events = events;
+    throw e;
+  }
+  return { events: events, result: result };
+}
+
+// Async version of trace(): awaits the program's completion value before
+// returning, so events from async continuations (await, promises) are
+// included. The returned `result` is the awaited value. Written as a
+// plain Promise chain (no async/await syntax) because the browser bundle
+// is transpiled by buble, which cannot compile async functions.
+function traceAsync(code, options) {
+  var out = this.trace(code, options);
+  if (out.result && typeof out.result.then === "function") {
+    return out.result.then(function (value) {
+      out.result = value;
+      return out;
+    });
+  }
+  return Promise.resolve(out);
+}
+
 function greet() {
   if (
     IS_BROWSER &&
@@ -12364,6 +12542,8 @@ function greet() {
 var _setup = Object.freeze({
 	setup: setup,
 	generateCategoryBits: generateCategoryBits,
+	trace: trace,
+	traceAsync: traceAsync,
 	greet: greet
 });
 

@@ -4,6 +4,34 @@ The idea behind Iroh is simple. You attach listeners to your code and as soon as
 
 Iroh's listeners are named in regard to [EStree](//github.com/estree/estree/blob/master/es5.md) which is an AST specification format for JavaScript. There is also a list [here](//github.com/andyle777/IrohRedux/blob/master/API.md#specification) which gives an simple overview of all code types you can listen for.
 
+## The quick way (0.6.0)
+
+If you just want the trace, skip the Stage ceremony — one call does it:
+
+```js
+import Iroh from "iroh";
+
+const { events, result } = Iroh.trace(
+  "function factorial(n) { if (n === 0) return 1; return n * factorial(n - 1); }; factorial(3);",
+  { events: ["CALL"] }
+);
+// result === 6
+// events: [{ type: "event", event: "FUNCTION_CALL", category: "CALL",
+//            trigger: "before", hash: 11, indent: 1, name: "factorial",
+//            arguments: [3], external: false }, ...]
+```
+
+For async programs, `await Iroh.traceAsync(code, options)` — same shape,
+but the result is awaited and events from async continuations are included.
+`events` can be `"ALL"` (the default), an array (`["CALL", "IF"]`), or a
+comma string (`"CALL,IF"`). Pass `onEvent` to see each event as it fires.
+A runtime error throws with the events that fired before it on
+`error.events`. TypeScript types ship in `index.d.ts` — no `@types` package
+needed.
+
+The rest of this guide uses the classic Stage API, which is still fully
+supported and gives you live listeners that can change values mid-flight.
+
 ## Examples
 
 - [Intro](#intro)

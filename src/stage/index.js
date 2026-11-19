@@ -340,12 +340,12 @@ Stage.prototype.getFrameByHashFrom = function(frm, hash) {
 
 Stage.prototype.patch = function(input) {
   let patcher = new Patcher(this);
-  // Pin the language level explicitly: Acorn 8 parses up to ES2022 here
-  // (optional chaining, nullish coalescing, async/await, class fields,
-  // private fields, logical assignment). Newer node types without a dedicated
+  // Parse at the newest language level Acorn supports ("latest": ES2025
+  // RegExp modifiers, `using` declarations, import attributes) plus
+  // allowHashBang for #! scripts. Newer node types without a dedicated
   // patch handler are still walked generically by acorn-walk's base visitors,
   // so they run — they just don't get their own listener yet.
-  let ast = parse(input, { locations: true, ecmaVersion: 2022 });
+  let ast = parse(input, { locations: true, ecmaVersion: "latest", allowHashBang: true });
   this.frame = new Frame(INSTR.PROGRAM, this.$$frameHash);
   patcher.applyPatches(ast);
   // link walk things to stage

@@ -10,6 +10,7 @@ export function setup() {
   this.INSTR = INSTR;
   this.CATEGORY = CATEGORY;
   this.OP = OP;
+  this.VERSION = VERSION;
   // Test assertions, for code running inside a stage. The 2017 fixtures
   // in tests/expressions/ and tests/other/ were written against this API,
   // but it was never implemented — `Iroh.assert` was undefined at runtime.
@@ -36,6 +37,88 @@ export function generateCategoryBits() {
   for (let key in CATEGORY) {
     this[key] = CATEGORY[key] | 0;
   };
+};
+
+const TRACE_TRIGGERS = ["before", "after", "enter", "leave", "fire", "test", "return"];
+
+function resolveTraceCategories(iroh, events) {
+  if (events === void 0 || events === null || events === "ALL") {
+    return Object.keys(CATEGORY);
+  }
+  let names = Array.isArray(events) ? events : String(events).split(",");
+  names = names.map((s) => String(s).trim().toUpperCase()).filter(Boolean);
+  // Indexed loop, not for...of: the browser bundle is transpiled by
+  // buble, which cannot compile for...of.
+  for (let ii = 0; ii < names.length; ++ii) {
+    let name = names[ii];
+    if (!(name in CATEGORY) || typeof iroh[name] !== "number") {
+      throw new Error("Unknown event category: " + name);
+    }
+  }
+  return names;
+}
+
+// One-shot tracing — the modern SDK entry point. Runs `code` through a
+// Stage and returns { events, result }: `events` is the list of plain
+// event objects (same shape as the CLI's JSON lines — see
+// Iroh.eventToJSON), `result` is the program's completion value, live
+// (not serialized). Options:
+//   events: "ALL" (default), an array of category names (["CALL","IF"]),
+//           or a comma string ("CALL,IF").
+//   onEvent(event): called for every event as it fires.
+// A parse error throws before running; a runtime error throws with the
+// events that fired before it attached as error.events.
+export function trace(code, options) {
+  options = options || {};
+  let stage = new this.Stage(code);
+  let events = [];
+  let onEvent = options.onEvent;
+  let names = resolveTraceCategories(this, options.events);
+  // Indexed loops, not for...of: the browser bundle is transpiled by
+  // buble, which cannot compile for...of.
+  for (let ii = 0; ii < names.length; ++ii) {
+    let listener = stage.addListener(this[names[ii]]);
+    for (let jj = 0; jj < TRACE_TRIGGERS.length; ++jj) {
+      let trigger = TRACE_TRIGGERS[jj];
+      listener.on(trigger, (event) => {
+        let line = this.eventToJSON(event, trigger);
+        events.push(line);
+        if (onEvent) onEvent(line);
+      });
+    }
+  }
+  // The generated script starts with `const $$STx1 = Iroh.stages[...]` —
+  // it needs an `Iroh` binding in scope that is this instance. eval()
+  // inside the library has no such binding (the class is named Iroh, the
+  // instance is not), so run the script through a fresh Function with the
+  // instance passed in as its `Iroh` parameter. The function is strict,
+  // matching the eval-based usage, and returns $$frameValue — the
+  // program's completion value, the same value eval() returns.
+  let run = new Function("Iroh", '"use strict";\n' + stage.script + "\n; return $$frameValue;");
+  let result;
+  try {
+    result = run(this);
+  } catch (e) {
+    e.events = events;
+    throw e;
+  }
+  return { events: events, result: result };
+};
+
+// Async version of trace(): awaits the program's completion value before
+// returning, so events from async continuations (await, promises) are
+// included. The returned `result` is the awaited value. Written as a
+// plain Promise chain (no async/await syntax) because the browser bundle
+// is transpiled by buble, which cannot compile async functions.
+export function traceAsync(code, options) {
+  let out = this.trace(code, options);
+  if (out.result && typeof out.result.then === "function") {
+    return out.result.then((value) => {
+      out.result = value;
+      return out;
+    });
+  }
+  return Promise.resolve(out);
 };
 
 export function greet() {

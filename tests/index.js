@@ -7,9 +7,15 @@
 //                             against its own Iroh.assert() calls.
 //   tests/cli.test.js       — the CLI: spawn it, feed it JavaScript, check
 //                             the JSON lines it streams.
+//   tests/modern.test.js    — 2026 syntax: hashbang, RegExp v flag and
+//                             modifiers, `using` declarations, plus the
+//                             runtime features that needed no syntax change.
+//   tests/trace.test.js     — the modern one-shot SDK: Iroh.trace() /
+//                             traceAsync().
 //   python/tests/           — the Python client (unittest), needs python3.
 //   cpp/test_client.cpp     — the C++ client, needs g++.
 //   npm test
+// The TypeScript type test (tests/types.ts) is separate: `npm run test:types`.
 // (The old file was a stub that threw "Not implemented yet".)
 const { execSync } = require("node:child_process");
 
@@ -22,9 +28,10 @@ function has(cmd) {
   }
 }
 
-execSync("node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js", {
-  stdio: "inherit",
-});
+execSync(
+  "node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js tests/modern.test.js tests/trace.test.js",
+  { stdio: "inherit" }
+);
 
 if (has("python3")) {
   execSync("python3 -m unittest discover -s python/tests -v", { stdio: "inherit" });

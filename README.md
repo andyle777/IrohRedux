@@ -2,11 +2,12 @@
 
 <p align="center">
   <a href="https://github.com/andyle777/IrohRedux/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/version-0.5.1-orange.svg?style=flat-square" alt="Version 0.5.1" />
+  <img src="https://img.shields.io/badge/version-0.6.0-orange.svg?style=flat-square" alt="Version 0.6.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D%2018-339933.svg?style=flat-square" alt="Node >= 18" />
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
-  <img src="https://img.shields.io/badge/tests-51%20passing-brightgreen.svg?style=flat-square" alt="51 tests passing" />
+  <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
+  <img src="https://img.shields.io/badge/tests-68%20passing-brightgreen.svg?style=flat-square" alt="68 tests passing" />
 </p>
 
 <p align="center">
@@ -77,11 +78,22 @@ flowchart LR
 #### JavaScript — the engine itself
 
 ```js
-const Iroh = require("iroh");
+import Iroh from "iroh";
+
+// The quick way: one call, events plus result.
+const { events, result } = Iroh.trace(code, { events: ["CALL", "IF"] });
+// For async programs: await Iroh.traceAsync(code, options).
+
+// The classic way: a Stage with live listeners.
 const stage = new Iroh.Stage(code);
 stage.addListener(Iroh.CALL).on("before", e => { /* e.name, e.arguments, e.hash, e.indent */ });
 eval(stage.script);
 ```
+
+TypeScript types ship in the package (`index.d.ts`) — no `@types` package
+needed. The parser runs at the newest language level Acorn supports, with
+hashbangs, RegExp `v` flags and modifiers, and `using` declarations all
+traced.
 
 #### CLI — trace any program, pipe the events anywhere
 
@@ -133,9 +145,9 @@ Header-only C++17, with a minimal JSON parser built in — see [`cpp/`](cpp/).
   coalescing, private fields, async/await — all traced, all tested.
 - **Three languages, one protocol.** JavaScript, Python, and C++ all consume
   the same JSON event stream.
-- **No surprises.** 51 tests (39 Node + 7 Python + 5 C++), `npm test` runs
-  them all. Zero runtime dependencies in the engine beyond Acorn, astring,
-  and acorn-walk.
+- **No surprises.** 68 tests (56 Node + 7 Python + 5 C++), `npm test` runs
+  them all, plus a TypeScript type test (`npm run test:types`). Zero runtime
+  dependencies in the engine beyond Acorn, astring, and acorn-walk.
 
 ### Installation
 

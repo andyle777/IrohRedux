@@ -294,8 +294,12 @@ export function deepMagicPatch(node) {
 export function parse(input, options) {
   // Acorn 8 requires ecmaVersion; default it so every internal
   // parseExpression/parseExpressionStatement call parses modern syntax
-  // instead of warning and falling back to ES2020.
-  return prs(input, Object.assign({ ecmaVersion: 2022 }, options));
+  // instead of warning and falling back to ES2020. "latest" tracks the
+  // newest syntax Acorn supports (ES2025 RegExp modifiers, `using`
+  // declarations, import attributes); allowHashBang lets traced scripts
+  // start with a #! line. Callers may still override ecmaVersion via
+  // options.
+  return prs(input, Object.assign({ ecmaVersion: "latest", allowHashBang: true }, options));
 };
 
 export function generate() {

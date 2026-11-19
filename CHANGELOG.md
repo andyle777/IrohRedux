@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.6.0 — Next generation: 2026 syntax and a modern SDK (19 Nov 2026)
+
+### Syntax — parser moved from ES2022 to "latest"
+- The parser default is now Acorn's `"latest"` (plus `allowHashBang`) in
+  all three parse sites (`src/stage/index.js`, `src/helpers.js`,
+  `src/utils.js`). Hashbangs, RegExp `v` flags, RegExp modifiers
+  (`(?i:...)`), and `using` declarations all parse and trace now —
+  verified by probe before and after: 5 of 12 modern features failed
+  before, 0 fail after (the 12th, import attributes, is module syntax
+  and still needs module support — see below).
+- `using` declarations even fire `VAR_DECLARE` / `VAR_INIT` events for
+  free (acorn-walk visits them as VariableDeclarations), and disposal
+  runs — verified in block, function, and `await using` positions.
+  Top-level `using` in a *script* is still a parse error, matching
+  native behaviour (it is only valid in modules); same for `import`.
+- Runtime features that needed no syntax change (`Object.groupBy`,
+  `Set` methods, `Promise.try`, iterator helpers, `Float16Array`,
+  `RegExp.escape`, `findLast`) already traced fine and are now covered
+  by tests in `tests/modern.test.js` (8 tests).
+
+### SDK — modern terms
+- **`Iroh.trace(code, options)`** — one-shot tracing: returns
+  `{ events, result }`, `result` live (not serialized). Options:
+  `events` (`"ALL"` by default, an array, or a comma string) and
+  `onEvent(event)` (called as events fire). A parse error throws before
+  running; a runtime error throws with the events that fired before it
+  on `error.events`.
+- **`Iroh.traceAsync(code, options)`** — awaits the program's completion
+  value, so events from async continuations are included.
+- **Shared event projection.** `Iroh.eventToJSON(event, trigger)` (in
+  `src/utils.js`, exposed on the singleton) is the one place that turns
+  a RuntimeEvent into a plain JSON-safe object; the CLI now uses it too,
+  so CLI lines and `trace()` events are the same shape by construction.
+  The generated script's `Iroh` binding is supplied by running it
+  through a fresh `Function` with the instance as its `Iroh` parameter
+  (strict, returning `$$frameValue`) — eval inside the library has no
+  such binding, which the first trace tests caught.
+- **Browser-build constraint, learned the hard way.** The browser bundle
+  is transpiled by buble (ES2015-only): `traceAsync` is a Promise chain
+  instead of `async`/`await`, and every loop in `src/` is an indexed
+  `for` — buble cannot compile `async` functions or `for...of`, and its
+  failure is a bare `Cannot read properties of undefined (reading
+  'magicString')` with no file or line. The 0.6.0 work broke the browser
+  build twice on exactly this before the constraint was found.
+- **`package.json` `exports`** — proper modern resolution (`types`,
+  `browser`, `import`, `require`), plus a `./cli` subpath.
+- **TypeScript types** — `index.d.ts` ships in the package: `Stage`,
+  `RuntimeListener`, `RuntimeEvent`, `TraceEvent`, `TraceOptions`,
+  `TraceResult`, `IrohAPI`, all category constants. Verified with
+  `tsc --strict` on `tests/types.ts` (`npm run test:types`);
+  TypeScript 7.0.2 added as a devDependency.
+- Docs: a "quick way" section at the top of `GETTING_STARTED.md`,
+  `trace`/`traceAsync`/`eventToJSON`/`safeValue` in `API.md`, and the
+  `trace()` one-liner in the README's JavaScript quick start.
+
+### Not done — deliberately
+- **Module syntax is still out of scope.** `import` / `export` and
+  import attributes need `sourceType: "module"`, and traced modules
+  can't run through plain `eval` — that is a different execution path
+  (the option-C work from the 0.6.0 planning), not this release.
+  Import attributes fail with the clear Acorn message, covered by a test.
+
+### Tests
+- 68 tests now: 56 Node (16 behaviour + 15 fixtures + 8 CLI + 8 modern
+  syntax + 9 trace) + 7 Python + 5 C++, plus the TypeScript type test.
+  `npm test` runs all three suites; `npm run test:types` checks the
+  types.
+
 ## 0.5.1 — Spazzed-up README (19 Nov 2026)
 
 Presentation only, no code changes to the engine or the clients.

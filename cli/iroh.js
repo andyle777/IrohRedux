@@ -20,66 +20,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const Iroh = require("../dist/iroh-node.js");
-// The singleton carries the label tables (see src/setup.js), so the CLI
-// can turn event type/category numbers back into names.
-const INSTR = Iroh.INSTR;
+// The singleton carries the label tables and the event projection (see
+// src/setup.js and src/utils.js). The CLI uses Iroh.eventToJSON so its
+// JSON lines are the same shape as Iroh.trace() events.
 const CATEGORY = Iroh.CATEGORY;
 
 const TRIGGERS = ["before", "after", "enter", "leave", "fire", "test", "return"];
-
-// Event fields that are safe to copy onto the JSON line. Everything else
-// on a RuntimeEvent (instance, node, location) is an internal reference
-// and is never serialized.
-const FIELDS = [
-  "name", "value", "result", "return", "op", "test", "left", "right",
-  "arguments", "object", "property", "context", "scope", "kind", "label",
-  "prefix", "external", "sloppy", "isDefault", "default", "callee",
-];
-
-function safeValue(value, depth, seen) {
-  if (value === null) return null;
-  switch (typeof value) {
-    case "undefined": return null;
-    case "function": return "[Function " + (value.name || "anonymous") + "]";
-    case "bigint": return value.toString() + "n";
-    case "symbol": return value.toString();
-    case "string":
-    case "number":
-    case "boolean":
-      return value;
-  }
-  if (value instanceof Error) return { error: value.message };
-  if (typeof value.then === "function") return "[Promise]";
-  if (depth <= 0) return "[Object]";
-  if (seen.has(value)) return "[Circular]";
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value.map((v) => safeValue(v, depth - 1, seen));
-  }
-  let out = {};
-  for (let key of Object.keys(value)) {
-    try {
-      out[key] = safeValue(value[key], depth - 1, seen);
-    } catch (e) {
-      out[key] = "[Unserializable]";
-    }
-  }
-  return out;
-}
-
-function instructionName(type) {
-  for (let key in INSTR) {
-    if (INSTR[key] === type) return key;
-  }
-  return String(type);
-}
-
-function categoryName(category) {
-  for (let key in CATEGORY) {
-    if (CATEGORY[key] === category) return key;
-  }
-  return String(category);
-}
 
 function printLine(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -177,20 +123,7 @@ async function main() {
     let listener = stage.addListener(Iroh[name]);
     for (let trigger of TRIGGERS) {
       listener.on(trigger, (event) => {
-        let line = {
-          type: "event",
-          event: instructionName(event.type),
-          category: categoryName(event.category),
-          trigger: trigger,
-          hash: event.hash,
-          indent: event.indent,
-        };
-        for (let field of FIELDS) {
-          if (event[field] !== void 0 && event[field] !== null) {
-            line[field] = safeValue(event[field], 3, new Set());
-          }
-        }
-        printLine(line);
+        printLine(Iroh.eventToJSON(event, trigger));
       });
     }
   }
@@ -205,7 +138,7 @@ async function main() {
     return;
   }
   if (wantResult) {
-    printLine({ type: "result", value: safeValue(result, 4, new Set()) });
+    printLine({ type: "result", value: Iroh.safeValue(result, 4, new Set()) });
   }
 }
 

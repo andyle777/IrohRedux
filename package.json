@@ -1,6 +1,6 @@
 {
   "name": "iroh",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Watch JavaScript run — and change it mid-flight. Dynamic code analysis for JavaScript, with a CLI, Python and C++ clients.",
   "bin": {
     "iroh": "cli/iroh.js"
@@ -13,6 +13,17 @@
   "main": "dist/iroh-node.js",
   "module": "dist/iroh-node.es.js",
   "browser": "dist/iroh-browser.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "browser": "./dist/iroh-browser.js",
+      "import": "./dist/iroh-node.es.js",
+      "require": "./dist/iroh-node.js"
+    },
+    "./cli": "./cli/iroh.js",
+    "./package.json": "./package.json"
+  },
   "keywords": [
     "iroh",
     "analysis",
@@ -42,14 +53,16 @@
     "browser": "rollup -c rollup/rollup.config.iife.js",
     "test": "node tests/index.js",
     "test:python": "python3 -m unittest discover -s python/tests -v",
-    "test:cpp": "make -C cpp test"
+    "test:cpp": "make -C cpp test",
+    "test:types": "tsc --noEmit --strict --module esnext --moduleResolution bundler --target es2022 tests/types.ts"
   },
   "devDependencies": {
     "rollup": "^0.47.2",
     "rollup-plugin-buble": "^0.15.0",
     "rollup-plugin-commonjs": "^8.1.0",
     "rollup-plugin-json": "^2.3.0",
-    "rollup-plugin-node-resolve": "^3.0.0"
+    "rollup-plugin-node-resolve": "^3.0.0",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "acorn": "^8.19.0",
