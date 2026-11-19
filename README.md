@@ -26,10 +26,10 @@
 
 ### Why dynamic analysis?
 
-Static analysis (Babel, ESLint) reads your code. Iroh *runs* it — and tells you
+Static analysis (Babel, ESLint) reads your code. Iroh Redux *runs* it — and tells you
 what actually happened: which functions were called with what, which branches
 were taken, what every variable held, moment by moment. That data only exists
-at runtime, and Iroh hands it to you while the code is still running, so you
+at runtime, and Iroh Redux hands it to you while the code is still running, so you
 can capture it, visualize it, or **change values mid-flight** and watch the
 program react.
 
