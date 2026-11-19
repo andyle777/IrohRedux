@@ -2,12 +2,12 @@
 
 <p align="center">
   <a href="https://github.com/andyle777/IrohRedux/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/version-0.6.0-orange.svg?style=flat-square" alt="Version 0.6.0" />
+  <img src="https://img.shields.io/badge/version-0.7.0-orange.svg?style=flat-square" alt="Version 0.7.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D%2018-339933.svg?style=flat-square" alt="Node >= 18" />
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-79%20passing-brightgreen.svg?style=flat-square" alt="79 tests passing" />
+  <img src="https://img.shields.io/badge/tests-120%20passing-brightgreen.svg?style=flat-square" alt="120 tests passing" />
 </p>
 
 <p align="center">
@@ -83,7 +83,23 @@ import Iroh from "iroh";
 // The quick way: one call, events plus result.
 const { events, result } = Iroh.trace(code, { events: ["CALL", "IF"] });
 // For async programs: await Iroh.traceAsync(code, options).
+// Top-level await works there too: await Iroh.traceAsync("await Promise.resolve(42);").
 
+// Modules: imports, import attributes, import.meta, dynamic import().
+// Result is the live module namespace object.
+const mod = await Iroh.traceModule(`
+  import data from "./data.json" with { type: "json" };
+  export const total = data.n + 1;
+`, { filename: "./app.mjs" }); // filename: relative imports resolve against it
+// mod.result.total === data.n + 1
+
+// Decorators parse and trace — the decorator calls fire CALL events.
+const dec = Iroh.trace(`
+  function log(m, ctx) { return m; }
+  class C { @log greet() { return "hi"; } }
+  new C().greet();
+`);
+```
 // The classic way: a Stage with live listeners.
 const stage = new Iroh.Stage(code);
 stage.addListener(Iroh.CALL).on("before", e => { /* e.name, e.arguments, e.hash, e.indent */ });
@@ -111,6 +127,8 @@ cat program.js | node cli/iroh.js            # stdin works too
 `--events ALL` is the default; `--no-result` skips the result line. Parse and
 runtime errors come back as a final `{"type":"error",...}` line with a
 non-zero exit code, and async programs are awaited before the result line.
+Modules trace too: `.mjs` files are detected automatically, or pass
+`--module` — relative imports resolve against the traced file.
 
 #### Python — `from iroh import run`
 
@@ -145,7 +163,7 @@ Header-only C++17, with a minimal JSON parser built in — see [`cpp/`](cpp/).
   coalescing, private fields, async/await — all traced, all tested.
 - **Three languages, one protocol.** JavaScript, Python, and C++ all consume
   the same JSON event stream.
-- **No surprises.** 79 tests (67 Node + 7 Python + 5 C++), `npm test` runs
+- **No surprises.** 120 tests (108 Node + 7 Python + 5 C++), `npm test` runs
   them all, plus a TypeScript type test (`npm run test:types`). Zero runtime
   dependencies in the engine beyond Acorn, astring, and acorn-walk.
 
@@ -162,7 +180,7 @@ git clone https://github.com/andyle777/IrohRedux.git
 cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
-npm test            # 79 tests: 67 Node + 7 Python + 5 C++
+npm test            # 120 tests: 108 Node + 7 Python + 5 C++
 ```
 
 The Python client installs with `pip install -e python/`; the C++ client is
@@ -172,11 +190,11 @@ a single header — just `#include "iroh.hpp"`.
 
 - [Getting started](//github.com/andyle777/IrohRedux/blob/master/GETTING_STARTED.md) — worked examples you can run locally.
 - [API](//github.com/andyle777/IrohRedux/blob/master/API.md) — the full listener and event reference, including `Iroh.assert` / `Iroh.log` and the `INSTR` / `CATEGORY` / `OP` label tables.
-- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, and 0.6.0.
+- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, and 0.7.0.
 
 ---
 
 *IrohRedux is a fork of Felix Maier's [Iroh](https://github.com/maierfelix/Iroh)
 0.3.0 (2018), fixed and extended. The core idea is his; the 0.4.0 fixes, the
-0.5.0 CLI and polyglot clients, the 0.5.1 polish, and the 0.6.0 syntax and
-modern SDK are the fork's.*
+0.5.0 CLI and polyglot clients, the 0.5.1 polish, the 0.6.0 syntax and
+modern SDK, and the 0.7.0 modules, top-level await, and decorators are the fork's.*

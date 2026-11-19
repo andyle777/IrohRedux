@@ -50,6 +50,15 @@ STAGE6.FunctionDeclaration = function(node, patcher) {
 
 STAGE6.FunctionExpression = function(node, patcher) {
   if (patcher.scope.node.type === "MethodDefinition") return;
+  // Scaffolding functions injected by the decorator desugar
+  // (src/decorators.js) are magic and have no id: STAGE1 only assigns
+  // ids to functions it processes as user code, and these live inside
+  // magic context objects it never descends into. They must stay
+  // invisible — no ENTER/LEAVE events — and the instrumentation below
+  // would throw on `node.id.name` for the missing id. Real user
+  // functions always have an id by this stage, so this skips nothing
+  // else.
+  if (node.magic && !node.id) return;
   patcher.pushScope(node);
   patcher.walk(node.id, patcher, patcher.stage);
   node.params.map((param) => { patcher.walk(param, patcher, patcher.stage); });
@@ -81,6 +90,11 @@ STAGE6.FunctionExpression = function(node, patcher) {
 };
 
 STAGE6.ArrowFunctionExpression = function(node, patcher) {
+  // See FunctionExpression above: id-less magic arrows are decorator
+  // scaffolding (a forEach callback). They have no id and an
+  // expression body, so the instrumentation below would throw on
+  // `node.id.name` and on `node.body.body`.
+  if (node.magic && !node.id) return;
   patcher.pushScope(node);
   node.params.map((param) => { patcher.walk(param, patcher, patcher.stage); });
   patcher.walk(node.body, patcher, patcher.stage);

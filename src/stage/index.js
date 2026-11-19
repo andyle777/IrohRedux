@@ -19,6 +19,7 @@ import {
 
 import Frame from "../frame";
 import Patcher from "../patcher/index";
+import { desugarDecorators } from "../decorators";
 
 import RuntimeEvent from "./event";
 import RuntimeListener from "./listener";
@@ -349,12 +350,26 @@ Stage.prototype.patch = function(input) {
   // explicit options. Newer node types without a dedicated patch handler
   // are still walked generically by acorn-walk's base visitors, so they
   // run — they just don't get their own listener yet.
+  // sourceType: "script" (default) or "module" — modules allow
+  // import/export, import.meta, import attributes and top-level await.
+  // allowAwaitOutsideFunction: lets a script carry top-level await
+  // (traceAsync() runs it through an async wrapper); without it Acorn
+  // rejects the await at parse time, before the runner can help.
   let opt = this.options || {};
   let ast = parse(input, {
     locations: true,
     ecmaVersion: opt.ecmaVersion || "latest",
     allowHashBang: opt.allowHashBang !== false,
+    sourceType: opt.sourceType || "script",
+    allowAwaitOutsideFunction: opt.allowAwaitOutsideFunction === true,
   });
+  // Decorators desugar before the patch stages walk: Node cannot
+  // execute `@` syntax at all, and astring cannot generate
+  // `Decorator` nodes, so `@dec` is rewritten into plain calls
+  // (the decorator expressions stay in the tree, non-magic, so they
+  // are traced like any other call). The patch stages then walk the
+  // rewritten code.
+  desugarDecorators(ast, patcher);
   this.frame = new Frame(INSTR.PROGRAM, this.$$frameHash);
   patcher.applyPatches(ast);
   // link walk things to stage

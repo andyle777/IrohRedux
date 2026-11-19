@@ -145,6 +145,35 @@ test("trace() passes stageOptions to the Stage", () => {
   assert.equal(result, 1);
 });
 
+test("traceAsync() accepts top-level await in scripts", async () => {
+  // The whole program is one awaited expression.
+  let { events, result } = await Iroh.traceAsync("await Promise.resolve(42);", {
+    events: ["AWAIT"],
+  });
+  assert.equal(result, 42);
+  assert.equal(events.filter((e) => e.event === "AWAIT").length, 1);
+});
+
+test("traceAsync() awaits top-level values before using them", async () => {
+  let { result } = await Iroh.traceAsync(
+    "let x = await Promise.resolve(40); let y = await Promise.resolve(2); x + y;"
+  );
+  assert.equal(result, 42);
+});
+
+test("trace() rejects top-level await with a pointer at traceAsync()", () => {
+  assert.throws(
+    () => Iroh.trace("await Promise.resolve(42);"),
+    /traceAsync/
+  );
+});
+
+test("traceAsync() lets a top-level-await program declare its own Iroh", async () => {
+  // Both retries at once: async wrapper + $$Iroh fallback.
+  let { result } = await Iroh.traceAsync("const Iroh = 5; await Promise.resolve(Iroh);");
+  assert.equal(result, 5);
+});
+
 test("eventToJSON matches the shape trace() returns", () => {
   let stage = new Iroh.Stage("let x = 1;");
   let line = null;

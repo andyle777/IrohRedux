@@ -254,14 +254,13 @@ export function DEBUG_FUNCTION_CALL(hash, ctx, object, call, args) {
   // Optional call (`?.()`): if the object is nullish, or the method
   // does not exist, the call never happens and the value is undefined —
   // and no CALL event fires for a call that did not happen. This check
-  // must come first: `object.constructor` below would throw on null.
+  // must come first: `object[call]` below would throw on null.
   let node = this.nodes[hash].node;
   if (node.optional) {
     if (object === null || object === void 0) return void 0;
     if (call !== null && (object[call] === null || object[call] === void 0)) return void 0;
     if (call === null && (object === null || object === void 0)) return void 0;
   }
-  let ctor = object.constructor.prototype;
   let callee = (typeof call === "function") ? call.name : getCallee(object, call);
   let previous = this.$$frameHash;
   let value = null;

@@ -4,9 +4,9 @@ import {
   CATEGORY
 } from "./labels";
 
-import { parse as prs } from "acorn";
 import { full } from "acorn-walk";
 import { generate as gen } from "astring";
+import { parseWithDecorators as prs } from "./decorators-plugin";
 
 export function getInheritanceTree(cls) {
   let base = cls;

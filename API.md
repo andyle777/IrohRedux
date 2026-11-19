@@ -26,15 +26,37 @@
 Stage and returns `{ events, result }` — `events` is the list of plain,
 JSON-safe event objects (same shape as the CLI's JSON lines), `result` is
 the program's completion value, live (not serialized). Options: `events`
-(`"ALL"` by default, an array of category names, or a comma string) and
-`onEvent(event)` (called for every event as it fires). A parse error throws
-before running; a runtime error throws with the events that fired before it
-attached as `error.events`.
+(`"ALL"` by default, an array of category names, or a comma string),
+`onEvent(event)` (called for every event as it fires), and `stageOptions`
+(passed to the Stage: `ecmaVersion`, `allowHashBang`, `sourceType`,
+`allowAwaitOutsideFunction`). A parse error throws before running; a
+runtime error throws with the events that fired before it attached as
+`error.events`. Module code (`import`/`export`, `import.meta`) and
+top-level `await` are rejected with a pointer at `traceModule()` /
+`traceAsync()` instead of a bare SyntaxError. A program declaring its
+own top-level `Iroh` is fine — the runner retries under `$$Iroh`.
 
 ``traceAsync(code, options)``: Async version of `trace()`. Awaits the
 program's completion value before returning, so events from async
-continuations (await, promises) are included. Returns a Promise of
-`{ events, result }`.
+continuations (await, promises) are included — and so top-level `await`
+in scripts works (`await Promise.resolve(42)` as a whole program
+returns 42). Returns a Promise of `{ events, result }`. A program that
+fails before running (module code, parse error) rejects the promise
+rather than throwing synchronously. A program declaring its own
+top-level `Iroh` is fine — the async wrapper always runs under
+`$$Iroh`, so the user's `Iroh` is untouched.
+
+``traceModule(code, options)``: Trace an ES module (0.7.0, Node only).
+`import`/`export` declarations, import attributes (`with { type:
+"json" }`), `import.meta`, dynamic `import()`, and top-level await all
+work. Returns a Promise of `{ events, result }` where `result` is the
+live module namespace object (`result.default` for the default export).
+Options are `trace()`'s, plus `filename`: when given, the instrumented
+module is written next to that file, so relative imports resolve
+against its directory; without it the module runs from a fresh temp
+directory and only bare or absolute imports resolve. The temp file is
+deleted after the trace settles. `import.meta.url` is the temp file's
+URL, not the caller's. Throws a clear error in the browser.
 
 ``eventToJSON(event, trigger)``: Turns a live RuntimeEvent into the plain
 object `trace()` returns. The CLI uses this too, so its JSON lines and

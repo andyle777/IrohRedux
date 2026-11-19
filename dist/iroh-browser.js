@@ -14,7 +14,7 @@ var extend = function(cls, prot) {
   }
 };
 
-var version = "0.6.0";
+var version = "0.7.0";
 
 // indent factor
 var INDENT_FACTOR = 1;
@@ -208,7 +208,1287 @@ function createCommonjsModule(fn, module) {
 	return module = { exports: {} }, fn(module, module.exports), module.exports;
 }
 
-var acorn = createCommonjsModule(function (module, exports) {
+var astring = createCommonjsModule(function (module, exports) {
+"use strict";
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.generate = generate;
+exports.baseGenerator = exports.GENERATOR = exports.EXPRESSIONS_PRECEDENCE = exports.NEEDS_PARENTHESES = void 0;
+
+function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
+
+function _defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) { descriptor.writable = true; } Object.defineProperty(target, descriptor.key, descriptor); } }
+
+function _createClass(Constructor, protoProps, staticProps) { if (protoProps) { _defineProperties(Constructor.prototype, protoProps); } if (staticProps) { _defineProperties(Constructor, staticProps); } return Constructor; }
+
+var stringify = JSON.stringify;
+
+if (!String.prototype.repeat) {
+  throw new Error('String.prototype.repeat is undefined, see https://github.com/davidbonnet/astring#installation');
+}
+
+if (!String.prototype.endsWith) {
+  throw new Error('String.prototype.endsWith is undefined, see https://github.com/davidbonnet/astring#installation');
+}
+
+var OPERATOR_PRECEDENCE = {
+  '||': 2,
+  '??': 3,
+  '&&': 4,
+  '|': 5,
+  '^': 6,
+  '&': 7,
+  '==': 8,
+  '!=': 8,
+  '===': 8,
+  '!==': 8,
+  '<': 9,
+  '>': 9,
+  '<=': 9,
+  '>=': 9,
+  "in": 9,
+  "instanceof": 9,
+  '<<': 10,
+  '>>': 10,
+  '>>>': 10,
+  '+': 11,
+  '-': 11,
+  '*': 12,
+  '%': 12,
+  '/': 12,
+  '**': 13
+};
+var NEEDS_PARENTHESES = 17;
+exports.NEEDS_PARENTHESES = NEEDS_PARENTHESES;
+var EXPRESSIONS_PRECEDENCE = {
+  ArrayExpression: 20,
+  TaggedTemplateExpression: 20,
+  ThisExpression: 20,
+  Identifier: 20,
+  PrivateIdentifier: 20,
+  Literal: 18,
+  TemplateLiteral: 20,
+  Super: 20,
+  SequenceExpression: 20,
+  MemberExpression: 19,
+  ChainExpression: 19,
+  CallExpression: 19,
+  NewExpression: 19,
+  ArrowFunctionExpression: NEEDS_PARENTHESES,
+  ClassExpression: NEEDS_PARENTHESES,
+  FunctionExpression: NEEDS_PARENTHESES,
+  ObjectExpression: NEEDS_PARENTHESES,
+  UpdateExpression: 16,
+  UnaryExpression: 15,
+  AwaitExpression: 15,
+  BinaryExpression: 14,
+  LogicalExpression: 13,
+  ConditionalExpression: 4,
+  AssignmentExpression: 3,
+  YieldExpression: 2,
+  RestElement: 1
+};
+exports.EXPRESSIONS_PRECEDENCE = EXPRESSIONS_PRECEDENCE;
+
+function formatSequence(state, nodes) {
+  var generator = state.generator;
+  state.write('(');
+
+  if (nodes != null && nodes.length > 0) {
+    generator[nodes[0].type](nodes[0], state);
+    var length = nodes.length;
+
+    for (var i = 1; i < length; i++) {
+      var param = nodes[i];
+      state.write(', ');
+      generator[param.type](param, state);
+    }
+  }
+
+  state.write(')');
+}
+
+function expressionNeedsParenthesis(state, node, parentNode, isRightHand) {
+  var nodePrecedence = state.expressionsPrecedence[node.type];
+
+  if (nodePrecedence === NEEDS_PARENTHESES) {
+    return true;
+  }
+
+  var parentNodePrecedence = state.expressionsPrecedence[parentNode.type];
+
+  if (nodePrecedence !== parentNodePrecedence) {
+    return !isRightHand && nodePrecedence === 15 && parentNodePrecedence === 14 && parentNode.operator === '**' || nodePrecedence < parentNodePrecedence;
+  }
+
+  if (nodePrecedence !== 13 && nodePrecedence !== 14) {
+    return false;
+  }
+
+  if (node.operator === '**' && parentNode.operator === '**') {
+    return !isRightHand;
+  }
+
+  if (nodePrecedence === 13 && parentNodePrecedence === 13 && (node.operator === '??' || parentNode.operator === '??')) {
+    return true;
+  }
+
+  if (isRightHand) {
+    return OPERATOR_PRECEDENCE[node.operator] <= OPERATOR_PRECEDENCE[parentNode.operator];
+  }
+
+  return OPERATOR_PRECEDENCE[node.operator] < OPERATOR_PRECEDENCE[parentNode.operator];
+}
+
+function formatExpression(state, node, parentNode, isRightHand) {
+  var generator = state.generator;
+
+  if (expressionNeedsParenthesis(state, node, parentNode, isRightHand)) {
+    state.write('(');
+    generator[node.type](node, state);
+    state.write(')');
+  } else {
+    generator[node.type](node, state);
+  }
+}
+
+function reindent(state, text, indent, lineEnd) {
+  var lines = text.split('\n');
+  var end = lines.length - 1;
+  state.write(lines[0].trim());
+
+  if (end > 0) {
+    state.write(lineEnd);
+
+    for (var i = 1; i < end; i++) {
+      state.write(indent + lines[i].trim() + lineEnd);
+    }
+
+    state.write(indent + lines[end].trim());
+  }
+}
+
+function formatComments(state, comments, indent, lineEnd) {
+  var length = comments.length;
+
+  for (var i = 0; i < length; i++) {
+    var comment = comments[i];
+    state.write(indent);
+
+    if (comment.type[0] === 'L') {
+      state.write('// ' + comment.value.trim() + '\n', comment);
+    } else {
+      state.write('/*');
+      reindent(state, comment.value, indent, lineEnd);
+      state.write('*/' + lineEnd);
+    }
+  }
+}
+
+function hasCallExpression(node) {
+  var currentNode = node;
+
+  while (currentNode != null) {
+    var _currentNode = currentNode,
+        type = _currentNode.type;
+
+    if (type[0] === 'C' && type[1] === 'a') {
+      return true;
+    } else if (type[0] === 'M' && type[1] === 'e' && type[2] === 'm') {
+      currentNode = currentNode.object;
+    } else {
+      return false;
+    }
+  }
+}
+
+function formatVariableDeclaration(state, node) {
+  var generator = state.generator;
+  var declarations = node.declarations;
+  state.write(node.kind + ' ');
+  var length = declarations.length;
+
+  if (length > 0) {
+    generator.VariableDeclarator(declarations[0], state);
+
+    for (var i = 1; i < length; i++) {
+      state.write(', ');
+      generator.VariableDeclarator(declarations[i], state);
+    }
+  }
+}
+
+var ForInStatement, FunctionDeclaration, RestElement, BinaryExpression, ArrayExpression, BlockStatement;
+var GENERATOR = {
+  Program: function Program(node, state) {
+    var this$1 = this;
+
+    var indent = state.indent.repeat(state.indentLevel);
+    var lineEnd = state.lineEnd,
+        writeComments = state.writeComments;
+
+    if (writeComments && node.comments != null) {
+      formatComments(state, node.comments, indent, lineEnd);
+    }
+
+    var statements = node.body;
+    var length = statements.length;
+
+    for (var i = 0; i < length; i++) {
+      var statement = statements[i];
+
+      if (writeComments && statement.comments != null) {
+        formatComments(state, statement.comments, indent, lineEnd);
+      }
+
+      state.write(indent);
+      this$1[statement.type](statement, state);
+      state.write(lineEnd);
+    }
+
+    if (writeComments && node.trailingComments != null) {
+      formatComments(state, node.trailingComments, indent, lineEnd);
+    }
+  },
+  BlockStatement: BlockStatement = function BlockStatement(node, state) {
+    var this$1 = this;
+
+    var indent = state.indent.repeat(state.indentLevel++);
+    var lineEnd = state.lineEnd,
+        writeComments = state.writeComments;
+    var statementIndent = indent + state.indent;
+    state.write('{');
+    var statements = node.body;
+
+    if (statements != null && statements.length > 0) {
+      state.write(lineEnd);
+
+      if (writeComments && node.comments != null) {
+        formatComments(state, node.comments, statementIndent, lineEnd);
+      }
+
+      var length = statements.length;
+
+      for (var i = 0; i < length; i++) {
+        var statement = statements[i];
+
+        if (writeComments && statement.comments != null) {
+          formatComments(state, statement.comments, statementIndent, lineEnd);
+        }
+
+        state.write(statementIndent);
+        this$1[statement.type](statement, state);
+        state.write(lineEnd);
+      }
+
+      state.write(indent);
+    } else {
+      if (writeComments && node.comments != null) {
+        state.write(lineEnd);
+        formatComments(state, node.comments, statementIndent, lineEnd);
+        state.write(indent);
+      }
+    }
+
+    if (writeComments && node.trailingComments != null) {
+      formatComments(state, node.trailingComments, statementIndent, lineEnd);
+    }
+
+    state.write('}');
+    state.indentLevel--;
+  },
+  ClassBody: BlockStatement,
+  StaticBlock: function StaticBlock(node, state) {
+    state.write('static ');
+    this.BlockStatement(node, state);
+  },
+  EmptyStatement: function EmptyStatement(node, state) {
+    state.write(';');
+  },
+  ExpressionStatement: function ExpressionStatement(node, state) {
+    var precedence = state.expressionsPrecedence[node.expression.type];
+
+    if (precedence === NEEDS_PARENTHESES || precedence === 3 && node.expression.left.type[0] === 'O') {
+      state.write('(');
+      this[node.expression.type](node.expression, state);
+      state.write(')');
+    } else {
+      this[node.expression.type](node.expression, state);
+    }
+
+    state.write(';');
+  },
+  IfStatement: function IfStatement(node, state) {
+    state.write('if (');
+    this[node.test.type](node.test, state);
+    state.write(') ');
+    this[node.consequent.type](node.consequent, state);
+
+    if (node.alternate != null) {
+      state.write(' else ');
+      this[node.alternate.type](node.alternate, state);
+    }
+  },
+  LabeledStatement: function LabeledStatement(node, state) {
+    this[node.label.type](node.label, state);
+    state.write(': ');
+    this[node.body.type](node.body, state);
+  },
+  BreakStatement: function BreakStatement(node, state) {
+    state.write('break');
+
+    if (node.label != null) {
+      state.write(' ');
+      this[node.label.type](node.label, state);
+    }
+
+    state.write(';');
+  },
+  ContinueStatement: function ContinueStatement(node, state) {
+    state.write('continue');
+
+    if (node.label != null) {
+      state.write(' ');
+      this[node.label.type](node.label, state);
+    }
+
+    state.write(';');
+  },
+  WithStatement: function WithStatement(node, state) {
+    state.write('with (');
+    this[node.object.type](node.object, state);
+    state.write(') ');
+    this[node.body.type](node.body, state);
+  },
+  SwitchStatement: function SwitchStatement(node, state) {
+    var this$1 = this;
+
+    var indent = state.indent.repeat(state.indentLevel++);
+    var lineEnd = state.lineEnd,
+        writeComments = state.writeComments;
+    state.indentLevel++;
+    var caseIndent = indent + state.indent;
+    var statementIndent = caseIndent + state.indent;
+    state.write('switch (');
+    this[node.discriminant.type](node.discriminant, state);
+    state.write(') {' + lineEnd);
+    var occurences = node.cases;
+    var occurencesCount = occurences.length;
+
+    for (var i = 0; i < occurencesCount; i++) {
+      var occurence = occurences[i];
+
+      if (writeComments && occurence.comments != null) {
+        formatComments(state, occurence.comments, caseIndent, lineEnd);
+      }
+
+      if (occurence.test) {
+        state.write(caseIndent + 'case ');
+        this$1[occurence.test.type](occurence.test, state);
+        state.write(':' + lineEnd);
+      } else {
+        state.write(caseIndent + 'default:' + lineEnd);
+      }
+
+      var consequent = occurence.consequent;
+      var consequentCount = consequent.length;
+
+      for (var _i = 0; _i < consequentCount; _i++) {
+        var statement = consequent[_i];
+
+        if (writeComments && statement.comments != null) {
+          formatComments(state, statement.comments, statementIndent, lineEnd);
+        }
+
+        state.write(statementIndent);
+        this$1[statement.type](statement, state);
+        state.write(lineEnd);
+      }
+    }
+
+    state.indentLevel -= 2;
+    state.write(indent + '}');
+  },
+  ReturnStatement: function ReturnStatement(node, state) {
+    state.write('return');
+
+    if (node.argument) {
+      state.write(' ');
+      this[node.argument.type](node.argument, state);
+    }
+
+    state.write(';');
+  },
+  ThrowStatement: function ThrowStatement(node, state) {
+    state.write('throw ');
+    this[node.argument.type](node.argument, state);
+    state.write(';');
+  },
+  TryStatement: function TryStatement(node, state) {
+    state.write('try ');
+    this[node.block.type](node.block, state);
+
+    if (node.handler) {
+      var handler = node.handler;
+
+      if (handler.param == null) {
+        state.write(' catch ');
+      } else {
+        state.write(' catch (');
+        this[handler.param.type](handler.param, state);
+        state.write(') ');
+      }
+
+      this[handler.body.type](handler.body, state);
+    }
+
+    if (node.finalizer) {
+      state.write(' finally ');
+      this[node.finalizer.type](node.finalizer, state);
+    }
+  },
+  WhileStatement: function WhileStatement(node, state) {
+    state.write('while (');
+    this[node.test.type](node.test, state);
+    state.write(') ');
+    this[node.body.type](node.body, state);
+  },
+  DoWhileStatement: function DoWhileStatement(node, state) {
+    state.write('do ');
+    this[node.body.type](node.body, state);
+    state.write(' while (');
+    this[node.test.type](node.test, state);
+    state.write(');');
+  },
+  ForStatement: function ForStatement(node, state) {
+    state.write('for (');
+
+    if (node.init != null) {
+      var init = node.init;
+
+      if (init.type[0] === 'V') {
+        formatVariableDeclaration(state, init);
+      } else {
+        this[init.type](init, state);
+      }
+    }
+
+    state.write('; ');
+
+    if (node.test) {
+      this[node.test.type](node.test, state);
+    }
+
+    state.write('; ');
+
+    if (node.update) {
+      this[node.update.type](node.update, state);
+    }
+
+    state.write(') ');
+    this[node.body.type](node.body, state);
+  },
+  ForInStatement: ForInStatement = function ForInStatement(node, state) {
+    state.write("for ".concat(node["await"] ? 'await ' : '', "("));
+    var left = node.left;
+
+    if (left.type[0] === 'V') {
+      formatVariableDeclaration(state, left);
+    } else {
+      this[left.type](left, state);
+    }
+
+    state.write(node.type[3] === 'I' ? ' in ' : ' of ');
+    this[node.right.type](node.right, state);
+    state.write(') ');
+    this[node.body.type](node.body, state);
+  },
+  ForOfStatement: ForInStatement,
+  DebuggerStatement: function DebuggerStatement(node, state) {
+    state.write('debugger;', node);
+  },
+  FunctionDeclaration: FunctionDeclaration = function FunctionDeclaration(node, state) {
+    state.write((node.async ? 'async ' : '') + (node.generator ? 'function* ' : 'function ') + (node.id ? node.id.name : ''), node);
+    formatSequence(state, node.params);
+    state.write(' ');
+    this[node.body.type](node.body, state);
+  },
+  FunctionExpression: FunctionDeclaration,
+  VariableDeclaration: function VariableDeclaration(node, state) {
+    formatVariableDeclaration(state, node);
+    state.write(';');
+  },
+  VariableDeclarator: function VariableDeclarator(node, state) {
+    this[node.id.type](node.id, state);
+
+    if (node.init != null) {
+      state.write(' = ');
+      this[node.init.type](node.init, state);
+    }
+  },
+  ClassDeclaration: function ClassDeclaration(node, state) {
+    state.write('class ' + (node.id ? "".concat(node.id.name, " ") : ''), node);
+
+    if (node.superClass) {
+      state.write('extends ');
+      var superClass = node.superClass;
+      var type = superClass.type;
+      var precedence = state.expressionsPrecedence[type];
+
+      if ((type[0] !== 'C' || type[1] !== 'l' || type[5] !== 'E') && (precedence === NEEDS_PARENTHESES || precedence < state.expressionsPrecedence.ClassExpression)) {
+        state.write('(');
+        this[node.superClass.type](superClass, state);
+        state.write(')');
+      } else {
+        this[superClass.type](superClass, state);
+      }
+
+      state.write(' ');
+    }
+
+    this.ClassBody(node.body, state);
+  },
+  ImportDeclaration: function ImportDeclaration(node, state) {
+    var this$1 = this;
+
+    state.write('import ');
+    var specifiers = node.specifiers,
+        attributes = node.attributes;
+    var length = specifiers.length;
+    var i = 0;
+
+    if (length > 0) {
+      for (; i < length;) {
+        if (i > 0) {
+          state.write(', ');
+        }
+
+        var specifier = specifiers[i];
+        var type = specifier.type[6];
+
+        if (type === 'D') {
+          state.write(specifier.local.name, specifier);
+          i++;
+        } else if (type === 'N') {
+          state.write('* as ' + specifier.local.name, specifier);
+          i++;
+        } else {
+          break;
+        }
+      }
+
+      if (i < length) {
+        state.write('{');
+
+        for (;;) {
+          var _specifier = specifiers[i];
+          var name = _specifier.imported.name;
+          state.write(name, _specifier);
+
+          if (name !== _specifier.local.name) {
+            state.write(' as ' + _specifier.local.name);
+          }
+
+          if (++i < length) {
+            state.write(', ');
+          } else {
+            break;
+          }
+        }
+
+        state.write('}');
+      }
+
+      state.write(' from ');
+    }
+
+    this.Literal(node.source, state);
+
+    if (attributes && attributes.length > 0) {
+      state.write(' with { ');
+
+      for (var _i2 = 0; _i2 < attributes.length; _i2++) {
+        this$1.ImportAttribute(attributes[_i2], state);
+        if (_i2 < attributes.length - 1) { state.write(', '); }
+      }
+
+      state.write(' }');
+    }
+
+    state.write(';');
+  },
+  ImportAttribute: function ImportAttribute(node, state) {
+    this.Identifier(node.key, state);
+    state.write(': ');
+    this.Literal(node.value, state);
+  },
+  ImportExpression: function ImportExpression(node, state) {
+    state.write('import(');
+    this[node.source.type](node.source, state);
+    state.write(')');
+  },
+  ExportDefaultDeclaration: function ExportDefaultDeclaration(node, state) {
+    state.write('export default ');
+    this[node.declaration.type](node.declaration, state);
+
+    if (state.expressionsPrecedence[node.declaration.type] != null && node.declaration.type[0] !== 'F') {
+      state.write(';');
+    }
+  },
+  ExportNamedDeclaration: function ExportNamedDeclaration(node, state) {
+    var this$1 = this;
+
+    state.write('export ');
+
+    if (node.declaration) {
+      this[node.declaration.type](node.declaration, state);
+    } else {
+      state.write('{');
+      var specifiers = node.specifiers,
+          length = specifiers.length;
+
+      if (length > 0) {
+        for (var i = 0;;) {
+          var specifier = specifiers[i];
+          var name = specifier.local.name;
+          state.write(name, specifier);
+
+          if (name !== specifier.exported.name) {
+            state.write(' as ' + specifier.exported.name);
+          }
+
+          if (++i < length) {
+            state.write(', ');
+          } else {
+            break;
+          }
+        }
+      }
+
+      state.write('}');
+
+      if (node.source) {
+        state.write(' from ');
+        this.Literal(node.source, state);
+      }
+
+      if (node.attributes && node.attributes.length > 0) {
+        state.write(' with { ');
+
+        for (var _i3 = 0; _i3 < node.attributes.length; _i3++) {
+          this$1.ImportAttribute(node.attributes[_i3], state);
+          if (_i3 < node.attributes.length - 1) { state.write(', '); }
+        }
+
+        state.write(' }');
+      }
+
+      state.write(';');
+    }
+  },
+  ExportAllDeclaration: function ExportAllDeclaration(node, state) {
+    var this$1 = this;
+
+    if (node.exported != null) {
+      state.write('export * as ' + node.exported.name + ' from ');
+    } else {
+      state.write('export * from ');
+    }
+
+    this.Literal(node.source, state);
+
+    if (node.attributes && node.attributes.length > 0) {
+      state.write(' with { ');
+
+      for (var i = 0; i < node.attributes.length; i++) {
+        this$1.ImportAttribute(node.attributes[i], state);
+        if (i < node.attributes.length - 1) { state.write(', '); }
+      }
+
+      state.write(' }');
+    }
+
+    state.write(';');
+  },
+  MethodDefinition: function MethodDefinition(node, state) {
+    if (node["static"]) {
+      state.write('static ');
+    }
+
+    var kind = node.kind[0];
+
+    if (kind === 'g' || kind === 's') {
+      state.write(node.kind + ' ');
+    }
+
+    if (node.value.async) {
+      state.write('async ');
+    }
+
+    if (node.value.generator) {
+      state.write('*');
+    }
+
+    if (node.computed) {
+      state.write('[');
+      this[node.key.type](node.key, state);
+      state.write(']');
+    } else {
+      this[node.key.type](node.key, state);
+    }
+
+    formatSequence(state, node.value.params);
+    state.write(' ');
+    this[node.value.body.type](node.value.body, state);
+  },
+  ClassExpression: function ClassExpression(node, state) {
+    this.ClassDeclaration(node, state);
+  },
+  ArrowFunctionExpression: function ArrowFunctionExpression(node, state) {
+    state.write(node.async ? 'async ' : '', node);
+    var params = node.params;
+
+    if (params != null) {
+      if (params.length === 1 && params[0].type[0] === 'I') {
+        state.write(params[0].name, params[0]);
+      } else {
+        formatSequence(state, node.params);
+      }
+    }
+
+    state.write(' => ');
+
+    if (node.body.type[0] === 'O') {
+      state.write('(');
+      this.ObjectExpression(node.body, state);
+      state.write(')');
+    } else {
+      this[node.body.type](node.body, state);
+    }
+  },
+  ThisExpression: function ThisExpression(node, state) {
+    state.write('this', node);
+  },
+  Super: function Super(node, state) {
+    state.write('super', node);
+  },
+  RestElement: RestElement = function RestElement(node, state) {
+    state.write('...');
+    this[node.argument.type](node.argument, state);
+  },
+  SpreadElement: RestElement,
+  YieldExpression: function YieldExpression(node, state) {
+    state.write(node.delegate ? 'yield*' : 'yield');
+
+    if (node.argument) {
+      state.write(' ');
+      this[node.argument.type](node.argument, state);
+    }
+  },
+  AwaitExpression: function AwaitExpression(node, state) {
+    state.write('await ', node);
+    formatExpression(state, node.argument, node);
+  },
+  TemplateLiteral: function TemplateLiteral(node, state) {
+    var this$1 = this;
+
+    var quasis = node.quasis,
+        expressions = node.expressions;
+    state.write('`');
+    var length = expressions.length;
+
+    for (var i = 0; i < length; i++) {
+      var expression = expressions[i];
+      var _quasi = quasis[i];
+      state.write(_quasi.value.raw, _quasi);
+      state.write('${');
+      this$1[expression.type](expression, state);
+      state.write('}');
+    }
+
+    var quasi = quasis[quasis.length - 1];
+    state.write(quasi.value.raw, quasi);
+    state.write('`');
+  },
+  TemplateElement: function TemplateElement(node, state) {
+    state.write(node.value.raw, node);
+  },
+  TaggedTemplateExpression: function TaggedTemplateExpression(node, state) {
+    formatExpression(state, node.tag, node);
+    this[node.quasi.type](node.quasi, state);
+  },
+  ArrayExpression: ArrayExpression = function ArrayExpression(node, state) {
+    var this$1 = this;
+
+    state.write('[');
+
+    if (node.elements.length > 0) {
+      var elements = node.elements,
+          length = elements.length;
+
+      for (var i = 0;;) {
+        var element = elements[i];
+
+        if (element != null) {
+          this$1[element.type](element, state);
+        }
+
+        if (++i < length) {
+          state.write(', ');
+        } else {
+          if (element == null) {
+            state.write(', ');
+          }
+
+          break;
+        }
+      }
+    }
+
+    state.write(']');
+  },
+  ArrayPattern: ArrayExpression,
+  ObjectExpression: function ObjectExpression(node, state) {
+    var this$1 = this;
+
+    var indent = state.indent.repeat(state.indentLevel++);
+    var lineEnd = state.lineEnd,
+        writeComments = state.writeComments;
+    var propertyIndent = indent + state.indent;
+    state.write('{');
+
+    if (node.properties.length > 0) {
+      state.write(lineEnd);
+
+      if (writeComments && node.comments != null) {
+        formatComments(state, node.comments, propertyIndent, lineEnd);
+      }
+
+      var comma = ',' + lineEnd;
+      var properties = node.properties,
+          length = properties.length;
+
+      for (var i = 0;;) {
+        var property = properties[i];
+
+        if (writeComments && property.comments != null) {
+          formatComments(state, property.comments, propertyIndent, lineEnd);
+        }
+
+        state.write(propertyIndent);
+        this$1[property.type](property, state);
+
+        if (++i < length) {
+          state.write(comma);
+        } else {
+          break;
+        }
+      }
+
+      state.write(lineEnd);
+
+      if (writeComments && node.trailingComments != null) {
+        formatComments(state, node.trailingComments, propertyIndent, lineEnd);
+      }
+
+      state.write(indent + '}');
+    } else if (writeComments) {
+      if (node.comments != null) {
+        state.write(lineEnd);
+        formatComments(state, node.comments, propertyIndent, lineEnd);
+
+        if (node.trailingComments != null) {
+          formatComments(state, node.trailingComments, propertyIndent, lineEnd);
+        }
+
+        state.write(indent + '}');
+      } else if (node.trailingComments != null) {
+        state.write(lineEnd);
+        formatComments(state, node.trailingComments, propertyIndent, lineEnd);
+        state.write(indent + '}');
+      } else {
+        state.write('}');
+      }
+    } else {
+      state.write('}');
+    }
+
+    state.indentLevel--;
+  },
+  Property: function Property(node, state) {
+    if (node.method || node.kind[0] !== 'i') {
+      this.MethodDefinition(node, state);
+    } else {
+      if (!node.shorthand) {
+        if (node.computed) {
+          state.write('[');
+          this[node.key.type](node.key, state);
+          state.write(']');
+        } else {
+          this[node.key.type](node.key, state);
+        }
+
+        state.write(': ');
+      }
+
+      this[node.value.type](node.value, state);
+    }
+  },
+  PropertyDefinition: function PropertyDefinition(node, state) {
+    if (node["static"]) {
+      state.write('static ');
+    }
+
+    if (node.computed) {
+      state.write('[');
+    }
+
+    this[node.key.type](node.key, state);
+
+    if (node.computed) {
+      state.write(']');
+    }
+
+    if (node.value == null) {
+      if (node.key.type[0] !== 'F') {
+        state.write(';');
+      }
+
+      return;
+    }
+
+    state.write(' = ');
+    this[node.value.type](node.value, state);
+    state.write(';');
+  },
+  ObjectPattern: function ObjectPattern(node, state) {
+    var this$1 = this;
+
+    state.write('{');
+
+    if (node.properties.length > 0) {
+      var properties = node.properties,
+          length = properties.length;
+
+      for (var i = 0;;) {
+        this$1[properties[i].type](properties[i], state);
+
+        if (++i < length) {
+          state.write(', ');
+        } else {
+          break;
+        }
+      }
+    }
+
+    state.write('}');
+  },
+  SequenceExpression: function SequenceExpression(node, state) {
+    formatSequence(state, node.expressions);
+  },
+  UnaryExpression: function UnaryExpression(node, state) {
+    if (node.prefix) {
+      var operator = node.operator,
+          argument = node.argument,
+          type = node.argument.type;
+      state.write(operator);
+      var needsParentheses = expressionNeedsParenthesis(state, argument, node);
+
+      if (!needsParentheses && (operator.length > 1 || type[0] === 'U' && (type[1] === 'n' || type[1] === 'p') && argument.prefix && argument.operator[0] === operator && (operator === '+' || operator === '-'))) {
+        state.write(' ');
+      }
+
+      if (needsParentheses) {
+        state.write(operator.length > 1 ? ' (' : '(');
+        this[type](argument, state);
+        state.write(')');
+      } else {
+        this[type](argument, state);
+      }
+    } else {
+      this[node.argument.type](node.argument, state);
+      state.write(node.operator);
+    }
+  },
+  UpdateExpression: function UpdateExpression(node, state) {
+    if (node.prefix) {
+      state.write(node.operator);
+      this[node.argument.type](node.argument, state);
+    } else {
+      this[node.argument.type](node.argument, state);
+      state.write(node.operator);
+    }
+  },
+  AssignmentExpression: function AssignmentExpression(node, state) {
+    this[node.left.type](node.left, state);
+    state.write(' ' + node.operator + ' ');
+    this[node.right.type](node.right, state);
+  },
+  AssignmentPattern: function AssignmentPattern(node, state) {
+    this[node.left.type](node.left, state);
+    state.write(' = ');
+    this[node.right.type](node.right, state);
+  },
+  BinaryExpression: BinaryExpression = function BinaryExpression(node, state) {
+    var isIn = node.operator === 'in';
+
+    if (isIn) {
+      state.write('(');
+    }
+
+    formatExpression(state, node.left, node, false);
+    state.write(' ' + node.operator + ' ');
+    formatExpression(state, node.right, node, true);
+
+    if (isIn) {
+      state.write(')');
+    }
+  },
+  LogicalExpression: BinaryExpression,
+  ConditionalExpression: function ConditionalExpression(node, state) {
+    var test = node.test;
+    var precedence = state.expressionsPrecedence[test.type];
+
+    if (precedence === NEEDS_PARENTHESES || precedence <= state.expressionsPrecedence.ConditionalExpression) {
+      state.write('(');
+      this[test.type](test, state);
+      state.write(')');
+    } else {
+      this[test.type](test, state);
+    }
+
+    state.write(' ? ');
+    this[node.consequent.type](node.consequent, state);
+    state.write(' : ');
+    this[node.alternate.type](node.alternate, state);
+  },
+  NewExpression: function NewExpression(node, state) {
+    state.write('new ');
+    var precedence = state.expressionsPrecedence[node.callee.type];
+
+    if (precedence === NEEDS_PARENTHESES || precedence < state.expressionsPrecedence.CallExpression || hasCallExpression(node.callee)) {
+      state.write('(');
+      this[node.callee.type](node.callee, state);
+      state.write(')');
+    } else {
+      this[node.callee.type](node.callee, state);
+    }
+
+    formatSequence(state, node['arguments']);
+  },
+  CallExpression: function CallExpression(node, state) {
+    var precedence = state.expressionsPrecedence[node.callee.type];
+
+    if (precedence === NEEDS_PARENTHESES || precedence < state.expressionsPrecedence.CallExpression) {
+      state.write('(');
+      this[node.callee.type](node.callee, state);
+      state.write(')');
+    } else {
+      this[node.callee.type](node.callee, state);
+    }
+
+    if (node.optional) {
+      state.write('?.');
+    }
+
+    formatSequence(state, node['arguments']);
+  },
+  ChainExpression: function ChainExpression(node, state) {
+    this[node.expression.type](node.expression, state);
+  },
+  MemberExpression: function MemberExpression(node, state) {
+    var precedence = state.expressionsPrecedence[node.object.type];
+
+    if (precedence === NEEDS_PARENTHESES || precedence < state.expressionsPrecedence.MemberExpression) {
+      state.write('(');
+      this[node.object.type](node.object, state);
+      state.write(')');
+    } else {
+      this[node.object.type](node.object, state);
+    }
+
+    if (node.computed) {
+      if (node.optional) {
+        state.write('?.');
+      }
+
+      state.write('[');
+      this[node.property.type](node.property, state);
+      state.write(']');
+    } else {
+      if (node.optional) {
+        state.write('?.');
+      } else {
+        state.write('.');
+      }
+
+      this[node.property.type](node.property, state);
+    }
+  },
+  MetaProperty: function MetaProperty(node, state) {
+    state.write(node.meta.name + '.' + node.property.name, node);
+  },
+  Identifier: function Identifier(node, state) {
+    state.write(node.name, node);
+  },
+  PrivateIdentifier: function PrivateIdentifier(node, state) {
+    state.write("#".concat(node.name), node);
+  },
+  Literal: function Literal(node, state) {
+    if (node.raw != null) {
+      state.write(node.raw, node);
+    } else if (node.regex != null) {
+      this.RegExpLiteral(node, state);
+    } else if (node.bigint != null) {
+      state.write(node.bigint + 'n', node);
+    } else {
+      state.write(stringify(node.value), node);
+    }
+  },
+  RegExpLiteral: function RegExpLiteral(node, state) {
+    var regex = node.regex;
+    state.write("/".concat(regex.pattern, "/").concat(regex.flags), node);
+  }
+};
+exports.GENERATOR = GENERATOR;
+var EMPTY_OBJECT = {};
+var baseGenerator = GENERATOR;
+exports.baseGenerator = baseGenerator;
+
+var State = function () {
+  function State(options) {
+    _classCallCheck(this, State);
+
+    var setup = options == null ? EMPTY_OBJECT : options;
+    this.output = '';
+
+    if (setup.output != null) {
+      this.output = setup.output;
+      this.write = this.writeToStream;
+    } else {
+      this.output = '';
+    }
+
+    this.generator = setup.generator != null ? setup.generator : GENERATOR;
+    this.expressionsPrecedence = setup.expressionsPrecedence != null ? setup.expressionsPrecedence : EXPRESSIONS_PRECEDENCE;
+    this.indent = setup.indent != null ? setup.indent : '  ';
+    this.lineEnd = setup.lineEnd != null ? setup.lineEnd : '\n';
+    this.indentLevel = setup.startingIndentLevel != null ? setup.startingIndentLevel : 0;
+    this.writeComments = setup.comments ? setup.comments : false;
+
+    if (setup.sourceMap != null) {
+      this.write = setup.output == null ? this.writeAndMap : this.writeToStreamAndMap;
+      this.sourceMap = setup.sourceMap;
+      this.line = 1;
+      this.column = 0;
+      this.lineEndSize = this.lineEnd.split('\n').length - 1;
+      this.mapping = {
+        original: null,
+        generated: this,
+        name: undefined,
+        source: setup.sourceMap.file || setup.sourceMap._file
+      };
+    }
+  }
+
+  _createClass(State, [{
+    key: "write",
+    value: function write(code) {
+      this.output += code;
+    }
+  }, {
+    key: "writeToStream",
+    value: function writeToStream(code) {
+      this.output.write(code);
+    }
+  }, {
+    key: "writeAndMap",
+    value: function writeAndMap(code, node) {
+      this.output += code;
+      this.map(code, node);
+    }
+  }, {
+    key: "writeToStreamAndMap",
+    value: function writeToStreamAndMap(code, node) {
+      this.output.write(code);
+      this.map(code, node);
+    }
+  }, {
+    key: "map",
+    value: function map(code, node) {
+      if (node != null) {
+        var type = node.type;
+
+        if (type[0] === 'L' && type[2] === 'n') {
+          this.column = 0;
+          this.line++;
+          return;
+        }
+
+        if (node.loc != null) {
+          var mapping = this.mapping;
+          mapping.original = node.loc.start;
+          mapping.name = node.name;
+          this.sourceMap.addMapping(mapping);
+        }
+
+        if (type[0] === 'T' && type[8] === 'E' || type[0] === 'L' && type[1] === 'i' && typeof node.value === 'string') {
+          var _length = code.length;
+          var column = this.column,
+              line = this.line;
+
+          for (var i = 0; i < _length; i++) {
+            if (code[i] === '\n') {
+              column = 0;
+              line++;
+            } else {
+              column++;
+            }
+          }
+
+          this.column = column;
+          this.line = line;
+          return;
+        }
+      }
+
+      var length = code.length;
+      var lineEnd = this.lineEnd;
+
+      if (length > 0) {
+        if (this.lineEndSize > 0 && (lineEnd.length === 1 ? code[length - 1] === lineEnd : code.endsWith(lineEnd))) {
+          this.line += this.lineEndSize;
+          this.column = 0;
+        } else {
+          this.column += length;
+        }
+      }
+    }
+  }, {
+    key: "toString",
+    value: function toString() {
+      return this.output;
+    }
+  }]);
+
+  return State;
+}();
+
+function generate(node, options) {
+  var state = new State(options);
+  state.generator[node.type](node, state);
+  return state.output;
+}
+
+
+});
+
+unwrapExports(astring);
+var astring_1 = astring.generate;
+
+var acorn$1 = createCommonjsModule(function (module, exports) {
 (function (global, factory) {
   factory(exports);
 })(commonjsGlobal, (function (exports) { 'use strict';
@@ -6677,1287 +7957,159 @@ var acorn = createCommonjsModule(function (module, exports) {
 }));
 });
 
-var acorn_1 = acorn.parse;
+var acorn_2 = acorn$1.Parser;
+var acorn_3 = acorn$1.TokenType;
 
-var astring = createCommonjsModule(function (module, exports) {
-"use strict";
+// Acorn plugin for the TC39 decorators proposal (stage 3).
+//
+// Acorn core only implements stage-4 (finalized) syntax, so a bare
+// `@` is an "Unexpected character" without this plugin. There is no
+// maintained decorator plugin on npm for Acorn 8 — `acorn-decorators`
+// does not exist, and `acorn-es7` targets Acorn 5/6 and the abandoned
+// 2016 proposal — so IrohRedux carries its own, written against
+// Acorn 8.19's Parser API: a plugin is a function that takes a Parser
+// class and returns an extended class (Parser.extend), with the
+// overridden methods calling super.
+//
+// What it parses (current proposal grammar):
+//   - `@expr` before a class declaration or expression, where expr is
+//     a LeftHandSideExpression (identifier, member chain, call, ...).
+//     Class expressions cover `const C = @dec class {}` and
+//     `export default @dec class {}` as well as `@dec class C {}`
+//     as a statement.
+//   - `@expr` before class elements: methods, fields, static members.
+//   - `@expr` before `export` / `export default` of a class.
+// What it does NOT parse:
+//   - `accessor` fields — the `accessor` keyword is part of the same
+//     proposal but needs its own element kind and runtime support.
+//     `accessor x = 1` fails at parse time with Acorn's own error.
+//   - Decorators on anything but classes and class elements.
+//     `@dec function f() {}` raises "Decorators must precede a class
+//     declaration".
+//
+// The plugin only changes parsing. It produces `Decorator` nodes
+// (type "Decorator", with an `expression`) attached as `decorators`
+// arrays on ClassDeclaration, ClassExpression, MethodDefinition and
+// PropertyDefinition nodes. A patch stage (src/decorators.js)
+// desugars them into plain calls, because Node cannot execute `@`
+// syntax at all — verified on Node v24.22.1, even with the
+// --js-decorators V8 flag — so decorated code is rewritten, never
+// emitted with `@` in it.
+//
+// Written ES2015-only (no async/await, no for...of): this file is
+// bundled into the browser build by buble.
+var atToken = new acorn_3("@", { startsExpr: true });
 
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.generate = generate;
-exports.baseGenerator = exports.GENERATOR = exports.EXPRESSIONS_PRECEDENCE = exports.NEEDS_PARENTHESES = void 0;
+function decoratorsPlugin(BaseParser) {
+  return (function (BaseParser) {
+    function anonymous () {
+      BaseParser.apply(this, arguments);
+    }
 
-function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
+    if ( BaseParser ) anonymous.__proto__ = BaseParser;
+    anonymous.prototype = Object.create( BaseParser && BaseParser.prototype );
+    anonymous.prototype.constructor = anonymous;
 
-function _defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) { descriptor.writable = true; } Object.defineProperty(target, descriptor.key, descriptor); } }
+    anonymous.prototype.getTokenFromCode = function getTokenFromCode (code) {
+      if (code === 64) {
+        this.pos += 1;
+        return this.finishToken(atToken);
+      }
+      return BaseParser.prototype.getTokenFromCode.call(this, code);
+    };
 
-function _createClass(Constructor, protoProps, staticProps) { if (protoProps) { _defineProperties(Constructor.prototype, protoProps); } if (staticProps) { _defineProperties(Constructor, staticProps); } return Constructor; }
+    // Parse one or more `@expr` decorators. The expression is a
+    // LeftHandSideExpression: parseExprSubscripts parses an atom plus
+    // member/call chains, and stops before binary operators, so
+    // `@a + b` is a decorator `@a` followed by `+ b` (a later error),
+    // while `@(a + b)` and `@factory()` parse as written.
+    anonymous.prototype.parseDecorators = function parseDecorators () {
+      var this$1 = this;
 
-var stringify = JSON.stringify;
+      var decorators = [];
+      while (this.type === atToken) {
+        var node = this$1.startNode();
+        this$1.next();
+        node.expression = this$1.parseExprSubscripts(null, false);
+        decorators.push(this$1.finishNode(node, "Decorator"));
+      }
+      return decorators;
+    };
 
-if (!String.prototype.repeat) {
-  throw new Error('String.prototype.repeat is undefined, see https://github.com/davidbonnet/astring#installation');
+    // `@dec class C {}`, `@dec export class C {}`,
+    // `@dec export default class C {}`. The decorators are collected
+    // first, then the statement is parsed normally and they are
+    // attached to the class inside it (the declaration of an export,
+    // or the class itself). Anything else raises a clear error.
+    anonymous.prototype.parseStatement = function parseStatement (context, topLevel, exports) {
+      if (this.type !== atToken) {
+        return BaseParser.prototype.parseStatement.call(this, context, topLevel, exports);
+      }
+      var decorators = this.parseDecorators();
+      var result = BaseParser.prototype.parseStatement.call(this, context, topLevel, exports);
+      var target = result;
+      if (
+        target.type === "ExportNamedDeclaration" ||
+        target.type === "ExportDefaultDeclaration"
+      ) {
+        target = target.declaration;
+      }
+      if (
+        !target ||
+        (target.type !== "ClassDeclaration" && target.type !== "ClassExpression")
+      ) {
+        this.raise(decorators[0].start, "Decorators must precede a class declaration");
+      }
+      target.decorators = decorators;
+      return result;
+    };
+
+    // `@dec` before a class element. Static blocks cannot be
+    // decorated; a decorator before `;` (an empty element) is an
+    // error rather than a silently dropped decorator.
+    anonymous.prototype.parseClassElement = function parseClassElement (constructorAllowsSuper) {
+      if (this.type !== atToken) {
+        return BaseParser.prototype.parseClassElement.call(this, constructorAllowsSuper);
+      }
+      var decorators = this.parseDecorators();
+      var el = BaseParser.prototype.parseClassElement.call(this, constructorAllowsSuper);
+      if (!el) {
+        this.raise(decorators[0].start, "Decorators must precede a class element");
+      }
+      if (el.type === "StaticBlock") {
+        this.raise(decorators[0].start, "Static blocks cannot have decorators");
+      }
+      el.decorators = decorators;
+      return el;
+    };
+
+    // `@dec` before a class expression: `const C = @dec class {}` or
+    // `export default @dec class {}`. The statement-level hook above
+    // only sees `@` at the start of a statement, so an expression in
+    // the middle of one needs this. Anything that is not a class
+    // expression raises a clear error.
+    anonymous.prototype.parseExprAtom = function parseExprAtom (refDestructuringErrors) {
+      if (this.type !== atToken) {
+        return BaseParser.prototype.parseExprAtom.call(this, refDestructuringErrors);
+      }
+      var decorators = this.parseDecorators();
+      var node = BaseParser.prototype.parseExprAtom.call(this, refDestructuringErrors);
+      if (!node || node.type !== "ClassExpression") {
+        this.raise(decorators[0].start, "Decorators must precede a class expression");
+      }
+      node.decorators = decorators;
+      return node;
+    };
+
+    return anonymous;
+  }(BaseParser));
 }
 
-if (!String.prototype.endsWith) {
-  throw new Error('String.prototype.endsWith is undefined, see https://github.com/davidbonnet/astring#installation');
+var DecoratorParser = acorn_2.extend(decoratorsPlugin);
+
+function parseWithDecorators(input, options) {
+  return DecoratorParser.parse(input, options);
 }
-
-var OPERATOR_PRECEDENCE = {
-  '||': 2,
-  '??': 3,
-  '&&': 4,
-  '|': 5,
-  '^': 6,
-  '&': 7,
-  '==': 8,
-  '!=': 8,
-  '===': 8,
-  '!==': 8,
-  '<': 9,
-  '>': 9,
-  '<=': 9,
-  '>=': 9,
-  "in": 9,
-  "instanceof": 9,
-  '<<': 10,
-  '>>': 10,
-  '>>>': 10,
-  '+': 11,
-  '-': 11,
-  '*': 12,
-  '%': 12,
-  '/': 12,
-  '**': 13
-};
-var NEEDS_PARENTHESES = 17;
-exports.NEEDS_PARENTHESES = NEEDS_PARENTHESES;
-var EXPRESSIONS_PRECEDENCE = {
-  ArrayExpression: 20,
-  TaggedTemplateExpression: 20,
-  ThisExpression: 20,
-  Identifier: 20,
-  PrivateIdentifier: 20,
-  Literal: 18,
-  TemplateLiteral: 20,
-  Super: 20,
-  SequenceExpression: 20,
-  MemberExpression: 19,
-  ChainExpression: 19,
-  CallExpression: 19,
-  NewExpression: 19,
-  ArrowFunctionExpression: NEEDS_PARENTHESES,
-  ClassExpression: NEEDS_PARENTHESES,
-  FunctionExpression: NEEDS_PARENTHESES,
-  ObjectExpression: NEEDS_PARENTHESES,
-  UpdateExpression: 16,
-  UnaryExpression: 15,
-  AwaitExpression: 15,
-  BinaryExpression: 14,
-  LogicalExpression: 13,
-  ConditionalExpression: 4,
-  AssignmentExpression: 3,
-  YieldExpression: 2,
-  RestElement: 1
-};
-exports.EXPRESSIONS_PRECEDENCE = EXPRESSIONS_PRECEDENCE;
-
-function formatSequence(state, nodes) {
-  var generator = state.generator;
-  state.write('(');
-
-  if (nodes != null && nodes.length > 0) {
-    generator[nodes[0].type](nodes[0], state);
-    var length = nodes.length;
-
-    for (var i = 1; i < length; i++) {
-      var param = nodes[i];
-      state.write(', ');
-      generator[param.type](param, state);
-    }
-  }
-
-  state.write(')');
-}
-
-function expressionNeedsParenthesis(state, node, parentNode, isRightHand) {
-  var nodePrecedence = state.expressionsPrecedence[node.type];
-
-  if (nodePrecedence === NEEDS_PARENTHESES) {
-    return true;
-  }
-
-  var parentNodePrecedence = state.expressionsPrecedence[parentNode.type];
-
-  if (nodePrecedence !== parentNodePrecedence) {
-    return !isRightHand && nodePrecedence === 15 && parentNodePrecedence === 14 && parentNode.operator === '**' || nodePrecedence < parentNodePrecedence;
-  }
-
-  if (nodePrecedence !== 13 && nodePrecedence !== 14) {
-    return false;
-  }
-
-  if (node.operator === '**' && parentNode.operator === '**') {
-    return !isRightHand;
-  }
-
-  if (nodePrecedence === 13 && parentNodePrecedence === 13 && (node.operator === '??' || parentNode.operator === '??')) {
-    return true;
-  }
-
-  if (isRightHand) {
-    return OPERATOR_PRECEDENCE[node.operator] <= OPERATOR_PRECEDENCE[parentNode.operator];
-  }
-
-  return OPERATOR_PRECEDENCE[node.operator] < OPERATOR_PRECEDENCE[parentNode.operator];
-}
-
-function formatExpression(state, node, parentNode, isRightHand) {
-  var generator = state.generator;
-
-  if (expressionNeedsParenthesis(state, node, parentNode, isRightHand)) {
-    state.write('(');
-    generator[node.type](node, state);
-    state.write(')');
-  } else {
-    generator[node.type](node, state);
-  }
-}
-
-function reindent(state, text, indent, lineEnd) {
-  var lines = text.split('\n');
-  var end = lines.length - 1;
-  state.write(lines[0].trim());
-
-  if (end > 0) {
-    state.write(lineEnd);
-
-    for (var i = 1; i < end; i++) {
-      state.write(indent + lines[i].trim() + lineEnd);
-    }
-
-    state.write(indent + lines[end].trim());
-  }
-}
-
-function formatComments(state, comments, indent, lineEnd) {
-  var length = comments.length;
-
-  for (var i = 0; i < length; i++) {
-    var comment = comments[i];
-    state.write(indent);
-
-    if (comment.type[0] === 'L') {
-      state.write('// ' + comment.value.trim() + '\n', comment);
-    } else {
-      state.write('/*');
-      reindent(state, comment.value, indent, lineEnd);
-      state.write('*/' + lineEnd);
-    }
-  }
-}
-
-function hasCallExpression(node) {
-  var currentNode = node;
-
-  while (currentNode != null) {
-    var _currentNode = currentNode,
-        type = _currentNode.type;
-
-    if (type[0] === 'C' && type[1] === 'a') {
-      return true;
-    } else if (type[0] === 'M' && type[1] === 'e' && type[2] === 'm') {
-      currentNode = currentNode.object;
-    } else {
-      return false;
-    }
-  }
-}
-
-function formatVariableDeclaration(state, node) {
-  var generator = state.generator;
-  var declarations = node.declarations;
-  state.write(node.kind + ' ');
-  var length = declarations.length;
-
-  if (length > 0) {
-    generator.VariableDeclarator(declarations[0], state);
-
-    for (var i = 1; i < length; i++) {
-      state.write(', ');
-      generator.VariableDeclarator(declarations[i], state);
-    }
-  }
-}
-
-var ForInStatement, FunctionDeclaration, RestElement, BinaryExpression, ArrayExpression, BlockStatement;
-var GENERATOR = {
-  Program: function Program(node, state) {
-    var this$1 = this;
-
-    var indent = state.indent.repeat(state.indentLevel);
-    var lineEnd = state.lineEnd,
-        writeComments = state.writeComments;
-
-    if (writeComments && node.comments != null) {
-      formatComments(state, node.comments, indent, lineEnd);
-    }
-
-    var statements = node.body;
-    var length = statements.length;
-
-    for (var i = 0; i < length; i++) {
-      var statement = statements[i];
-
-      if (writeComments && statement.comments != null) {
-        formatComments(state, statement.comments, indent, lineEnd);
-      }
-
-      state.write(indent);
-      this$1[statement.type](statement, state);
-      state.write(lineEnd);
-    }
-
-    if (writeComments && node.trailingComments != null) {
-      formatComments(state, node.trailingComments, indent, lineEnd);
-    }
-  },
-  BlockStatement: BlockStatement = function BlockStatement(node, state) {
-    var this$1 = this;
-
-    var indent = state.indent.repeat(state.indentLevel++);
-    var lineEnd = state.lineEnd,
-        writeComments = state.writeComments;
-    var statementIndent = indent + state.indent;
-    state.write('{');
-    var statements = node.body;
-
-    if (statements != null && statements.length > 0) {
-      state.write(lineEnd);
-
-      if (writeComments && node.comments != null) {
-        formatComments(state, node.comments, statementIndent, lineEnd);
-      }
-
-      var length = statements.length;
-
-      for (var i = 0; i < length; i++) {
-        var statement = statements[i];
-
-        if (writeComments && statement.comments != null) {
-          formatComments(state, statement.comments, statementIndent, lineEnd);
-        }
-
-        state.write(statementIndent);
-        this$1[statement.type](statement, state);
-        state.write(lineEnd);
-      }
-
-      state.write(indent);
-    } else {
-      if (writeComments && node.comments != null) {
-        state.write(lineEnd);
-        formatComments(state, node.comments, statementIndent, lineEnd);
-        state.write(indent);
-      }
-    }
-
-    if (writeComments && node.trailingComments != null) {
-      formatComments(state, node.trailingComments, statementIndent, lineEnd);
-    }
-
-    state.write('}');
-    state.indentLevel--;
-  },
-  ClassBody: BlockStatement,
-  StaticBlock: function StaticBlock(node, state) {
-    state.write('static ');
-    this.BlockStatement(node, state);
-  },
-  EmptyStatement: function EmptyStatement(node, state) {
-    state.write(';');
-  },
-  ExpressionStatement: function ExpressionStatement(node, state) {
-    var precedence = state.expressionsPrecedence[node.expression.type];
-
-    if (precedence === NEEDS_PARENTHESES || precedence === 3 && node.expression.left.type[0] === 'O') {
-      state.write('(');
-      this[node.expression.type](node.expression, state);
-      state.write(')');
-    } else {
-      this[node.expression.type](node.expression, state);
-    }
-
-    state.write(';');
-  },
-  IfStatement: function IfStatement(node, state) {
-    state.write('if (');
-    this[node.test.type](node.test, state);
-    state.write(') ');
-    this[node.consequent.type](node.consequent, state);
-
-    if (node.alternate != null) {
-      state.write(' else ');
-      this[node.alternate.type](node.alternate, state);
-    }
-  },
-  LabeledStatement: function LabeledStatement(node, state) {
-    this[node.label.type](node.label, state);
-    state.write(': ');
-    this[node.body.type](node.body, state);
-  },
-  BreakStatement: function BreakStatement(node, state) {
-    state.write('break');
-
-    if (node.label != null) {
-      state.write(' ');
-      this[node.label.type](node.label, state);
-    }
-
-    state.write(';');
-  },
-  ContinueStatement: function ContinueStatement(node, state) {
-    state.write('continue');
-
-    if (node.label != null) {
-      state.write(' ');
-      this[node.label.type](node.label, state);
-    }
-
-    state.write(';');
-  },
-  WithStatement: function WithStatement(node, state) {
-    state.write('with (');
-    this[node.object.type](node.object, state);
-    state.write(') ');
-    this[node.body.type](node.body, state);
-  },
-  SwitchStatement: function SwitchStatement(node, state) {
-    var this$1 = this;
-
-    var indent = state.indent.repeat(state.indentLevel++);
-    var lineEnd = state.lineEnd,
-        writeComments = state.writeComments;
-    state.indentLevel++;
-    var caseIndent = indent + state.indent;
-    var statementIndent = caseIndent + state.indent;
-    state.write('switch (');
-    this[node.discriminant.type](node.discriminant, state);
-    state.write(') {' + lineEnd);
-    var occurences = node.cases;
-    var occurencesCount = occurences.length;
-
-    for (var i = 0; i < occurencesCount; i++) {
-      var occurence = occurences[i];
-
-      if (writeComments && occurence.comments != null) {
-        formatComments(state, occurence.comments, caseIndent, lineEnd);
-      }
-
-      if (occurence.test) {
-        state.write(caseIndent + 'case ');
-        this$1[occurence.test.type](occurence.test, state);
-        state.write(':' + lineEnd);
-      } else {
-        state.write(caseIndent + 'default:' + lineEnd);
-      }
-
-      var consequent = occurence.consequent;
-      var consequentCount = consequent.length;
-
-      for (var _i = 0; _i < consequentCount; _i++) {
-        var statement = consequent[_i];
-
-        if (writeComments && statement.comments != null) {
-          formatComments(state, statement.comments, statementIndent, lineEnd);
-        }
-
-        state.write(statementIndent);
-        this$1[statement.type](statement, state);
-        state.write(lineEnd);
-      }
-    }
-
-    state.indentLevel -= 2;
-    state.write(indent + '}');
-  },
-  ReturnStatement: function ReturnStatement(node, state) {
-    state.write('return');
-
-    if (node.argument) {
-      state.write(' ');
-      this[node.argument.type](node.argument, state);
-    }
-
-    state.write(';');
-  },
-  ThrowStatement: function ThrowStatement(node, state) {
-    state.write('throw ');
-    this[node.argument.type](node.argument, state);
-    state.write(';');
-  },
-  TryStatement: function TryStatement(node, state) {
-    state.write('try ');
-    this[node.block.type](node.block, state);
-
-    if (node.handler) {
-      var handler = node.handler;
-
-      if (handler.param == null) {
-        state.write(' catch ');
-      } else {
-        state.write(' catch (');
-        this[handler.param.type](handler.param, state);
-        state.write(') ');
-      }
-
-      this[handler.body.type](handler.body, state);
-    }
-
-    if (node.finalizer) {
-      state.write(' finally ');
-      this[node.finalizer.type](node.finalizer, state);
-    }
-  },
-  WhileStatement: function WhileStatement(node, state) {
-    state.write('while (');
-    this[node.test.type](node.test, state);
-    state.write(') ');
-    this[node.body.type](node.body, state);
-  },
-  DoWhileStatement: function DoWhileStatement(node, state) {
-    state.write('do ');
-    this[node.body.type](node.body, state);
-    state.write(' while (');
-    this[node.test.type](node.test, state);
-    state.write(');');
-  },
-  ForStatement: function ForStatement(node, state) {
-    state.write('for (');
-
-    if (node.init != null) {
-      var init = node.init;
-
-      if (init.type[0] === 'V') {
-        formatVariableDeclaration(state, init);
-      } else {
-        this[init.type](init, state);
-      }
-    }
-
-    state.write('; ');
-
-    if (node.test) {
-      this[node.test.type](node.test, state);
-    }
-
-    state.write('; ');
-
-    if (node.update) {
-      this[node.update.type](node.update, state);
-    }
-
-    state.write(') ');
-    this[node.body.type](node.body, state);
-  },
-  ForInStatement: ForInStatement = function ForInStatement(node, state) {
-    state.write("for ".concat(node["await"] ? 'await ' : '', "("));
-    var left = node.left;
-
-    if (left.type[0] === 'V') {
-      formatVariableDeclaration(state, left);
-    } else {
-      this[left.type](left, state);
-    }
-
-    state.write(node.type[3] === 'I' ? ' in ' : ' of ');
-    this[node.right.type](node.right, state);
-    state.write(') ');
-    this[node.body.type](node.body, state);
-  },
-  ForOfStatement: ForInStatement,
-  DebuggerStatement: function DebuggerStatement(node, state) {
-    state.write('debugger;', node);
-  },
-  FunctionDeclaration: FunctionDeclaration = function FunctionDeclaration(node, state) {
-    state.write((node.async ? 'async ' : '') + (node.generator ? 'function* ' : 'function ') + (node.id ? node.id.name : ''), node);
-    formatSequence(state, node.params);
-    state.write(' ');
-    this[node.body.type](node.body, state);
-  },
-  FunctionExpression: FunctionDeclaration,
-  VariableDeclaration: function VariableDeclaration(node, state) {
-    formatVariableDeclaration(state, node);
-    state.write(';');
-  },
-  VariableDeclarator: function VariableDeclarator(node, state) {
-    this[node.id.type](node.id, state);
-
-    if (node.init != null) {
-      state.write(' = ');
-      this[node.init.type](node.init, state);
-    }
-  },
-  ClassDeclaration: function ClassDeclaration(node, state) {
-    state.write('class ' + (node.id ? "".concat(node.id.name, " ") : ''), node);
-
-    if (node.superClass) {
-      state.write('extends ');
-      var superClass = node.superClass;
-      var type = superClass.type;
-      var precedence = state.expressionsPrecedence[type];
-
-      if ((type[0] !== 'C' || type[1] !== 'l' || type[5] !== 'E') && (precedence === NEEDS_PARENTHESES || precedence < state.expressionsPrecedence.ClassExpression)) {
-        state.write('(');
-        this[node.superClass.type](superClass, state);
-        state.write(')');
-      } else {
-        this[superClass.type](superClass, state);
-      }
-
-      state.write(' ');
-    }
-
-    this.ClassBody(node.body, state);
-  },
-  ImportDeclaration: function ImportDeclaration(node, state) {
-    var this$1 = this;
-
-    state.write('import ');
-    var specifiers = node.specifiers,
-        attributes = node.attributes;
-    var length = specifiers.length;
-    var i = 0;
-
-    if (length > 0) {
-      for (; i < length;) {
-        if (i > 0) {
-          state.write(', ');
-        }
-
-        var specifier = specifiers[i];
-        var type = specifier.type[6];
-
-        if (type === 'D') {
-          state.write(specifier.local.name, specifier);
-          i++;
-        } else if (type === 'N') {
-          state.write('* as ' + specifier.local.name, specifier);
-          i++;
-        } else {
-          break;
-        }
-      }
-
-      if (i < length) {
-        state.write('{');
-
-        for (;;) {
-          var _specifier = specifiers[i];
-          var name = _specifier.imported.name;
-          state.write(name, _specifier);
-
-          if (name !== _specifier.local.name) {
-            state.write(' as ' + _specifier.local.name);
-          }
-
-          if (++i < length) {
-            state.write(', ');
-          } else {
-            break;
-          }
-        }
-
-        state.write('}');
-      }
-
-      state.write(' from ');
-    }
-
-    this.Literal(node.source, state);
-
-    if (attributes && attributes.length > 0) {
-      state.write(' with { ');
-
-      for (var _i2 = 0; _i2 < attributes.length; _i2++) {
-        this$1.ImportAttribute(attributes[_i2], state);
-        if (_i2 < attributes.length - 1) { state.write(', '); }
-      }
-
-      state.write(' }');
-    }
-
-    state.write(';');
-  },
-  ImportAttribute: function ImportAttribute(node, state) {
-    this.Identifier(node.key, state);
-    state.write(': ');
-    this.Literal(node.value, state);
-  },
-  ImportExpression: function ImportExpression(node, state) {
-    state.write('import(');
-    this[node.source.type](node.source, state);
-    state.write(')');
-  },
-  ExportDefaultDeclaration: function ExportDefaultDeclaration(node, state) {
-    state.write('export default ');
-    this[node.declaration.type](node.declaration, state);
-
-    if (state.expressionsPrecedence[node.declaration.type] != null && node.declaration.type[0] !== 'F') {
-      state.write(';');
-    }
-  },
-  ExportNamedDeclaration: function ExportNamedDeclaration(node, state) {
-    var this$1 = this;
-
-    state.write('export ');
-
-    if (node.declaration) {
-      this[node.declaration.type](node.declaration, state);
-    } else {
-      state.write('{');
-      var specifiers = node.specifiers,
-          length = specifiers.length;
-
-      if (length > 0) {
-        for (var i = 0;;) {
-          var specifier = specifiers[i];
-          var name = specifier.local.name;
-          state.write(name, specifier);
-
-          if (name !== specifier.exported.name) {
-            state.write(' as ' + specifier.exported.name);
-          }
-
-          if (++i < length) {
-            state.write(', ');
-          } else {
-            break;
-          }
-        }
-      }
-
-      state.write('}');
-
-      if (node.source) {
-        state.write(' from ');
-        this.Literal(node.source, state);
-      }
-
-      if (node.attributes && node.attributes.length > 0) {
-        state.write(' with { ');
-
-        for (var _i3 = 0; _i3 < node.attributes.length; _i3++) {
-          this$1.ImportAttribute(node.attributes[_i3], state);
-          if (_i3 < node.attributes.length - 1) { state.write(', '); }
-        }
-
-        state.write(' }');
-      }
-
-      state.write(';');
-    }
-  },
-  ExportAllDeclaration: function ExportAllDeclaration(node, state) {
-    var this$1 = this;
-
-    if (node.exported != null) {
-      state.write('export * as ' + node.exported.name + ' from ');
-    } else {
-      state.write('export * from ');
-    }
-
-    this.Literal(node.source, state);
-
-    if (node.attributes && node.attributes.length > 0) {
-      state.write(' with { ');
-
-      for (var i = 0; i < node.attributes.length; i++) {
-        this$1.ImportAttribute(node.attributes[i], state);
-        if (i < node.attributes.length - 1) { state.write(', '); }
-      }
-
-      state.write(' }');
-    }
-
-    state.write(';');
-  },
-  MethodDefinition: function MethodDefinition(node, state) {
-    if (node["static"]) {
-      state.write('static ');
-    }
-
-    var kind = node.kind[0];
-
-    if (kind === 'g' || kind === 's') {
-      state.write(node.kind + ' ');
-    }
-
-    if (node.value.async) {
-      state.write('async ');
-    }
-
-    if (node.value.generator) {
-      state.write('*');
-    }
-
-    if (node.computed) {
-      state.write('[');
-      this[node.key.type](node.key, state);
-      state.write(']');
-    } else {
-      this[node.key.type](node.key, state);
-    }
-
-    formatSequence(state, node.value.params);
-    state.write(' ');
-    this[node.value.body.type](node.value.body, state);
-  },
-  ClassExpression: function ClassExpression(node, state) {
-    this.ClassDeclaration(node, state);
-  },
-  ArrowFunctionExpression: function ArrowFunctionExpression(node, state) {
-    state.write(node.async ? 'async ' : '', node);
-    var params = node.params;
-
-    if (params != null) {
-      if (params.length === 1 && params[0].type[0] === 'I') {
-        state.write(params[0].name, params[0]);
-      } else {
-        formatSequence(state, node.params);
-      }
-    }
-
-    state.write(' => ');
-
-    if (node.body.type[0] === 'O') {
-      state.write('(');
-      this.ObjectExpression(node.body, state);
-      state.write(')');
-    } else {
-      this[node.body.type](node.body, state);
-    }
-  },
-  ThisExpression: function ThisExpression(node, state) {
-    state.write('this', node);
-  },
-  Super: function Super(node, state) {
-    state.write('super', node);
-  },
-  RestElement: RestElement = function RestElement(node, state) {
-    state.write('...');
-    this[node.argument.type](node.argument, state);
-  },
-  SpreadElement: RestElement,
-  YieldExpression: function YieldExpression(node, state) {
-    state.write(node.delegate ? 'yield*' : 'yield');
-
-    if (node.argument) {
-      state.write(' ');
-      this[node.argument.type](node.argument, state);
-    }
-  },
-  AwaitExpression: function AwaitExpression(node, state) {
-    state.write('await ', node);
-    formatExpression(state, node.argument, node);
-  },
-  TemplateLiteral: function TemplateLiteral(node, state) {
-    var this$1 = this;
-
-    var quasis = node.quasis,
-        expressions = node.expressions;
-    state.write('`');
-    var length = expressions.length;
-
-    for (var i = 0; i < length; i++) {
-      var expression = expressions[i];
-      var _quasi = quasis[i];
-      state.write(_quasi.value.raw, _quasi);
-      state.write('${');
-      this$1[expression.type](expression, state);
-      state.write('}');
-    }
-
-    var quasi = quasis[quasis.length - 1];
-    state.write(quasi.value.raw, quasi);
-    state.write('`');
-  },
-  TemplateElement: function TemplateElement(node, state) {
-    state.write(node.value.raw, node);
-  },
-  TaggedTemplateExpression: function TaggedTemplateExpression(node, state) {
-    formatExpression(state, node.tag, node);
-    this[node.quasi.type](node.quasi, state);
-  },
-  ArrayExpression: ArrayExpression = function ArrayExpression(node, state) {
-    var this$1 = this;
-
-    state.write('[');
-
-    if (node.elements.length > 0) {
-      var elements = node.elements,
-          length = elements.length;
-
-      for (var i = 0;;) {
-        var element = elements[i];
-
-        if (element != null) {
-          this$1[element.type](element, state);
-        }
-
-        if (++i < length) {
-          state.write(', ');
-        } else {
-          if (element == null) {
-            state.write(', ');
-          }
-
-          break;
-        }
-      }
-    }
-
-    state.write(']');
-  },
-  ArrayPattern: ArrayExpression,
-  ObjectExpression: function ObjectExpression(node, state) {
-    var this$1 = this;
-
-    var indent = state.indent.repeat(state.indentLevel++);
-    var lineEnd = state.lineEnd,
-        writeComments = state.writeComments;
-    var propertyIndent = indent + state.indent;
-    state.write('{');
-
-    if (node.properties.length > 0) {
-      state.write(lineEnd);
-
-      if (writeComments && node.comments != null) {
-        formatComments(state, node.comments, propertyIndent, lineEnd);
-      }
-
-      var comma = ',' + lineEnd;
-      var properties = node.properties,
-          length = properties.length;
-
-      for (var i = 0;;) {
-        var property = properties[i];
-
-        if (writeComments && property.comments != null) {
-          formatComments(state, property.comments, propertyIndent, lineEnd);
-        }
-
-        state.write(propertyIndent);
-        this$1[property.type](property, state);
-
-        if (++i < length) {
-          state.write(comma);
-        } else {
-          break;
-        }
-      }
-
-      state.write(lineEnd);
-
-      if (writeComments && node.trailingComments != null) {
-        formatComments(state, node.trailingComments, propertyIndent, lineEnd);
-      }
-
-      state.write(indent + '}');
-    } else if (writeComments) {
-      if (node.comments != null) {
-        state.write(lineEnd);
-        formatComments(state, node.comments, propertyIndent, lineEnd);
-
-        if (node.trailingComments != null) {
-          formatComments(state, node.trailingComments, propertyIndent, lineEnd);
-        }
-
-        state.write(indent + '}');
-      } else if (node.trailingComments != null) {
-        state.write(lineEnd);
-        formatComments(state, node.trailingComments, propertyIndent, lineEnd);
-        state.write(indent + '}');
-      } else {
-        state.write('}');
-      }
-    } else {
-      state.write('}');
-    }
-
-    state.indentLevel--;
-  },
-  Property: function Property(node, state) {
-    if (node.method || node.kind[0] !== 'i') {
-      this.MethodDefinition(node, state);
-    } else {
-      if (!node.shorthand) {
-        if (node.computed) {
-          state.write('[');
-          this[node.key.type](node.key, state);
-          state.write(']');
-        } else {
-          this[node.key.type](node.key, state);
-        }
-
-        state.write(': ');
-      }
-
-      this[node.value.type](node.value, state);
-    }
-  },
-  PropertyDefinition: function PropertyDefinition(node, state) {
-    if (node["static"]) {
-      state.write('static ');
-    }
-
-    if (node.computed) {
-      state.write('[');
-    }
-
-    this[node.key.type](node.key, state);
-
-    if (node.computed) {
-      state.write(']');
-    }
-
-    if (node.value == null) {
-      if (node.key.type[0] !== 'F') {
-        state.write(';');
-      }
-
-      return;
-    }
-
-    state.write(' = ');
-    this[node.value.type](node.value, state);
-    state.write(';');
-  },
-  ObjectPattern: function ObjectPattern(node, state) {
-    var this$1 = this;
-
-    state.write('{');
-
-    if (node.properties.length > 0) {
-      var properties = node.properties,
-          length = properties.length;
-
-      for (var i = 0;;) {
-        this$1[properties[i].type](properties[i], state);
-
-        if (++i < length) {
-          state.write(', ');
-        } else {
-          break;
-        }
-      }
-    }
-
-    state.write('}');
-  },
-  SequenceExpression: function SequenceExpression(node, state) {
-    formatSequence(state, node.expressions);
-  },
-  UnaryExpression: function UnaryExpression(node, state) {
-    if (node.prefix) {
-      var operator = node.operator,
-          argument = node.argument,
-          type = node.argument.type;
-      state.write(operator);
-      var needsParentheses = expressionNeedsParenthesis(state, argument, node);
-
-      if (!needsParentheses && (operator.length > 1 || type[0] === 'U' && (type[1] === 'n' || type[1] === 'p') && argument.prefix && argument.operator[0] === operator && (operator === '+' || operator === '-'))) {
-        state.write(' ');
-      }
-
-      if (needsParentheses) {
-        state.write(operator.length > 1 ? ' (' : '(');
-        this[type](argument, state);
-        state.write(')');
-      } else {
-        this[type](argument, state);
-      }
-    } else {
-      this[node.argument.type](node.argument, state);
-      state.write(node.operator);
-    }
-  },
-  UpdateExpression: function UpdateExpression(node, state) {
-    if (node.prefix) {
-      state.write(node.operator);
-      this[node.argument.type](node.argument, state);
-    } else {
-      this[node.argument.type](node.argument, state);
-      state.write(node.operator);
-    }
-  },
-  AssignmentExpression: function AssignmentExpression(node, state) {
-    this[node.left.type](node.left, state);
-    state.write(' ' + node.operator + ' ');
-    this[node.right.type](node.right, state);
-  },
-  AssignmentPattern: function AssignmentPattern(node, state) {
-    this[node.left.type](node.left, state);
-    state.write(' = ');
-    this[node.right.type](node.right, state);
-  },
-  BinaryExpression: BinaryExpression = function BinaryExpression(node, state) {
-    var isIn = node.operator === 'in';
-
-    if (isIn) {
-      state.write('(');
-    }
-
-    formatExpression(state, node.left, node, false);
-    state.write(' ' + node.operator + ' ');
-    formatExpression(state, node.right, node, true);
-
-    if (isIn) {
-      state.write(')');
-    }
-  },
-  LogicalExpression: BinaryExpression,
-  ConditionalExpression: function ConditionalExpression(node, state) {
-    var test = node.test;
-    var precedence = state.expressionsPrecedence[test.type];
-
-    if (precedence === NEEDS_PARENTHESES || precedence <= state.expressionsPrecedence.ConditionalExpression) {
-      state.write('(');
-      this[test.type](test, state);
-      state.write(')');
-    } else {
-      this[test.type](test, state);
-    }
-
-    state.write(' ? ');
-    this[node.consequent.type](node.consequent, state);
-    state.write(' : ');
-    this[node.alternate.type](node.alternate, state);
-  },
-  NewExpression: function NewExpression(node, state) {
-    state.write('new ');
-    var precedence = state.expressionsPrecedence[node.callee.type];
-
-    if (precedence === NEEDS_PARENTHESES || precedence < state.expressionsPrecedence.CallExpression || hasCallExpression(node.callee)) {
-      state.write('(');
-      this[node.callee.type](node.callee, state);
-      state.write(')');
-    } else {
-      this[node.callee.type](node.callee, state);
-    }
-
-    formatSequence(state, node['arguments']);
-  },
-  CallExpression: function CallExpression(node, state) {
-    var precedence = state.expressionsPrecedence[node.callee.type];
-
-    if (precedence === NEEDS_PARENTHESES || precedence < state.expressionsPrecedence.CallExpression) {
-      state.write('(');
-      this[node.callee.type](node.callee, state);
-      state.write(')');
-    } else {
-      this[node.callee.type](node.callee, state);
-    }
-
-    if (node.optional) {
-      state.write('?.');
-    }
-
-    formatSequence(state, node['arguments']);
-  },
-  ChainExpression: function ChainExpression(node, state) {
-    this[node.expression.type](node.expression, state);
-  },
-  MemberExpression: function MemberExpression(node, state) {
-    var precedence = state.expressionsPrecedence[node.object.type];
-
-    if (precedence === NEEDS_PARENTHESES || precedence < state.expressionsPrecedence.MemberExpression) {
-      state.write('(');
-      this[node.object.type](node.object, state);
-      state.write(')');
-    } else {
-      this[node.object.type](node.object, state);
-    }
-
-    if (node.computed) {
-      if (node.optional) {
-        state.write('?.');
-      }
-
-      state.write('[');
-      this[node.property.type](node.property, state);
-      state.write(']');
-    } else {
-      if (node.optional) {
-        state.write('?.');
-      } else {
-        state.write('.');
-      }
-
-      this[node.property.type](node.property, state);
-    }
-  },
-  MetaProperty: function MetaProperty(node, state) {
-    state.write(node.meta.name + '.' + node.property.name, node);
-  },
-  Identifier: function Identifier(node, state) {
-    state.write(node.name, node);
-  },
-  PrivateIdentifier: function PrivateIdentifier(node, state) {
-    state.write("#".concat(node.name), node);
-  },
-  Literal: function Literal(node, state) {
-    if (node.raw != null) {
-      state.write(node.raw, node);
-    } else if (node.regex != null) {
-      this.RegExpLiteral(node, state);
-    } else if (node.bigint != null) {
-      state.write(node.bigint + 'n', node);
-    } else {
-      state.write(stringify(node.value), node);
-    }
-  },
-  RegExpLiteral: function RegExpLiteral(node, state) {
-    var regex = node.regex;
-    state.write("/".concat(regex.pattern, "/").concat(regex.flags), node);
-  }
-};
-exports.GENERATOR = GENERATOR;
-var EMPTY_OBJECT = {};
-var baseGenerator = GENERATOR;
-exports.baseGenerator = baseGenerator;
-
-var State = function () {
-  function State(options) {
-    _classCallCheck(this, State);
-
-    var setup = options == null ? EMPTY_OBJECT : options;
-    this.output = '';
-
-    if (setup.output != null) {
-      this.output = setup.output;
-      this.write = this.writeToStream;
-    } else {
-      this.output = '';
-    }
-
-    this.generator = setup.generator != null ? setup.generator : GENERATOR;
-    this.expressionsPrecedence = setup.expressionsPrecedence != null ? setup.expressionsPrecedence : EXPRESSIONS_PRECEDENCE;
-    this.indent = setup.indent != null ? setup.indent : '  ';
-    this.lineEnd = setup.lineEnd != null ? setup.lineEnd : '\n';
-    this.indentLevel = setup.startingIndentLevel != null ? setup.startingIndentLevel : 0;
-    this.writeComments = setup.comments ? setup.comments : false;
-
-    if (setup.sourceMap != null) {
-      this.write = setup.output == null ? this.writeAndMap : this.writeToStreamAndMap;
-      this.sourceMap = setup.sourceMap;
-      this.line = 1;
-      this.column = 0;
-      this.lineEndSize = this.lineEnd.split('\n').length - 1;
-      this.mapping = {
-        original: null,
-        generated: this,
-        name: undefined,
-        source: setup.sourceMap.file || setup.sourceMap._file
-      };
-    }
-  }
-
-  _createClass(State, [{
-    key: "write",
-    value: function write(code) {
-      this.output += code;
-    }
-  }, {
-    key: "writeToStream",
-    value: function writeToStream(code) {
-      this.output.write(code);
-    }
-  }, {
-    key: "writeAndMap",
-    value: function writeAndMap(code, node) {
-      this.output += code;
-      this.map(code, node);
-    }
-  }, {
-    key: "writeToStreamAndMap",
-    value: function writeToStreamAndMap(code, node) {
-      this.output.write(code);
-      this.map(code, node);
-    }
-  }, {
-    key: "map",
-    value: function map(code, node) {
-      if (node != null) {
-        var type = node.type;
-
-        if (type[0] === 'L' && type[2] === 'n') {
-          this.column = 0;
-          this.line++;
-          return;
-        }
-
-        if (node.loc != null) {
-          var mapping = this.mapping;
-          mapping.original = node.loc.start;
-          mapping.name = node.name;
-          this.sourceMap.addMapping(mapping);
-        }
-
-        if (type[0] === 'T' && type[8] === 'E' || type[0] === 'L' && type[1] === 'i' && typeof node.value === 'string') {
-          var _length = code.length;
-          var column = this.column,
-              line = this.line;
-
-          for (var i = 0; i < _length; i++) {
-            if (code[i] === '\n') {
-              column = 0;
-              line++;
-            } else {
-              column++;
-            }
-          }
-
-          this.column = column;
-          this.line = line;
-          return;
-        }
-      }
-
-      var length = code.length;
-      var lineEnd = this.lineEnd;
-
-      if (length > 0) {
-        if (this.lineEndSize > 0 && (lineEnd.length === 1 ? code[length - 1] === lineEnd : code.endsWith(lineEnd))) {
-          this.line += this.lineEndSize;
-          this.column = 0;
-        } else {
-          this.column += length;
-        }
-      }
-    }
-  }, {
-    key: "toString",
-    value: function toString() {
-      return this.output;
-    }
-  }]);
-
-  return State;
-}();
-
-function generate(node, options) {
-  var state = new State(options);
-  state.generator[node.type](node, state);
-  return state.output;
-}
-
-
-});
-
-unwrapExports(astring);
-var astring_1 = astring.generate;
 
 // unique temporary variable index
 var utvidx = 1;
@@ -7979,10 +8131,10 @@ function uBranchHash() {
   return ubidx++;
 }
 
-function parse$$1(input, options) {
+function parse(input, options) {
   // Same default as helpers.parse: Acorn 8 requires ecmaVersion.
   // "latest" + allowHashBang: see helpers.parse.
-  return acorn_1(input, Object.assign({ ecmaVersion: "latest", allowHashBang: true }, options));
+  return parseWithDecorators(input, Object.assign({ ecmaVersion: "latest", allowHashBang: true }, options));
 }
 
 function generate$$1() {
@@ -8078,7 +8230,7 @@ var _utils = Object.freeze({
 	reserveTempVarId: reserveTempVarId,
 	uid: uid,
 	uBranchHash: uBranchHash,
-	parse: parse$$1,
+	parse: parse,
 	generate: generate$$1,
 	safeValue: safeValue,
 	eventToJSON: eventToJSON
@@ -8808,7 +8960,7 @@ function parse$1(input, options) {
   // declarations, import attributes); allowHashBang lets traced scripts
   // start with a #! line. Callers may still override ecmaVersion via
   // options.
-  return acorn_1(input, Object.assign({ ecmaVersion: "latest", allowHashBang: true }, options));
+  return parseWithDecorators(input, Object.assign({ ecmaVersion: "latest", allowHashBang: true }, options));
 }
 
 function generate$1() {
@@ -10471,6 +10623,15 @@ STAGE6.FunctionDeclaration = function(node, patcher) {
 
 STAGE6.FunctionExpression = function(node, patcher) {
   if (patcher.scope.node.type === "MethodDefinition") { return; }
+  // Scaffolding functions injected by the decorator desugar
+  // (src/decorators.js) are magic and have no id: STAGE1 only assigns
+  // ids to functions it processes as user code, and these live inside
+  // magic context objects it never descends into. They must stay
+  // invisible — no ENTER/LEAVE events — and the instrumentation below
+  // would throw on `node.id.name` for the missing id. Real user
+  // functions always have an id by this stage, so this skips nothing
+  // else.
+  if (node.magic && !node.id) { return; }
   patcher.pushScope(node);
   patcher.walk(node.id, patcher, patcher.stage);
   node.params.map(function (param) { patcher.walk(param, patcher, patcher.stage); });
@@ -10502,6 +10663,11 @@ STAGE6.FunctionExpression = function(node, patcher) {
 };
 
 STAGE6.ArrowFunctionExpression = function(node, patcher) {
+  // See FunctionExpression above: id-less magic arrows are decorator
+  // scaffolding (a forEach callback). They have no id and an
+  // expression body, so the instrumentation below would throw on
+  // `node.id.name` and on `node.body.body`.
+  if (node.magic && !node.id) { return; }
   patcher.pushScope(node);
   node.params.map(function (param) { patcher.walk(param, patcher, patcher.stage); });
   patcher.walk(node.body, patcher, patcher.stage);
@@ -10998,6 +11164,1299 @@ Patcher.prototype.applyPatches = function(ast) {
   this.applyStagePatch(ast, STAGE8);
 };
 
+// Decorator desugaring — turns the `Decorator` nodes the Acorn
+// plugin (src/decorators-plugin.js) produces into plain calls.
+//
+// Why a desugar, not regeneration: Node cannot execute `@` syntax at
+// all — verified on Node v24.22.1, even with the --js-decorators V8
+// flag — and astring cannot generate `Decorator` nodes. So decorated
+// code is rewritten before the other patch stages run, and the
+// rewritten code is what gets traced. The decorator expressions
+// themselves stay in the tree (non-magic), so `@factory()` still
+// fires a CALL event for `factory`; only the scaffolding is magic.
+//
+// Semantics implemented (TC39 decorators proposal, standard
+// semantics for the common cases):
+//   - Decorator expressions evaluate in written order; decorators
+//     apply in reverse order within each element, elements in
+//     definition order, class decorators last.
+//   - Class decorator: called with (Class, {kind:"class", name}),
+//     a function return replaces the class, undefined keeps it.
+//   - Method decorator: called with (method, {kind:"method", ...}),
+//     a function return replaces the method, undefined keeps it.
+//   - Field decorator: called with (undefined, {kind:"field", ...}),
+//     a function return is an initializer: it is called per instance
+//     (or once, at class definition, for static fields) with the
+//     field's initial value, and its return becomes the field value.
+//   - Context objects carry kind, name, static, private, access
+//     ({has, get} for methods, {has, get, set} for fields) and
+//     addInitializer. Static addInitializer callbacks run right after
+//     the class definition; instance ones run at the end of the
+//     constructor (the constructor is wrapped, or added when the
+//     class has none).
+//   - Private methods/fields apply through a magic static block,
+//     because `#m` cannot be named outside the class body.
+//
+// How the apply works: the decorator invocation reuses the existing
+// DEBUG_FUNCTION_CALL link (`$$STx1.$N(hash, null, dec, null,
+// [value, context])`), so the call fires a normal FUNCTION_CALL
+// before/after pair for the decorator, with the right frame and
+// try/catch behaviour, and no new instruction type is needed. The
+// hash points at the original Decorator node, so the event locates
+// the `@` in the source.
+//
+// Limitations (documented, not silent):
+//   - No `accessor` fields (the plugin does not parse them).
+//   - Class expressions with decorated elements are hoisted into a
+//     temp variable before their statement, so a static block in such
+//     a class runs at the statement boundary rather than at the exact
+//     expression position.
+//   - Decorator evaluation order between a static field and an
+//     instance element is definition order only when the static field
+//     comes first; a static field's decorators always evaluate during
+//     class definition, instance elements' after it.
+//   - A field with several decorators invokes them in written order
+//     for the *calls* only when the field is static (the initializer
+//     chain itself always follows the standard order).
+//
+// Written ES2015-only (no async/await, no for...of, no ?. or ??):
+// this file is bundled into the browser build by buble.
+// Mark a constructed node (and, for convenience, return it) as
+// scaffolding: the patch stages walk it but emit no events for it.
+// The decorator expressions and the field's original initial value
+// are the exceptions — they stay non-magic so they are traced.
+function magic(node) {
+  node.magic = true;
+  return node;
+}
+
+function ident(name) {
+  return { type: "Identifier", name: name };
+}
+
+function lit(value) {
+  return { type: "Literal", value: value };
+}
+
+// A magic call to a stage debug link: $$STx1.$N(...args).
+function linkCall(patcher, linkName, args) {
+  return magic({
+    type: "CallExpression",
+    callee: magic({
+      type: "MemberExpression",
+      object: ident(patcher.instance.key),
+      property: ident(patcher.instance.getLink(linkName).split(".")[1]),
+      computed: false,
+    }),
+    arguments: args,
+  });
+}
+
+// Invoke a decorator through DEBUG_FUNCTION_CALL so the call is
+// traced like any other call: (hash, ctx=null, decoratorFn,
+// call=null, [value, context]). `call === null` makes
+// DEBUG_FUNCTION_CALL invoke the function itself (root = object).
+// Returns the call node (magic); the decorator expression inside
+// stays non-magic so `@factory()` still fires its CALL event.
+function applyCall(patcher, hash, decoratorExpr, valueNode, contextNode) {
+  return linkCall(patcher, "DEBUG_FUNCTION_CALL", [
+    parseExpression(String(hash)),
+    parseExpression("null"),
+    decoratorExpr,
+    parseExpression("null"),
+    magic({
+      type: "ArrayExpression",
+      elements: [valueNode, contextNode],
+    }) ]);
+}
+
+// The `access` object of a decorator context. Public members read
+// through the class binding (`CN`); private members read through
+// closures created inside the class body (see the static-block
+// handling in desugarDecorators — `holder` is a temp holding those
+// closures for the private case, null for the public case).
+function accessObject(kind, isStatic, isPrivate, className, keyName, holder) {
+  function fn(params, body) {
+    return magic({
+      type: "FunctionExpression",
+      id: null,
+      params: params.map(function(p) { return ident(p); }),
+      body: magic({
+        type: "BlockStatement",
+        body: [magic({
+          type: "ReturnStatement",
+          argument: body,
+        })],
+      }),
+    });
+  }
+  function member(obj, prop) {
+    return magic({
+      type: "MemberExpression",
+      object: obj,
+      property: ident(prop),
+      computed: false,
+    });
+  }
+  function inCheck(obj) {
+    return magic({
+      type: "BinaryExpression",
+      operator: "in",
+      left: isPrivate
+        ? { type: "PrivateIdentifier", name: keyName.slice(1) }
+        : lit(keyName),
+      right: obj,
+    });
+  }
+  var access = { type: "ObjectExpression", properties: [] };
+  magic(access);
+  function prop(name, valueNode) {
+    access.properties.push(magic({
+      type: "Property",
+      key: ident(name),
+      value: valueNode,
+      kind: "init",
+      computed: false,
+      shorthand: false,
+      method: false,
+    }));
+  }
+  if (isPrivate) {
+    // Holder closures live on the temp object built in the static
+    // block: holder.has / holder.get / holder.set. Getters have no
+    // set, setters have no get (Babel's _applyDecs access object:
+    // getter access = { has, get }, setter access = { has, set }).
+    prop("has", fn(isStatic ? [] : ["o"], magic({
+      type: "CallExpression",
+      callee: member(ident(holder), "has"),
+      arguments: isStatic ? [] : [ident("o")],
+    })));
+    if (kind !== "setter") {
+      prop("get", fn(isStatic ? [] : ["o"], magic({
+        type: "CallExpression",
+        callee: member(ident(holder), "get"),
+        arguments: isStatic ? [] : [ident("o")],
+      })));
+    }
+    if (kind === "field" || kind === "setter") {
+      prop("set", fn(isStatic ? ["v"] : ["o", "v"], magic({
+        type: "CallExpression",
+        callee: member(ident(holder), "set"),
+        arguments: isStatic ? [ident("v")] : [ident("o"), ident("v")],
+      })));
+    }
+    return access;
+  }
+  var target = isStatic ? ident(className) : ident("o");
+  if (kind === "method" || kind === "getter") {
+    if (isStatic) {
+      prop("has", fn([], lit(true)));
+      prop("get", fn([], member(ident(className), keyName)));
+    } else {
+      prop("has", fn(["o"], inCheck(ident("o"))));
+      prop("get", fn(["o"], member(ident("o"), keyName)));
+    }
+  } else if (kind === "setter") {
+    if (isStatic) {
+      prop("has", fn([], inCheck(ident(className))));
+      prop("set", fn(["v"], magic({
+        type: "AssignmentExpression",
+        operator: "=",
+        left: member(ident(className), keyName),
+        right: ident("v"),
+      })));
+    } else {
+      prop("has", fn(["o"], inCheck(ident("o"))));
+      prop("set", fn(["o", "v"], magic({
+        type: "AssignmentExpression",
+        operator: "=",
+        left: member(ident("o"), keyName),
+        right: ident("v"),
+      })));
+    }
+  } else {
+    if (isStatic) {
+      prop("has", fn([], inCheck(ident(className))));
+      prop("get", fn([], member(ident(className), keyName)));
+      prop("set", fn(["v"], magic({
+        type: "AssignmentExpression",
+        operator: "=",
+        left: member(ident(className), keyName),
+        right: ident("v"),
+      })));
+    } else {
+      prop("has", fn(["o"], inCheck(ident("o"))));
+      prop("get", fn(["o"], member(ident("o"), keyName)));
+      prop("set", fn(["o", "v"], magic({
+        type: "AssignmentExpression",
+        operator: "=",
+        left: member(ident("o"), keyName),
+        right: ident("v"),
+      })));
+    }
+  }
+  return access;
+}
+
+// The decorator context object: { kind, name, static, private,
+// access, addInitializer }. `addInitializer` pushes into the temp
+// array for this class (instance or static); the arrays are run by
+// the constructor wrapper / after the class definition.
+function contextObject(patcher, opts) {
+  var ctx = { type: "ObjectExpression", properties: [] };
+  magic(ctx);
+  function prop(name, valueNode) {
+    ctx.properties.push(magic({
+      type: "Property",
+      key: ident(name),
+      value: valueNode,
+      kind: "init",
+      computed: false,
+      shorthand: false,
+      method: false,
+    }));
+  }
+  prop("kind", lit(opts.kind));
+  // Computed keys keep their (cloned) expression as the name; the
+  // original key node stays on the element and is traced once.
+  prop("name", opts.computed ? cloneNode(opts.keyNode) : lit(opts.name));
+  prop("static", lit(opts.isStatic));
+  prop("private", lit(opts.isPrivate));
+  if (opts.kind !== "class") {
+    prop("access", accessObject(
+      opts.kind, opts.isStatic, opts.isPrivate,
+      opts.className, opts.name, opts.holder
+    ));
+  }
+  prop("addInitializer", magic({
+    type: "FunctionExpression",
+    id: null,
+    params: [ident("fn")],
+    body: magic({
+      type: "BlockStatement",
+      body: [magic({
+        type: "ExpressionStatement",
+        expression: magic({
+          type: "CallExpression",
+          callee: magic({
+            type: "MemberExpression",
+            object: ident(opts.initsArray),
+            property: ident("push"),
+            computed: false,
+          }),
+          arguments: [ident("fn")],
+        }),
+      })],
+    }),
+  }));
+  return ctx;
+}
+
+// Build the nested apply calls for one element's decorators:
+// apply(d1, apply(d2, value, ctx), ctx). Arguments evaluate
+// left-to-right, so d1's expression evaluates before d2's, while
+// the inner call applies d2 first — written evaluation order and
+// reverse application order, both correct.
+function nestedApplies(patcher, decorators, valueNode, makeContext) {
+  var value = valueNode;
+  for (var ii = decorators.length - 1; ii >= 0; --ii) {
+    var dec = decorators[ii];
+    var hash = nextHash(patcher);
+    patcher.nodes[hash] = { hash: hash, node: cloneNode(dec) };
+    value = applyCall(patcher, hash, dec.expression, value, makeContext(dec));
+  }
+  return value;
+}
+
+// A magic ExpressionStatement wrapping an expression.
+function stmt(expr) {
+  return magic({ type: "ExpressionStatement", expression: expr });
+}
+
+// Apply decorators with the undefined guard: per the proposal, a
+// decorator that returns undefined keeps the original value — so the
+// result replaces the value only when it is not undefined. A bare
+// `target = apply(...)` would destroy the class/method whenever a
+// decorator merely observes and returns nothing (the common logging
+// case). Returns { stmts, temp }: stmts assigns temp the guarded
+// result (the apply result in appTemp, the original in the alternate
+// — cloned, so the value node is not shared three ways).
+function guardedApplies(patcher, decorators, valueNode, makeContext, temp) {
+  var appTemp = temp();
+  var resultTemp = temp();
+  var stmts = [
+    stmt(magic({
+      type: "AssignmentExpression",
+      operator: "=",
+      left: ident(appTemp),
+      right: nestedApplies(patcher, decorators, valueNode, makeContext),
+    })),
+    stmt(magic({
+      type: "AssignmentExpression",
+      operator: "=",
+      left: ident(resultTemp),
+      right: magic({
+        type: "ConditionalExpression",
+        test: magic({
+          type: "BinaryExpression",
+          operator: "!==",
+          left: ident(appTemp),
+          right: parseExpression("undefined"),
+        }),
+        consequent: ident(appTemp),
+        alternate: cloneNode(valueNode),
+      }),
+    })) ];
+  return { stmts: stmts, temp: resultTemp };
+}
+
+var hashCounter = 1000000;
+function nextHash(patcher) {
+  // uBranchHash() is global across stages; the desugar runs before
+  // them, so use a separate high range to avoid collisions.
+  hashCounter += 1;
+  return hashCounter;
+}
+
+// Replace a child node reference inside its parent (used when a
+// class expression is hoisted into a temp variable).
+function replaceChild(parent, oldNode, newNode) {
+  var keys = Object.keys(parent);
+  for (var ii = 0; ii < keys.length; ++ii) {
+    var key = keys[ii];
+    if (key === "loc" || key === "range") { continue; }
+    var value = parent[key];
+    if (value === oldNode) {
+      parent[key] = newNode;
+      return true;
+    }
+    if (Array.isArray(value)) {
+      for (var jj = 0; jj < value.length; ++jj) {
+        if (value[jj] === oldNode) {
+          value[jj] = newNode;
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// Generic pre-order walk that records, for every node, the chain of
+// ancestors (each { node, key, index }) so the desugar can find the
+// enclosing statement list for insertions.
+function collectDecorated(ast) {
+  var found = { classes: [], elements: [] };
+  function visit(node, ancestors) {
+    if (!node || typeof node.type !== "string") { return; }
+    if (node.decorators && node.decorators.length > 0) {
+      if (node.type === "ClassDeclaration" || node.type === "ClassExpression") {
+        found.classes.push({ node: node, ancestors: ancestors.slice() });
+      } else if (node.type === "MethodDefinition" || node.type === "PropertyDefinition") {
+        found.elements.push({ node: node, ancestors: ancestors.slice() });
+      }
+    }
+    var keys = Object.keys(node);
+    for (var ii = 0; ii < keys.length; ++ii) {
+      var key = keys[ii];
+      if (key === "loc" || key === "range" || key === "decorators") { continue; }
+      var value = node[key];
+      if (Array.isArray(value)) {
+        for (var jj = 0; jj < value.length; ++jj) {
+          var child = value[jj];
+          if (child && typeof child.type === "string") {
+            ancestors.push({ node: node, key: key, index: jj });
+            visit(child, ancestors);
+            ancestors.pop();
+          }
+        }
+      } else if (value && typeof value.type === "string") {
+        ancestors.push({ node: node, key: key, index: -1 });
+        visit(value, ancestors);
+        ancestors.pop();
+      }
+    }
+  }
+  visit(ast, []);
+  return found;
+}
+
+// For a collected node, find the enclosing statement: the nearest
+// ancestor that is a Program or BlockStatement, and the child of it
+// on the chain (the statement). Returns { body, index, statement }.
+function enclosingStatement(entry) {
+  var ancestors = entry.ancestors;
+  for (var ii = ancestors.length - 1; ii >= 0; --ii) {
+    var parent = ancestors[ii].node;
+    if (parent.type === "Program" || parent.type === "BlockStatement") {
+      var child = ii + 1 < ancestors.length ? ancestors[ii + 1].node : entry.node;
+      var body = parent.body;
+      for (var jj = 0; jj < body.length; ++jj) {
+        if (body[jj] === child) {
+          return { body: body, index: jj, statement: child };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function elementKeyName(el) {
+  if (el.key.type === "PrivateIdentifier") { return "#" + el.key.name; }
+  if (el.key.type === "Identifier") { return el.key.name; }
+  if (el.key.type === "Literal") { return String(el.key.value); }
+  return null; // computed — the name is the key expression
+}
+
+// Desugar all decorators in the AST. Runs in Stage.patch after
+// parsing, before the other patch stages.
+function desugarDecorators(ast, patcher) {
+  var found = collectDecorated(ast);
+  if (found.classes.length === 0 && found.elements.length === 0) { return; }
+
+  var temps = [];
+  function temp() {
+    var name = reserveTempVarId();
+    temps.push(name);
+    return name;
+  }
+
+  // One magic `var t1, t2, ...;` at the top of the program for every
+  // temp the desugar allocates (no initializers, so nothing to trace).
+  function declareTemps() {
+    if (temps.length === 0) { return; }
+    ast.body.unshift(magic({
+      type: "VariableDeclaration",
+      kind: "var",
+      declarations: temps.map(function(name) {
+        return magic({ type: "VariableDeclarator", id: ident(name), init: null });
+      }),
+    }));
+  }
+
+  // Statements to insert, grouped by body array: { body, index,
+  // stmts } — applied in reverse index order at the end so earlier
+  // insertions do not shift later ones.
+  var inserts = [];
+  function insertAfter(body, index, stmts) {
+    inserts.push({ body: body, index: index + 1, stmts: stmts });
+  }
+  function insertBefore(body, index, stmts) {
+    inserts.push({ body: body, index: index, stmts: stmts });
+  }
+
+  // Classes to process: decorated classes, plus any class that owns
+  // decorated elements. A class with only element decorators has no
+  // entry in found.classes, but its elements still need desugaring —
+  // the loop below is driven by classes, so those owners are added
+  // here (nearest class ancestor of each element, in source order).
+  var classEntries = found.classes.slice();
+  for (var ei = 0; ei < found.elements.length; ++ei) {
+    var ancestors = found.elements[ei].ancestors;
+    for (var ai = ancestors.length - 1; ai >= 0; --ai) {
+      var anc = ancestors[ai].node;
+      if (anc.type === "ClassDeclaration" || anc.type === "ClassExpression") {
+        var already = false;
+        for (var ci = 0; ci < classEntries.length; ++ci) {
+          if (classEntries[ci].node === anc) { already = true; break; }
+        }
+        if (!already) {
+          classEntries.push({ node: anc, ancestors: ancestors.slice(0, ai) });
+        }
+        break;
+      }
+    }
+  }
+
+  // Process every decorated class. Elements are processed as part
+  // of their class (in definition order); the class itself is
+  // processed last for that class, so element applies run first.
+  var loop = function ( ci ) {
+    var entry = classEntries[ci];
+    var cls = entry.node;
+    // An anonymous default export (`export default class {}`) has no
+    // binding to reassign, so it takes the class-expression path
+    // (hoist into a temp) even though its node type is a declaration.
+    var isDeclaration = cls.type === "ClassDeclaration" && !!cls.id;
+    var className = cls.id ? cls.id.name : null;
+
+    // The name the applies use for the class value, and the
+    // statement the applies follow. For a declaration it is the
+    // class binding; for an expression the class is hoisted into a
+    // temp before its statement.
+    var valueName = className;
+    var enc = enclosingStatement(entry);
+    if (!enc) { return; } // unreachable in practice (top-level class)
+    var afterBody = enc.body;
+    var afterIndex = enc.index;
+    // The hoist statement for a class expression, if any. It is NOT
+    // inserted here: the applies and the hoist must land in one
+    // insert (hoist first), because two inserts at the same index
+    // would apply in the wrong order. See the insert at the end of
+    // this loop iteration.
+    var hoistStmt = null;
+
+    if (!isDeclaration) {
+      // Hoist the expression into a temp before its statement.
+      var tmp = temp();
+      valueName = tmp;
+      var parentEntry = entry.ancestors[entry.ancestors.length - 1];
+      var parent = parentEntry ? parentEntry.node : null;
+      // The expression itself becomes the temp's initializer; the
+      // original position gets the temp identifier. For a variable
+      // declarator the init is replaced by the nested class applies
+      // (below); for other positions the temp is used directly and
+      // the applies follow as statements.
+      var isVarInit = parent && parent.type === "VariableDeclarator" && parent.init === cls;
+      // NOT magic: STAGE1 returns early for magic VariableDeclarations
+      // without walking them, so a magic hoist would leave the class
+      // inside untraced (its methods would never get STAGE1's call /
+      // return wrapping, and STAGE6 would then crash on their id-less
+      // function expressions). As ordinary code the hoist fires VAR
+      // events for the temp — noise, but the class is fully traced.
+      hoistStmt = {
+        type: "VariableDeclaration",
+        kind: "var",
+        declarations: [{
+          type: "VariableDeclarator",
+          id: ident(tmp),
+          init: cls,
+        }],
+      };
+      replaceChild(parent, cls, ident(tmp));
+      // From here on the class is the temp; element applies target
+      // it, class applies reassign it (declarator case) or are
+      // statements after the hoist (other positions).
+      cls.__irohValueName = tmp;
+      cls.__irohVarInit = isVarInit;
+      cls.__irohParent = parent;
+    }
+
+    // Collect this class's decorated elements, in definition order.
+    var elements = [];
+    for (var ei$1 = 0; ei$1 < found.elements.length; ++ei$1) {
+      var el = found.elements[ei$1];
+      // An element belongs to this class if the class is among its
+      // ancestors.
+      var ancestors$1 = el.ancestors;
+      var belongs = false;
+      for (var ai$1 = 0; ai$1 < ancestors$1.length; ++ai$1) {
+        if (ancestors$1[ai$1].node === cls) { belongs = true; break; }
+      }
+      if (belongs) { elements.push(el.node); }
+    }
+
+    // Per-class temp arrays for addInitializer callbacks.
+    var initsInst = temp();
+    var initsStatic = temp();
+    var hasInstanceDecorators = false;
+    for (var ei$2 = 0; ei$2 < elements.length; ++ei$2) {
+      if (!elements[ei$2].static) { hasInstanceDecorators = true; break; }
+    }
+
+    // Wrap the constructor (or add one) so instance initializers
+    // run at the end of construction, after field initializers.
+    if (hasInstanceDecorators) {
+      wrapConstructor(cls, initsInst);
+    }
+
+    var applyStmts = [];
+    var classNameForCtx = valueName;
+
+    for (var ei$3 = 0; ei$3 < elements.length; ++ei$3) {
+      var el$1 = elements[ei$3];
+      var isStatic = !!el$1.static;
+      var isPrivate = el$1.key.type === "PrivateIdentifier";
+      var isMethod = el$1.type === "MethodDefinition";
+      // The proposal's kinds: method, getter, setter, field.
+      var kind = isMethod
+        ? (el$1.kind === "get" ? "getter" : el$1.kind === "set" ? "setter" : "method")
+        : "field";
+      var keyName = elementKeyName(el$1);
+      var computed = keyName === null;
+      var initsArray = isStatic ? initsStatic : initsInst;
+
+      // Decorators can't be used with a constructor (Babel: "Decorators
+      // can't be used with a constructor. Did you mean '@dec class
+      // { ... }'?").
+      if (isMethod && el$1.kind === "constructor") {
+        throw new Error("Decorators can't be used with a constructor. Did you mean '@dec class { ... }'?");
+      }
+
+      // Private members need their `access` closures built inside
+      // the class body (a static block), where `#m` is legal.
+      var holder = null;
+      if (isPrivate) {
+        holder = temp();
+        if (isMethod) {
+          // A decorated private method cannot be read back off the
+          // prototype — `C.prototype.#m` throws "Receiver must be an
+          // instance" — so, following Babel's 2023-11 desugar, the
+          // method becomes a private FIELD holding the decorated
+          // function. The decorator applies once, in a static block
+          // at class definition; each instance's field then holds the
+          // same function. Private getters/setters keep their shape,
+          // but their bodies delegate to the decorated function
+          // (also Babel's pattern: `return _call_x(this)`).
+          var fnTemp = temp();
+          var block = buildPrivateBlock(
+            patcher, el$1, kind, isStatic, keyName, holder, fnTemp,
+            initsArray, classNameForCtx, temp
+          );
+          // Before the element: static initializers run in
+          // definition order, so fnTemp must exist before the
+          // converted field's initializer reads it.
+          cls.body.body.splice(cls.body.body.indexOf(el$1), 0, block);
+          if (kind === "method") {
+            el$1.type = "PropertyDefinition";
+            el$1.value = ident(fnTemp);
+            delete el$1.kind;
+          } else {
+            // getter/setter: delegate to the decorated function.
+            var originalFn = el$1.value;
+            var delegateArgs = [parseExpression("this")];
+            if (kind === "setter" && originalFn.params.length > 0) {
+              delegateArgs.push(cloneNode(originalFn.params[0]));
+            }
+            el$1.value = magic({
+              type: "FunctionExpression",
+              id: null,
+              params: originalFn.params,
+              body: magic({
+                type: "BlockStatement",
+                body: [magic({
+                  type: "ReturnStatement",
+                  argument: magic({
+                    type: "CallExpression",
+                    callee: magic({
+                      type: "MemberExpression",
+                      object: ident(fnTemp),
+                      property: ident("call"),
+                      computed: false,
+                    }),
+                    arguments: delegateArgs,
+                  }),
+                })],
+              }),
+            });
+          }
+          continue;
+        }
+        // Private field: the holder (access closures) is built in
+        // the static block; the field apply (initializer temp)
+        // happens below like the public case. The block goes before
+        // the field so the holder exists before a static field's
+        // initializer (which runs the decorators inline) reads it.
+        var block$1 = buildPrivateBlock(
+          patcher, el$1, kind, isStatic, keyName, holder, null,
+          initsArray, classNameForCtx, temp
+        );
+        cls.body.body.splice(cls.body.body.indexOf(el$1), 0, block$1);
+      }
+
+      var makeContext = (function(elCopy, kindCopy, isStaticCopy, isPrivateCopy, keyNameCopy, computedCopy, initsArrayCopy, holderCopy) {
+        return function(dec) {
+          return contextObject(patcher, {
+            kind: kindCopy,
+            name: keyNameCopy,
+            computed: computedCopy,
+            keyNode: elCopy.key,
+            isStatic: isStaticCopy,
+            isPrivate: isPrivateCopy,
+            className: classNameForCtx,
+            holder: holderCopy,
+            initsArray: initsArrayCopy,
+          });
+        };
+      })(el$1, kind, isStatic, isPrivate, keyName, computed, initsArray, holder);
+
+      if (isMethod) {
+        // target: C.prototype.m / C.m / tmp.prototype.m / tmp.m
+        var targetObj = (void 0);
+        if (isStatic) {
+          targetObj = ident(valueName);
+        } else {
+          targetObj = magic({
+            type: "MemberExpression",
+            object: ident(valueName),
+            property: ident("prototype"),
+            computed: false,
+          });
+        }
+        var target = magic({
+          type: "MemberExpression",
+          object: targetObj,
+          property: computed ? cloneNode(el$1.key) : ident(keyName),
+          computed: computed,
+        });
+        var valueNode = target;
+        var descProp = null;
+        if (el$1.kind === "get" || el$1.kind === "set") {
+          // Reading an accessor through the target would INVOKE it
+          // (C.prototype.x calls the getter). The decorator must
+          // receive the getter/setter function itself, so read it
+          // off the property descriptor instead.
+          descProp = el$1.kind === "get" ? "get" : "set";
+          valueNode = magic({
+            type: "MemberExpression",
+            object: magic({
+              type: "CallExpression",
+              callee: magic({
+                type: "MemberExpression",
+                object: ident("Object"),
+                property: ident("getOwnPropertyDescriptor"),
+                computed: false,
+              }),
+              arguments: [cloneNode(targetObj), computed ? cloneNode(el$1.key) : lit(keyName)],
+            }),
+            property: ident(descProp),
+            computed: false,
+          });
+        }
+        // A decorator returning undefined keeps the original method.
+        var guarded = guardedApplies(patcher, el$1.decorators, valueNode, makeContext, temp);
+        for (var si = 0; si < guarded.stmts.length; ++si) {
+          applyStmts.push(guarded.stmts[si]);
+        }
+        if (descProp !== null) {
+          // Accessors are replaced via Object.defineProperty:
+          // assigning the function as a plain property would
+          // destroy the accessor.
+          applyStmts.push(stmt(magic({
+            type: "CallExpression",
+            callee: magic({
+              type: "MemberExpression",
+              object: ident("Object"),
+              property: ident("defineProperty"),
+              computed: false,
+            }),
+            arguments: [
+              targetObj,
+              computed ? cloneNode(el$1.key) : lit(keyName),
+              magic({
+                type: "ObjectExpression",
+                properties: [
+                  magic({ type: "Property", key: ident(descProp), value: ident(guarded.temp), kind: "init", computed: false, shorthand: false, method: false }),
+                  magic({ type: "Property", key: ident("configurable"), value: lit(true), kind: "init", computed: false, shorthand: false, method: false }),
+                  magic({ type: "Property", key: ident("enumerable"), value: lit(false), kind: "init", computed: false, shorthand: false, method: false }) ],
+              }) ],
+          })));
+        } else {
+          applyStmts.push(stmt(magic({
+            type: "AssignmentExpression",
+            operator: "=",
+            left: target,
+            right: ident(guarded.temp),
+          })));
+        }
+      } else {
+        // Field: the decorators produce initializer temps; the
+        // field's own initializer is rewritten to run them.
+        // applyFieldDecorators returns { temps, assignStmt } — temps
+        // in written order (d1 first).
+        var inits = applyFieldDecorators(
+          patcher, el$1.decorators, makeContext, temp
+        );
+        var temps$1 = inits.temps;
+        // The field value runs them innermost-first (d2's init,
+        // then d1's) via nested conditionals.
+        var value = el$1.value ? el$1.value : parseExpression("undefined");
+        for (var ii = temps$1.length - 1; ii >= 0; --ii) {
+          value = fieldInitValue(patcher, temps$1[ii], value);
+        }
+        if (isStatic) {
+          // Static field initializers run during class definition,
+          // before any statement after the class — so the applies
+          // happen inline, as the first item of a sequence in the
+          // field's own initializer. The sequence needs the
+          // assignment EXPRESSION, not the ExpressionStatement
+          // (a statement inside a sequence is a syntax error).
+          var seq = magic({
+            type: "SequenceExpression",
+            expressions: [inits.assignStmt.expression, value],
+          });
+          el$1.value = seq;
+        } else {
+          el$1.value = value;
+          applyStmts.push(inits.assignStmt);
+        }
+      }
+    }
+
+    // Class decorators apply last, after all element applies.
+    if (cls.decorators && cls.decorators.length > 0) {
+      var makeClassContext = function(dec) {
+        return contextObject(patcher, {
+          kind: "class",
+          name: className,
+          computed: false,
+          keyNode: null,
+          isStatic: false,
+          isPrivate: false,
+          className: classNameForCtx,
+          holder: null,
+          initsArray: initsStatic,
+        });
+      };
+      if (isDeclaration) {
+        // A decorator returning undefined keeps the original class.
+        var guarded$1 = guardedApplies(
+          patcher, cls.decorators, ident(valueName), makeClassContext, temp
+        );
+        for (var si$1 = 0; si$1 < guarded$1.stmts.length; ++si$1) {
+          applyStmts.push(guarded$1.stmts[si$1]);
+        }
+        applyStmts.push(stmt(magic({
+          type: "AssignmentExpression",
+          operator: "=",
+          left: ident(valueName),
+          right: ident(guarded$1.temp),
+        })));
+      } else if (cls.__irohVarInit) {
+        // Variable declarator: the guarded applies run in the
+        // combined insert (before the statement, after the hoist),
+        // and the init becomes the guarded result (const-safe: no
+        // reassignment of the binding).
+        var parent$1 = cls.__irohParent;
+        var guarded$2 = guardedApplies(
+          patcher, cls.decorators, ident(valueName), makeClassContext, temp
+        );
+        for (var si$2 = 0; si$2 < guarded$2.stmts.length; ++si$2) {
+          applyStmts.push(guarded$2.stmts[si$2]);
+        }
+        parent$1.init = ident(guarded$2.temp);
+      } else {
+        var guarded$3 = guardedApplies(
+          patcher, cls.decorators, ident(valueName), makeClassContext, temp
+        );
+        for (var si$3 = 0; si$3 < guarded$3.stmts.length; ++si$3) {
+          applyStmts.push(guarded$3.stmts[si$3]);
+        }
+        applyStmts.push(stmt(magic({
+          type: "AssignmentExpression",
+          operator: "=",
+          left: ident(valueName),
+          right: ident(guarded$3.temp),
+        })));
+      }
+    }
+
+    // The addInitializer arrays start as empty arrays. The temps are
+    // declared (as `var`, no init) at the top of the program, so they
+    // are undefined until this runs. They must be initialized BEFORE
+    // the class evaluates: a static field decorator runs during
+    // class definition (its initializer is inline), and it may call
+    // addInitializer — which pushes into one of these arrays. (For
+    // a declaration the applies run after the class, so initializing
+    // them there would be too late.)
+    var initStmts = [
+      stmt(magic({
+        type: "AssignmentExpression",
+        operator: "=",
+        left: ident(initsStatic),
+        right: magic({ type: "ArrayExpression", elements: [] }),
+      })),
+      stmt(magic({
+        type: "AssignmentExpression",
+        operator: "=",
+        left: ident(initsInst),
+        right: magic({ type: "ArrayExpression", elements: [] }),
+      })) ];
+
+    // Run static addInitializer callbacks after the class is
+    // defined (element applies included). Static initializers run
+    // with `this` = the class, like the field initializers above —
+    // so the callback is fn.call(Class), not fn().
+    var staticInitsStmt = stmt(magic({
+      type: "CallExpression",
+      callee: magic({
+        type: "MemberExpression",
+        object: ident(initsStatic),
+        property: ident("forEach"),
+        computed: false,
+      }),
+      arguments: [magic({
+        type: "ArrowFunctionExpression",
+        id: null,
+        params: [ident("fn")],
+        body: {
+          type: "CallExpression",
+          callee: magic({
+            type: "MemberExpression",
+            object: ident("fn"),
+            property: ident("call"),
+            computed: false,
+          }),
+          arguments: [ident(valueName)],
+        },
+      })],
+    }));
+    if (!isDeclaration && cls.__irohVarInit) {
+      // Variable declarator: the class decorators run in the
+      // declarator's init — the enclosing statement itself — so the
+      // static initializers must run after that statement. Otherwise
+      // initializers registered by a class decorator would never run
+      // (the forEach in applyStmts runs before the statement).
+      insertAfter(afterBody, afterIndex, [staticInitsStmt]);
+    } else {
+      applyStmts.push(staticInitsStmt);
+    }
+
+    if (applyStmts.length > 0 || hoistStmt !== null) {
+      if (!isDeclaration) {
+        // Hoisted expression: the inits, the hoist and the applies
+        // go in ONE insert before the enclosing statement, in this
+        // order: inits, hoist, element applies, class applies,
+        // static initializers. (For a variable declarator the class
+        // decorators are folded into the declarator's init instead,
+        // so they run last, after the element applies in this
+        // insert.) Two inserts at the same index would land in the
+        // wrong order.
+        insertBefore(afterBody, afterIndex, initStmts.concat([hoistStmt], applyStmts));
+      } else {
+        // Declaration: the inits go before the class (a static field
+        // decorator runs during class definition and may call
+        // addInitializer); the applies run after it.
+        insertBefore(afterBody, afterIndex, initStmts);
+        insertAfter(afterBody, afterIndex, applyStmts);
+      }
+    }
+
+    // Clear the decorators arrays so later stages never see them.
+    cls.decorators = [];
+    for (var ei$4 = 0; ei$4 < elements.length; ++ei$4) {
+      elements[ei$4].decorators = [];
+    }
+  };
+
+  for (var ci$1 = 0; ci$1 < classEntries.length; ++ci$1) loop( ci$1 );
+
+  // Apply the collected insertions (reverse index order per body).
+  inserts.sort(function(a, b) { return b.index - a.index; });
+  for (var ii$1 = 0; ii$1 < inserts.length; ++ii$1) {
+    var ins = inserts[ii$1];
+    var args = [ins.index, 0].concat(ins.stmts);
+    Array.prototype.splice.apply(ins.body, args);
+  }
+
+  declareTemps();
+}
+
+// Compute one field decorator's initializer temp: a statement that
+// assigns the temp the decorator's return (an initializer function
+// or undefined). For several decorators the assignments nest so the
+// calls happen in reverse (application) order while the expressions
+// evaluate in written order — see nestedApplies. Returns
+// { temps, assignStmt } — temps in written order, assignStmt a
+// single magic ExpressionStatement performing all the assignments.
+function applyFieldDecorators(patcher, decorators, makeContext, temp) {
+  var temps = [];
+  for (var ii = 0; ii < decorators.length; ++ii) { temps.push(temp()); }
+  // Build the nested assignment: __t0 = apply(d1, (__t1 =
+  // apply(d2, undefined, ctx), undefined), ctx). The inner
+  // assignment runs first (d2 applied first); d1's expression
+  // evaluates first (outer call's first argument).
+  var value = parseExpression("undefined");
+  for (var ii$1 = decorators.length - 1; ii$1 >= 0; --ii$1) {
+    var dec = decorators[ii$1];
+    var hash = nextHash(patcher);
+    patcher.nodes[hash] = { hash: hash, node: cloneNode(dec) };
+    var ctx = makeContext(dec);
+    if (ii$1 === decorators.length - 1) {
+      value = applyCall(patcher, hash, dec.expression, value, ctx);
+    } else {
+      value = applyCall(patcher, hash, dec.expression, magic({
+        type: "SequenceExpression",
+        expressions: [magic({
+          type: "AssignmentExpression",
+          operator: "=",
+          left: ident(temps[ii$1 + 1]),
+          right: value,
+        }), parseExpression("undefined")],
+      }), ctx);
+    }
+  }
+  var assignStmt = magic({
+    type: "ExpressionStatement",
+    expression: magic({
+      type: "AssignmentExpression",
+      operator: "=",
+      left: ident(temps[0]),
+      right: value,
+    }),
+  });
+  return { temps: temps, assignStmt: assignStmt };
+}
+
+// Rewrite a field's initial value to run one initializer:
+//   init ? init.call(this, value) : value
+// The conditional is non-magic (so the original value stays
+// traced); the initializer invocation reuses DEBUG_FUNCTION_CALL
+// with call="call", so it fires a FUNCTION_CALL event named "call".
+function fieldInitValue(patcher, initTemp, value) {
+  var hash = nextHash(patcher);
+  patcher.nodes[hash] = { hash: hash, node: { type: "Decorator", expression: null } };
+  var callInit = linkCall(patcher, "DEBUG_FUNCTION_CALL", [
+    parseExpression(String(hash)),
+    parseExpression("null"),
+    ident(initTemp),
+    lit("call"),
+    magic({
+      type: "ArrayExpression",
+      elements: [parseExpression("this"), value],
+    }) ]);
+  return {
+    type: "ConditionalExpression",
+    test: ident(initTemp),
+    consequent: callInit,
+    alternate: value,
+  };
+}
+
+// Append (or add) a constructor that runs the instance
+// initializers at the end of construction.
+function wrapConstructor(cls, initsArray) {
+  var body = cls.body.body;
+  var ctor = null;
+  for (var ii = 0; ii < body.length; ++ii) {
+    var el = body[ii];
+    if (el.type === "MethodDefinition" && el.kind === "constructor") {
+      ctor = el;
+      break;
+    }
+  }
+  var runStmt = magic({
+    type: "ExpressionStatement",
+    expression: magic({
+      type: "CallExpression",
+      callee: magic({
+        type: "MemberExpression",
+        object: ident(initsArray),
+        property: ident("forEach"),
+        computed: false,
+      }),
+      arguments: [magic({
+        type: "ArrowFunctionExpression",
+        id: null,
+        params: [ident("fn")],
+        body: {
+          type: "CallExpression",
+          callee: ident("fn"),
+          arguments: [],
+        },
+      })],
+    }),
+  });
+  // The forEach callback must call fn with the instance as `this`:
+  // use an arrow function whose body is fn.call(this). Rebuilt
+  // below (the arrow above calls fn() with no this).
+  runStmt.expression.arguments[0] = magic({
+    type: "ArrowFunctionExpression",
+    id: null,
+    params: [ident("fn")],
+    body: {
+      type: "CallExpression",
+      callee: magic({
+        type: "MemberExpression",
+        object: ident("fn"),
+        property: ident("call"),
+        computed: false,
+      }),
+      arguments: [parseExpression("this")],
+    },
+  });
+  if (ctor) {
+    ctor.value.body.body.push(runStmt);
+    return;
+  }
+  var isDerived = !!cls.superClass;
+  var ctorFn = magic({
+    type: "FunctionExpression",
+    id: null,
+    params: isDerived ? [magic({
+      type: "RestElement",
+      argument: ident("__args"),
+    })] : [],
+    body: magic({
+      type: "BlockStatement",
+      body: isDerived ? [magic({
+        type: "ExpressionStatement",
+        expression: magic({
+          type: "CallExpression",
+          callee: { type: "Super" },
+          arguments: [magic({
+            type: "SpreadElement",
+            argument: ident("__args"),
+          })],
+        }),
+      }), runStmt] : [runStmt],
+    }),
+  });
+  body.push(magic({
+    type: "MethodDefinition",
+    key: ident("constructor"),
+    value: ctorFn,
+    kind: "constructor",
+    computed: false,
+    static: false,
+  }));
+}
+
+// Build the static block for a private element. It always creates
+// the access holder (closures over #m, legal only inside the class
+// body). For methods/getters/setters it also applies the decorators
+// ONCE, at class definition: the original function is first moved
+// into a temp (origTemp), then fnTemp gets the guarded result (the
+// decorator return, or the original when it returns undefined). The
+// caller rewrites the element to use fnTemp (a field for methods, a
+// delegating body for getters/setters). For fields, fnTemp is null
+// and only the holder is built; the field apply happens like the
+// public case. The caller must splice this block BEFORE the element
+// in the class body: static field initializers run in definition
+// order, so the holder/fnTemp must exist before the element's own
+// initializer runs.
+function buildPrivateBlock(patcher, el, kind, isStatic, keyName, holder, fnTemp, initsArray, className, temp) {
+  var stmts = [];
+  // var __holder = { has, get, set } — closures over #m.
+  function accFn(params, expr) {
+    return magic({
+      type: "FunctionExpression",
+      id: null,
+      params: params.map(function(p) { return ident(p); }),
+      body: magic({
+        type: "BlockStatement",
+        body: [magic({
+          type: "ReturnStatement",
+          argument: expr,
+        })],
+      }),
+    });
+  }
+  function privMember(obj) {
+    return magic({
+      type: "MemberExpression",
+      object: obj,
+      property: { type: "PrivateIdentifier", name: keyName.slice(1) },
+      computed: false,
+    });
+  }
+  var accessProps = [];
+  function accProp(name, valueNode) {
+    accessProps.push(magic({
+      type: "Property",
+      key: ident(name),
+      value: valueNode,
+      kind: "init",
+      computed: false,
+      shorthand: false,
+      method: false,
+    }));
+  }
+  if (isStatic) {
+    // `this` in the static block is the class; capture it for the
+    // closures (a nested function's `this` would not be the class).
+    // The class BINDING must not be used here: for a hoisted class
+    // expression (`var tmp = class {...}`) the binding is not
+    // assigned yet while the class body evaluates, so it would read
+    // undefined. `this` is the class in both cases.
+    var clsTmp = temp();
+    stmts.push(stmt(magic({
+      type: "AssignmentExpression",
+      operator: "=",
+      left: ident(clsTmp),
+      right: parseExpression("this"),
+    })));
+    accProp("has", accFn([], magic({
+      type: "BinaryExpression",
+      operator: "in",
+      left: { type: "PrivateIdentifier", name: keyName.slice(1) },
+      right: ident(clsTmp),
+    })));
+    if (kind !== "setter") {
+      accProp("get", accFn([], privMember(ident(clsTmp))));
+    }
+    if (kind === "field" || kind === "setter") {
+      accProp("set", accFn(["v"], magic({
+        type: "AssignmentExpression",
+        operator: "=",
+        left: privMember(ident(clsTmp)),
+        right: ident("v"),
+      })));
+    }
+  } else {
+    accProp("has", accFn(["o"], magic({
+      type: "BinaryExpression",
+      operator: "in",
+      left: { type: "PrivateIdentifier", name: keyName.slice(1) },
+      right: ident("o"),
+    })));
+    if (kind !== "setter") {
+      accProp("get", accFn(["o"], privMember(ident("o"))));
+    }
+    if (kind === "field" || kind === "setter") {
+      accProp("set", accFn(["o", "v"], magic({
+        type: "AssignmentExpression",
+        operator: "=",
+        left: privMember(ident("o")),
+        right: ident("v"),
+      })));
+    }
+  }
+  var accessObj = magic({ type: "ObjectExpression", properties: accessProps });
+  stmts.push(magic({
+    type: "ExpressionStatement",
+    expression: magic({
+      type: "AssignmentExpression",
+      operator: "=",
+      left: ident(holder),
+      right: accessObj,
+    }),
+  }));
+
+  if (kind === "method" || kind === "getter" || kind === "setter") {
+    // The original function moves into origTemp (evaluated once),
+    // the decorators apply to it, and fnTemp gets the guarded
+    // result. A decorator returning undefined keeps the original.
+    var origTemp = temp();
+    stmts.push(stmt(magic({
+      type: "AssignmentExpression",
+      operator: "=",
+      left: ident(origTemp),
+      right: el.value,
+    })));
+    var makeContext = function(dec) {
+      return contextObject(patcher, {
+        kind: kind,
+        name: keyName,
+        computed: false,
+        keyNode: el.key,
+        isStatic: isStatic,
+        isPrivate: true,
+        className: className,
+        holder: holder,
+        initsArray: initsArray,
+      });
+    };
+    var guarded = guardedApplies(
+      patcher, el.decorators, ident(origTemp), makeContext, temp
+    );
+    for (var si = 0; si < guarded.stmts.length; ++si) {
+      stmts.push(guarded.stmts[si]);
+    }
+    stmts.push(stmt(magic({
+      type: "AssignmentExpression",
+      operator: "=",
+      left: ident(fnTemp),
+      right: ident(guarded.temp),
+    })));
+  }
+
+  return magic({
+    type: "StaticBlock",
+    body: stmts,
+  });
+}
+
 var RuntimeEvent = function RuntimeEvent(type, instance) {
   this.type = type;
   this.category = getCategoryFromInstruction(type);
@@ -11381,14 +12840,13 @@ function DEBUG_FUNCTION_CALL(hash, ctx, object, call, args) {
   // Optional call (`?.()`): if the object is nullish, or the method
   // does not exist, the call never happens and the value is undefined —
   // and no CALL event fires for a call that did not happen. This check
-  // must come first: `object.constructor` below would throw on null.
+  // must come first: `object[call]` below would throw on null.
   var node = this.nodes[hash].node;
   if (node.optional) {
     if (object === null || object === void 0) { return void 0; }
     if (call !== null && (object[call] === null || object[call] === void 0)) { return void 0; }
     if (call === null && (object === null || object === void 0)) { return void 0; }
   }
-  var ctor = object.constructor.prototype;
   var callee = (typeof call === "function") ? call.name : getCallee(object, call);
   var previous = this.$$frameHash;
   var value = null;
@@ -12405,12 +13863,26 @@ Stage.prototype.patch = function(input) {
   // explicit options. Newer node types without a dedicated patch handler
   // are still walked generically by acorn-walk's base visitors, so they
   // run — they just don't get their own listener yet.
+  // sourceType: "script" (default) or "module" — modules allow
+  // import/export, import.meta, import attributes and top-level await.
+  // allowAwaitOutsideFunction: lets a script carry top-level await
+  // (traceAsync() runs it through an async wrapper); without it Acorn
+  // rejects the await at parse time, before the runner can help.
   var opt = this.options || {};
   var ast = parse$1(input, {
     locations: true,
     ecmaVersion: opt.ecmaVersion || "latest",
     allowHashBang: opt.allowHashBang !== false,
+    sourceType: opt.sourceType || "script",
+    allowAwaitOutsideFunction: opt.allowAwaitOutsideFunction === true,
   });
+  // Decorators desugar before the patch stages walk: Node cannot
+  // execute `@` syntax at all, and astring cannot generate
+  // `Decorator` nodes, so `@dec` is rewritten into plain calls
+  // (the decorator expressions stay in the tree, non-magic, so they
+  // are traced like any other call). The patch stages then walk the
+  // rewritten code.
+  desugarDecorators(ast, patcher);
   this.frame = new Frame(INSTR.PROGRAM, this.$$frameHash);
   patcher.applyPatches(ast);
   // link walk things to stage
@@ -12484,6 +13956,158 @@ function resolveTraceCategories(iroh, events) {
   return names;
 }
 
+// Shared core of trace() / traceAsync() / traceModule(): build the
+// Stage and attach listeners for the requested categories. Returns
+// { stage, events }. A parse error throws before anything runs; the
+// two errors users hit most often get a pointer at the right entry
+// point instead of Acorn's bare message:
+//   - import/export/import.meta in a script -> Iroh.traceModule()
+//   - top-level await in Iroh.trace() -> Iroh.traceAsync()
+// Acorn reports top-level await as a bare "Unexpected token", so the
+// await case is decided by a probe: if the code parses with top-level
+// await allowed, the failure was the await.
+function createTraceRun(iroh, code, options) {
+  options = options || {};
+  var names = resolveTraceCategories(iroh, options.events);
+  var stage;
+  try {
+    stage = new iroh.Stage(code, options.stageOptions || {});
+  } catch (e) {
+    if (e instanceof SyntaxError) {
+      var msg = e.message;
+      if (
+        msg.indexOf("may appear only with 'sourceType: module'") !== -1 ||
+        msg.indexOf("outside a module") !== -1
+      ) {
+        throw new Error(
+          "This program uses import/export (or import.meta) — trace it with Iroh.traceModule(); Iroh.trace() and Iroh.traceAsync() run scripts only"
+        );
+      }
+      var stageOptions = options.stageOptions || {};
+      if (!stageOptions.allowAwaitOutsideFunction) {
+        try {
+          parse$1(code, {
+            locations: true,
+            ecmaVersion: stageOptions.ecmaVersion || "latest",
+            allowHashBang: stageOptions.allowHashBang !== false,
+            sourceType: stageOptions.sourceType || "script",
+            allowAwaitOutsideFunction: true,
+          });
+          // It parses with top-level await allowed, so the failure
+          // was the await.
+          throw new Error(
+            "This program uses top-level await — run it with Iroh.traceAsync() (or Iroh.traceModule() for modules); Iroh.trace() runs synchronously"
+          );
+        } catch (probeError) {
+          if (probeError.message.indexOf("top-level await") !== -1) {
+            throw probeError;
+          }
+          // The probe failed too: fall through to the original error.
+        }
+      }
+    }
+    throw e;
+  }
+  var events = [];
+  var onEvent = options.onEvent;
+  // Indexed loops, not for...of: the browser bundle is transpiled by
+  // buble, which cannot compile for...of.
+  for (var ii = 0; ii < names.length; ++ii) {
+    var listener = stage.addListener(iroh[names[ii]]);
+    var loop = function ( jj ) {
+      var trigger = TRACE_TRIGGERS[jj];
+      listener.on(trigger, function (event) {
+        var line = iroh.eventToJSON(event, trigger);
+        events.push(line);
+        if (onEvent) { onEvent(line); }
+      });
+    };
+
+    for (var jj = 0; jj < TRACE_TRIGGERS.length; ++jj) loop( jj );
+  }
+  return { stage: stage, events: events };
+}
+
+// Compile a Stage's generated script into a runnable function. The
+// generated script starts with `const $$STx1 = Iroh.stages[...]` —
+// it needs an `Iroh` binding in scope that is this instance. eval()
+// inside the library has no such binding (the class is named Iroh,
+// the instance is not), so run the script through a fresh Function
+// with the instance passed in as its `Iroh` parameter. The function
+// is strict, matching the eval-based usage, and returns $$frameValue
+// — the program's completion value, the same value eval() returns.
+//
+// Two retries, same try/catch pattern as the old trace():
+//   - a program that declares its own top-level `Iroh` collides with
+//     the Function parameter ("Identifier 'Iroh' has already been
+//     declared"): retry with the instance under `$$Iroh` and the
+//     generated header rewritten to match.
+//   - top-level `await` is a SyntaxError in a plain Function: when
+//     allowAsync, the script is wrapped in an async IIFE instead
+//     (`return (async function() { ...; return $$frameValue; })();`).
+//     The Iroh-collision retry applies to the wrapper too.
+// The header rewrite replaces the FIRST occurrence of `Iroh.stages[`
+// — which is the generated header, the first statement of the script
+// — via a function, because in a replacement string `$$` means a
+// literal `$`.
+function compileRunner(iroh, stage, allowAsync) {
+  function rewriteHeader(script, name) {
+    if (name === "Iroh") { return script; }
+    return script.replace("Iroh.stages[", function () { return name + ".stages["; });
+  }
+  function syncSource(name) {
+    return '"use strict";\n' + rewriteHeader(stage.script, name) + "\n; return $$frameValue;";
+  }
+  function asyncSource(name) {
+    return '"use strict";\nreturn (async function() {\n' + rewriteHeader(stage.script, name) + "\n; return $$frameValue;\n})();";
+  }
+  // traceAsync() always uses the async wrapper: a top-level `await`
+  // is a SyntaxError in a plain Function, and the message V8 gives
+  // for it ("missing ) after argument list") does not even mention
+  // await, so sniffing the sync failure to decide is unreliable.
+  // The wrapper changes nothing observable for ordinary programs:
+  // the IIFE returns the program's completion value (adopting a
+  // promise if it is one), and traceAsync() awaits it either way.
+  // The wrapper always runs under $$Iroh, not Iroh: the generated
+  // header sits INSIDE the IIFE, where a user's own top-level
+  // `const Iroh` would shadow the wrapper's `Iroh` parameter for
+  // the whole IIFE scope — a RUNTIME TDZ error ("Cannot access
+  // 'Iroh' before initialization"), not a compile error, so it
+  // cannot be caught by retrying on a SyntaxError. (A sync-form
+  // probe would only catch it when the Iroh declaration precedes
+  // the first await; `await ...; const Iroh = 5;` would still hit
+  // the TDZ.) Under $$Iroh the user's own Iroh is untouched. If
+  // the user declared $$Iroh itself, fall back to Iroh.
+  if (allowAsync) {
+    try {
+      return new Function("$$Iroh", asyncSource("$$Iroh"));
+    } catch (e) {
+      if (
+        e instanceof SyntaxError &&
+        e.message.indexOf("'$$Iroh' has already been declared") !== -1
+      ) {
+        return new Function("Iroh", asyncSource("Iroh"));
+      }
+      throw e;
+    }
+  }
+  try {
+    return new Function("Iroh", syncSource("Iroh"));
+  } catch (e) {
+    if (!(e instanceof SyntaxError)) { throw e; }
+    var msg = e.message;
+    if (msg.indexOf("'Iroh' has already been declared") !== -1) {
+      return new Function("$$Iroh", syncSource("$$Iroh"));
+    }
+    if (msg.indexOf("may appear only with 'sourceType: module'") !== -1) {
+      throw new Error(
+        "This program uses import/export — trace it with Iroh.traceModule(); Iroh.trace() and Iroh.traceAsync() run scripts only"
+      );
+    }
+    throw e;
+  }
+}
+
 // One-shot tracing — the modern SDK entry point. Runs `code` through a
 // Stage and returns { events, result }: `events` is the list of plain
 // event objects (same shape as the CLI's JSON lines — see
@@ -12492,64 +14116,28 @@ function resolveTraceCategories(iroh, events) {
 //   events: "ALL" (default), an array of category names (["CALL","IF"]),
 //           or a comma string ("CALL,IF").
 //   onEvent(event): called for every event as it fires.
+//   stageOptions: passed to the Stage (ecmaVersion, allowHashBang,
+//           sourceType, allowAwaitOutsideFunction). sourceType
+//           "module" is rejected here — use traceModule().
 // A parse error throws before running; a runtime error throws with the
-// events that fired before it attached as error.events.
+// events that fired before it attached as error.events. Top-level
+// await and modules are rejected with a pointer at traceAsync() /
+// traceModule() instead of a bare SyntaxError.
 function trace(code, options) {
-  var this$1 = this;
-
   options = options || {};
-  var stage = new this.Stage(code, options.stageOptions || {});
-  var events = [];
-  var onEvent = options.onEvent;
-  var names = resolveTraceCategories(this, options.events);
-  // Indexed loops, not for...of: the browser bundle is transpiled by
-  // buble, which cannot compile for...of.
-  for (var ii = 0; ii < names.length; ++ii) {
-    var listener = stage.addListener(this$1[names[ii]]);
-    var loop = function ( jj ) {
-      var trigger = TRACE_TRIGGERS[jj];
-      listener.on(trigger, function (event) {
-        var line = this$1.eventToJSON(event, trigger);
-        events.push(line);
-        if (onEvent) { onEvent(line); }
-      });
-    };
-
-    for (var jj = 0; jj < TRACE_TRIGGERS.length; ++jj) loop( jj );
+  if (options.stageOptions && options.stageOptions.sourceType === "module") {
+    throw new Error("Iroh.trace() cannot run modules — use Iroh.traceModule()");
   }
-  // The generated script starts with `const $$STx1 = Iroh.stages[...]` —
-  // it needs an `Iroh` binding in scope that is this instance. eval()
-  // inside the library has no such binding (the class is named Iroh, the
-  // instance is not), so run the script through a fresh Function with the
-  // instance passed in as its `Iroh` parameter. The function is strict,
-  // matching the eval-based usage, and returns $$frameValue — the
-  // program's completion value, the same value eval() returns.
-  var run;
-  try {
-    run = new Function("Iroh", '"use strict";\n' + stage.script + "\n; return $$frameValue;");
-  } catch (e) {
-    // A program that declares its own top-level `Iroh` collides with
-    // the Function parameter of the same name ("Identifier 'Iroh' has
-    // already been declared"). Retry with the instance under a
-    // $$-prefixed name and rewrite the generated header to match; the
-    // user's own Iroh then works as their variable.
-    if (e instanceof SyntaxError && e.message.indexOf("'Iroh' has already been declared") !== -1) {
-      // Replace via a function: in a replacement string "$$" means a
-      // literal "$", so "$$Iroh" would come out as "$Iroh".
-      var renamed = stage.script.replace("Iroh.stages[", function () { return "$$Iroh.stages["; });
-      run = new Function("$$Iroh", '"use strict";\n' + renamed + "\n; return $$frameValue;");
-    } else {
-      throw e;
-    }
-  }
+  var run = createTraceRun(this, code, options);
+  var runner = compileRunner(this, run.stage, false);
   var result;
   try {
-    result = run(this);
+    result = runner(this);
   } catch (e) {
-    attachTraceEvents(e, events);
+    attachTraceEvents(e, run.events);
     throw e;
   }
-  return { events: events, result: result };
+  return { events: run.events, result: result };
 }
 
 // Attach the events that fired before an error to the error itself, so
@@ -12565,13 +14153,43 @@ function attachTraceEvents(err, events) {
 
 // Async version of trace(): awaits the program's completion value before
 // returning, so events from async continuations (await, promises) are
-// included. The returned `result` is the awaited value. Written as a
-// plain Promise chain (no async/await syntax) because the browser bundle
-// is transpiled by buble, which cannot compile async functions.
+// included — and so top-level `await` in scripts works, via the async
+// wrapper in compileRunner. The returned `result` is the awaited value.
+// Written as a plain Promise chain (no async/await syntax) because the
+// browser bundle is transpiled by buble, which cannot compile async
+// functions.
 function traceAsync(code, options) {
-  var out = this.trace(code, options);
-  if (out.result && typeof out.result.then === "function") {
-    return out.result.then(
+  options = options || {};
+  if (options.stageOptions && options.stageOptions.sourceType === "module") {
+    return Promise.reject(new Error("Iroh.traceAsync() cannot run modules — use Iroh.traceModule()"));
+  }
+  // Top-level await needs allowAwaitOutsideFunction at parse time.
+  var stageOptions = Object.assign({}, options.stageOptions, {
+    allowAwaitOutsideFunction: true,
+  });
+  // createTraceRun throws synchronously for module code (and for
+  // parse errors) — but traceAsync() returns a promise, so a sync
+  // throw would escape assert.rejects and any .catch on the caller.
+  // Reject instead.
+  var run;
+  try {
+    run = createTraceRun(this, code, Object.assign({}, options, {
+      stageOptions: stageOptions,
+    }));
+  } catch (e) {
+    return Promise.reject(e);
+  }
+  var runner = compileRunner(this, run.stage, true);
+  var result;
+  try {
+    result = runner(this);
+  } catch (e) {
+    attachTraceEvents(e, run.events);
+    throw e;
+  }
+  var out = { events: run.events, result: result };
+  if (result && typeof result.then === "function") {
+    return result.then(
       function (value) {
         out.result = value;
         return out;
@@ -12586,6 +14204,157 @@ function traceAsync(code, options) {
     );
   }
   return Promise.resolve(out);
+}
+
+// Whether this is Node.js. `process.versions.node` is the check — the
+// cfg.js IS_NODE flag (module/require) is false in the ESM dist, so it
+// cannot be used here. In a browser `process` is undefined.
+function isNodeRuntime() {
+  return (
+    typeof process !== "undefined" &&
+    process.versions !== void 0 &&
+    process.versions !== null &&
+    process.versions.node !== void 0
+  );
+}
+
+// Dynamic import() without writing `import()` literally in src/:
+// buble cannot parse import() syntax, so the import is built through
+// new Function at runtime (the string is parsed by the engine, not by
+// buble). Used to lazily load node: builtins only when traceModule()
+// runs — a static `node:fs` import would break the browser (iife)
+// rollup build, which cannot resolve it.
+function nodeImport(specifier) {
+  return new Function("s", "return import(s);")(specifier);
+}
+
+// How many traceModule() calls are in flight, and what
+// `globalThis.__irohStages` was before the first of them. The
+// generated module reads its stage through that registry (see
+// below), and the registry must stay set until every in-flight
+// module has been evaluated — so the pre-existing value is snapshotted
+// only when the count goes 0 -> 1 (a later concurrent call would
+// snapshot our own registry as "previous") and restored only once the
+// count hits zero again.
+var irohStagesUsers = 0;
+var irohStagesHadPrevious = false;
+var irohStagesPrevious = void 0;
+
+// One-shot tracing for ES modules. Returns a Promise of { events,
+// result }: `events` is the list of plain event objects (same shape
+// as trace()), `result` is the module namespace object — every export,
+// named and default (as `.default`), live, not serialized.
+//
+// How it runs: the instrumented code is written to a temp `.mjs` file
+// and dynamic-imported — Node 24's vm.SourceTextModule still needs
+// --experimental-vm-modules, so it is not used. The generated script's
+// header (`const $$STx1 = Iroh.stages[...]`) cannot name an `Iroh`
+// binding in a module, so it is rewritten to a `globalThis.__irohStages`
+// registry holding the same `Iroh.stages` object the _Stage wrapper
+// registers into — instance identity is exact in both the CJS and ESM
+// dists, and importing the dist from the generated module (which would
+// give a second singleton in one of the two shapes) is avoided.
+// Relative imports in the traced code resolve against `options.filename`
+// when given (the temp file is written next to it); without it they
+// resolve against a fresh temp directory under os.tmpdir() and will
+// usually fail. `import.meta.url` in traced code is the temp file's
+// URL. The temp file is deleted after the import settles.
+//
+// Options: events, onEvent, stageOptions (sourceType is forced to
+// "module"), filename (base path for relative imports). A parse error
+// rejects before running; a runtime error rejects with the events that
+// fired before it attached as error.events. Requires Node.js — in a
+// browser it rejects with a clear error.
+function traceModule(code, options) {
+  options = options || {};
+  var iroh = this;
+  if (!isNodeRuntime()) {
+    return Promise.reject(new Error(
+      "Iroh.traceModule() requires Node.js — modules run through a temp .mjs file and dynamic import()"
+    ));
+  }
+  var stageOptions = Object.assign({}, options.stageOptions, {
+    sourceType: "module",
+  });
+  var run;
+  try {
+    run = createTraceRun(iroh, code, Object.assign({}, options, {
+      stageOptions: stageOptions,
+    }));
+  } catch (e) {
+    return Promise.reject(e);
+  }
+  // The header rewrite: first occurrence of `Iroh.stages[` is the
+  // generated header, the first statement of the script.
+  var script = run.stage.script.replace(
+    "Iroh.stages[",
+    function () { return "globalThis.__irohStages["; }
+  );
+  return Promise.all([
+    nodeImport("node:fs"),
+    nodeImport("node:os"),
+    nodeImport("node:path"),
+    nodeImport("node:url") ]).then(function(mods) {
+    var fs = mods[0];
+    var os = mods[1];
+    var path = mods[2];
+    var url = mods[3];
+    var dir;
+    var ownDir = false;
+    if (options.filename) {
+      dir = path.dirname(path.resolve(options.filename));
+    } else {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-trace-"));
+      ownDir = true;
+    }
+    var file = path.join(dir, ".iroh-trace-" + run.stage.key + ".mjs");
+    fs.writeFileSync(file, script, "utf8");
+    // Register the stages object for the generated module's header.
+    // Snapshot whatever was there (normally nothing) only when this
+    // is the first in-flight call; restore it once no call is in
+    // flight any more.
+    if (irohStagesUsers === 0) {
+      irohStagesHadPrevious = Object.prototype.hasOwnProperty.call(globalThis, "__irohStages");
+      irohStagesPrevious = globalThis.__irohStages;
+    }
+    irohStagesUsers += 1;
+    globalThis.__irohStages = iroh.stages;
+    function cleanup() {
+      irohStagesUsers -= 1;
+      if (irohStagesUsers <= 0) {
+        irohStagesUsers = 0;
+        if (irohStagesHadPrevious) {
+          globalThis.__irohStages = irohStagesPrevious;
+        } else {
+          delete globalThis.__irohStages;
+        }
+      }
+      try {
+        fs.unlinkSync(file);
+      } catch (e) {
+        // Best effort: a missing temp file is not a trace failure.
+      }
+      if (ownDir) {
+        try {
+          fs.rmdirSync(dir);
+        } catch (e) {
+          // Best effort.
+        }
+      }
+    }
+    var fileUrl = url.pathToFileURL(file).href;
+    return nodeImport(fileUrl).then(
+      function(namespace) {
+        cleanup();
+        return { events: run.events, result: namespace };
+      },
+      function(err) {
+        cleanup();
+        attachTraceEvents(err, run.events);
+        throw err;
+      }
+    );
+  });
 }
 
 function greet() {
@@ -12604,6 +14373,7 @@ var _setup = Object.freeze({
 	generateCategoryBits: generateCategoryBits,
 	trace: trace,
 	traceAsync: traceAsync,
+	traceModule: traceModule,
 	greet: greet
 });
 

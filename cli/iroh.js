@@ -4,6 +4,7 @@
 // without speaking JavaScript.
 //
 //   node cli/iroh.js program.js [--events CALL,IF,VAR]
+//   node cli/iroh.js program.mjs [--module] [--events CALL,IF,VAR]
 //   cat program.js | node cli/iroh.js [--events CALL]
 //
 // Output (stdout, JSONL):
@@ -14,6 +15,12 @@
 // Errors are a final {"type":"error",...} line and a non-zero exit code.
 // Use --no-result to skip the result line. Requires the built dist
 // (`npm run build`); the CLI loads ../dist/iroh-node.js.
+//
+// Scripts run through Iroh.traceAsync() (so top-level await works);
+// modules — a .mjs file, or --module — run through Iroh.traceModule(),
+// and the result line is the module namespace object. Relative imports
+// in a module resolve against the traced file; from stdin they resolve
+// against a temp directory and will usually fail.
 "use strict";
 
 const fs = require("node:fs");
@@ -24,8 +31,6 @@ const Iroh = require("../dist/iroh-node.js");
 // src/setup.js and src/utils.js). The CLI uses Iroh.eventToJSON so its
 // JSON lines are the same shape as Iroh.trace() events.
 const CATEGORY = Iroh.CATEGORY;
-
-const TRIGGERS = ["before", "after", "enter", "leave", "fire", "test", "return"];
 
 // Normalize any thrown value into an error line. A program may throw a
 // string, a number, or null — those have no .name/.message, so without
@@ -45,9 +50,12 @@ function printLine(obj) {
 function printUsage() {
   process.stderr.write(
     "Usage: iroh <file.js> [--events CALL,IF,VAR] [--no-result]\n" +
+    "       iroh <file.mjs> [--module] [--events CALL,IF,VAR]\n" +
     "       cat file.js | iroh [--events CALL,IF,VAR]\n" +
     "Events are streamed as JSON lines on stdout, then a result line.\n" +
-    "Use --events ALL (default) or a comma list of categories, e.g. CALL.\n"
+    "Use --events ALL (default) or a comma list of categories, e.g. CALL.\n" +
+    ".mjs files (or --module) run as ES modules through Iroh.traceModule();\n" +
+    "everything else runs as a script through Iroh.traceAsync().\n"
   );
 }
 
@@ -56,6 +64,7 @@ async function main() {
   let file = null;
   let eventsArg = "ALL";
   let wantResult = true;
+  let moduleFlag = false;
   for (let ii = 0; ii < args.length; ++ii) {
     let arg = args[ii];
     if (arg === "--events") {
@@ -70,6 +79,8 @@ async function main() {
       file = arg.slice("--file=".length);
     } else if (arg === "--no-result") {
       wantResult = false;
+    } else if (arg === "--module") {
+      moduleFlag = true;
     } else if (arg === "--help" || arg === "-h") {
       printUsage();
       return;
@@ -105,7 +116,8 @@ async function main() {
     return;
   }
 
-  // Resolve the requested categories.
+  // Resolve the requested categories (before running anything, so an
+  // unknown category is a usage error, exit 2, not a trace failure).
   let categories;
   if (eventsArg.toUpperCase() === "ALL") {
     categories = Object.keys(CATEGORY);
@@ -121,35 +133,31 @@ async function main() {
     }
   }
 
-  let stage;
+  // Modules: an explicit --module, or a .mjs file. Scripts (including
+  // top-level await) go through traceAsync(); modules through
+  // traceModule(), with the file as the base for relative imports.
+  let isModule = moduleFlag || (file !== null && file.endsWith(".mjs"));
+  let out;
   try {
-    stage = new Iroh.Stage(code);
-  } catch (e) {
-    printLine(errorLine(e));
-    process.exitCode = 1;
-    return;
-  }
-
-  for (let name of categories) {
-    let listener = stage.addListener(Iroh[name]);
-    for (let trigger of TRIGGERS) {
-      listener.on(trigger, (event) => {
-        printLine(Iroh.eventToJSON(event, trigger));
+    if (isModule) {
+      out = await Iroh.traceModule(code, {
+        events: eventsArg,
+        onEvent: (line) => printLine(line),
+        filename: file || undefined,
+      });
+    } else {
+      out = await Iroh.traceAsync(code, {
+        events: eventsArg,
+        onEvent: (line) => printLine(line),
       });
     }
-  }
-
-  let result;
-  try {
-    result = eval(stage.script);
-    if (result && typeof result.then === "function") result = await result;
   } catch (e) {
     printLine(errorLine(e));
     process.exitCode = 1;
     return;
   }
   if (wantResult) {
-    printLine({ type: "result", value: Iroh.safeValue(result, 4, new Set()) });
+    printLine({ type: "result", value: Iroh.safeValue(out.result, 4, new Set()) });
   }
 }
 

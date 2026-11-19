@@ -23,11 +23,20 @@ const { events, result } = Iroh.trace(
 
 For async programs, `await Iroh.traceAsync(code, options)` — same shape,
 but the result is awaited and events from async continuations are included.
-`events` can be `"ALL"` (the default), an array (`["CALL", "IF"]`), or a
-comma string (`"CALL,IF"`). Pass `onEvent` to see each event as it fires.
-A runtime error throws with the events that fired before it on
-`error.events`. TypeScript types ship in `index.d.ts` — no `@types` package
-needed.
+Top-level `await` works there too (`await Iroh.traceAsync("await
+Promise.resolve(42);")` returns 42). `events` can be `"ALL"` (the
+default), an array (`["CALL", "IF"]`), or a comma string (`"CALL,IF"`).
+Pass `onEvent` to see each event as it fires. A runtime error throws
+with the events that fired before it on `error.events`. TypeScript types
+ship in `index.d.ts` — no `@types` package needed.
+
+Modules trace with `await Iroh.traceModule(code, { filename })` (0.7.0,
+Node only) — `import`/`export`, import attributes, `import.meta`, and
+dynamic `import()` all work, and `result` is the live module namespace
+object. `filename` is the base relative imports resolve against.
+Decorators trace too (0.7.0): `@dec` on classes, methods, getters,
+setters, and fields parses and runs, and the decorator calls fire
+`CALL` events. `accessor` fields are not supported.
 
 The rest of this guide uses the classic Stage API, which is still fully
 supported and gives you live listeners that can change values mid-flight.

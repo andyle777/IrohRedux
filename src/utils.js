@@ -1,8 +1,8 @@
 import { TEMP_VAR_BASE } from "./cfg";
 import { INSTR, CATEGORY } from "./labels";
 
-import { parse as prs } from "acorn";
 import { generate as gen } from "astring";
+import { parseWithDecorators as prs } from "./decorators-plugin";
 
 // unique temporary variable index
 let utvidx = 1;

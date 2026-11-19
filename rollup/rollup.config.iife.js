@@ -23,12 +23,13 @@ config.plugins = [
     browser: true
   }),
   // namedExports only where the plugin fails to infer them: acorn's
-  // `parse` and acorn-walk's walkers. astring must NOT be listed — its
-  // 1.9 CJS file already exports `generate` and a manual entry creates a
-  // duplicate export.
+  // `parse` (plus `Parser`/`TokenType` for the decorator plugin in
+  // src/decorators-plugin.js) and acorn-walk's walkers. astring must
+  // NOT be listed — its 1.9 CJS file already exports `generate` and a
+  // manual entry creates a duplicate export.
   commonjs({
     namedExports: {
-      "node_modules/acorn/dist/acorn.js": ["parse"],
+      "node_modules/acorn/dist/acorn.js": ["parse", "Parser", "TokenType"],
       "node_modules/acorn-walk/dist/walk.js": ["base", "full", "recursive"]
     }
   })

@@ -11,7 +11,9 @@
 //                             modifiers, `using` declarations, plus the
 //                             runtime features that needed no syntax change.
 //   tests/trace.test.js     — the modern one-shot SDK: Iroh.trace() /
-//                             traceAsync().
+//                             traceAsync(), including top-level await.
+//   tests/modules.test.js    — ES modules: Iroh.traceModule().
+//   tests/decorators.test.js — the TC39 decorators proposal.
 //   tests/esm.test.mjs      — ESM import of the package itself, through
 //                             the package.json "exports" map.
 //   python/tests/           — the Python client (unittest), needs python3.
@@ -31,7 +33,7 @@ function has(cmd) {
 }
 
 execSync(
-  "node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js tests/modern.test.js tests/trace.test.js tests/esm.test.mjs",
+  "node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js tests/modern.test.js tests/trace.test.js tests/modules.test.js tests/decorators.test.js tests/esm.test.mjs",
   { stdio: "inherit" }
 );
 

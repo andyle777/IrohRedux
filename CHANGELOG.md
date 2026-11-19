@@ -1,5 +1,152 @@
 # Changelog
 
+## 0.7.0 — Modules, top-level await, and decorators (20 Nov 2026)
+
+The option-C work from the 0.6.0 planning, plus the two features that
+go with it. All 79 prior tests still pass; the suite is now 120 tests
+(108 Node + 7 Python + 5 C++).
+
+### Modules — `Iroh.traceModule(code, options)`
+- ES modules trace now: `import`/`export` declarations, import
+  attributes (`with { type: "json" }`), `import.meta`, dynamic
+  `import()`, and top-level await inside modules. `trace()` and
+  `traceAsync()` reject module code with a pointer at `traceModule()`
+  instead of a bare Acorn error.
+- Execution path: the instrumented code is written to a temp `.mjs`
+  file and dynamic-imported (Node only — `vm.SourceTextModule` still
+  needs `--experimental-vm-modules` on Node 24, so it is not used).
+  The generated script's `Iroh` binding is satisfied without importing
+  the dist (which would break singleton identity between the CJS and
+  ESM builds): the header is rewritten to a
+  `globalThis.__irohStages[...]` registry holding the same object as
+  `Iroh.stages`. The registry is refcounted, so concurrent traces do
+  not clobber each other, and it is removed when the last one settles.
+- `result` is the live module namespace object (`result.default` for
+  the default export). Options are trace()'s, plus `filename`: when
+  given, the temp module is written next to that file, so relative
+  imports resolve against its directory. Without it the module runs
+  from a fresh temp directory and only bare or absolute imports
+  resolve. The temp file (and its temp directory, when one was made)
+  is deleted after the trace settles. `import.meta.url` is the temp
+  file's URL, not the caller's.
+- `node:fs` / `node:os` / `node:path` / `node:url` are loaded lazily
+  via `new Function("s", "return import(s);")` — a static import in
+  `src/` would break the browser (iife) rollup build, and buble
+  cannot parse `import()` syntax, so the string form is parsed at
+  runtime. In the browser `traceModule()` throws a clear error.
+- CLI: `cli/iroh.js` now delegates to `Iroh.traceAsync()` (scripts)
+  and `Iroh.traceModule()` (modules). New `--module` flag; `.mjs`
+  files auto-detect module mode; the traced file's path is passed as
+  `filename`, so its relative imports resolve. Exit codes unchanged
+  (0 success, 1 parse/runtime error line, 2 usage/unknown category).
+
+### Top-level await — in scripts as well as modules
+- `traceAsync()` accepts programs containing top-level `await`
+  (`await Promise.resolve(42)` as a whole program returns 42). It
+  always runs the generated script inside an async IIFE — V8's message
+  for top-level `await` in a plain Function ("missing) after argument
+  list") does not mention await, so sniffing the sync failure to
+  decide is unreliable, and the wrapper changes nothing observable
+  for ordinary programs. `trace()` rejects top-level await with a
+  pointer at `traceAsync()` (detected by a probe parse with
+  `allowAwaitOutsideFunction: true` — Acorn itself reports it as a
+  bare "Unexpected token").
+- A program declaring its own top-level `Iroh` works under
+  `traceAsync()`: the async wrapper always runs under `$$Iroh` (the
+  header is rewritten), because the user's `const Iroh` would shadow
+  the wrapper's parameter inside the IIFE — a runtime TDZ error, not
+  a compile error, so it cannot be caught by retrying on a
+  SyntaxError. (A sync-form probe would only catch it when the Iroh
+  declaration precedes the first await.) `trace()` keeps its
+  compile-time retry under `$$Iroh`.
+- `traceAsync()` now returns a rejected promise (instead of throwing
+  synchronously) when the program is module code or otherwise fails
+  before running, so `assert.rejects` and `.catch` work on it.
+
+### Decorators — parse and trace
+- Acorn core does not support decorator syntax, and no maintained
+  Acorn 8 decorator plugin exists on npm (`acorn-decorators` 404s;
+  `acorn-es7` targets Acorn 5/6 and the abandoned 2016 proposal), so
+  0.7.0 ships its own: an Acorn plugin (`src/decorators-plugin.js`,
+  a subclass-returning `Parser.extend` plugin — `parse()` calls each
+  plugin as `plugin(ParserClass)` and expects the extended class
+  back) plus a desugar stage (`src/decorators.js`) that runs in
+  `Stage.patch` after parsing, before the other patch stages.
+  astring 1.9 does not generate `Decorator` nodes, so decorators are
+  desugared away before generation, not regenerated.
+- The plugin parses `@expr` before class declarations and
+  expressions, class elements, and `export` / `export default` of a
+  class (including class expressions in mid-statement position, via a
+  `parseExprAtom` extension). It does not parse `accessor` fields —
+  those are a parse error, as in native engines without the flag.
+- Semantics follow the 2023-11 decorators proposal, checked against
+  Babel's `@babel/plugin-proposal-decorators` output for the hard
+  cases: decorator expressions evaluate in written order, decorators
+  apply in reverse order within each element, elements in definition
+  order, class decorators last; a decorator returning a value
+  replaces it, and a decorator returning `undefined` keeps the
+  original (class, method, and field — a logging-only decorator must
+  not destroy the class). Field decorator returns are initializers,
+  called per instance (once at class definition for static fields).
+  Context objects carry `kind` (`class` / `method` / `getter` /
+  `setter` / `field`), `name`, `static`, `private`, `access` (`has`
+  / `get` / `set` — getters have no `set`, setters have no `get`),
+  and `addInitializer` (static callbacks run after the class is
+  defined with `this` = the class; instance ones run at the end of
+  the constructor, which the desugar wraps or adds).
+- Decorator invocations fire normal `FUNCTION_CALL` events: applies
+  reuse the existing `DEBUG_FUNCTION_CALL` link, with the hash
+  pointing at the original `Decorator` node. The decorator
+  expressions themselves stay non-magic, so `@factory()` fires a
+  CALL event for the factory too; the scaffolding is magic.
+- Getters and setters: public accessors are replaced via
+  `Object.defineProperty` (assigning the function as a plain property
+  would destroy the accessor, and reading one through the target
+  would invoke it — so the decorator receives the function off the
+  property descriptor). Private getters/setters keep their shape and
+  their bodies delegate to the decorated function (`return
+  _call_x(this)`), following Babel.
+- Private methods: `C.prototype.#m` is illegal (a private method
+  needs an instance receiver), so — again following Babel — a
+  decorated private method becomes a private FIELD holding the
+  decorated function, applied once in a static block at class
+  definition. Private members' `access` closures are built in a
+  static block inside the class body (the only place `#m` is legal);
+  the block is spliced BEFORE its element, so the holder exists
+  before a static field's initializer (which runs the decorators
+  inline) reads it. For static private members the block captures
+  `this` (the class) into a temp — the class binding is not assigned
+  yet while a hoisted class expression evaluates.
+- Decorated constructors are a clear error, matching Babel:
+  "Decorators can't be used with a constructor. Did you mean '@dec
+  class { ... }'?"
+- Also fixed while here: `DEBUG_FUNCTION_CALL` no longer reads
+  `object.constructor.prototype` (dead code — assigned but never
+  used) — it crashed on module namespace objects (null prototype)
+  and on `Object.create(null)` objects. The `addInitializer` arrays
+  are now initialized BEFORE the class evaluates (a static field
+  decorator runs during class definition and may call
+  `addInitializer`).
+
+### Known limitations (0.7.0)
+- No `accessor` fields: `@dec accessor x = 1` is a parse error.
+- Computed keys with side effects evaluate twice: the key expression
+  is cloned into the context `name`, so it runs once in the class
+  definition and once per decorator application.
+- Decorator expressions for instance fields evaluate after the class
+  definition, not during it: their applies run as statements after
+  the class, while static fields' applies run inline during
+  definition — so evaluation order between a static field and an
+  instance element follows definition order only when the static
+  field comes first.
+- `import.meta.url` in a traced module is the temp file's URL.
+- The decorator desugar is a source-to-source transform: the
+  instrumented code is the desugared form, so event hashes for
+  decorator applies point at the original `Decorator` nodes but the
+  generated code around them is scaffolding (magic, no events of its
+  own). A hoisted class expression's temp fires VAR events (noise,
+  but the class is fully traced).
+
 ## 0.6.0 — Next generation: 2026 syntax and a modern SDK (19 Nov 2026)
 
 ### Syntax — parser moved from ES2022 to "latest"

@@ -1,4 +1,4 @@
-// TypeScript definitions for IrohRedux 0.6.0.
+// TypeScript definitions for IrohRedux 0.7.0.
 //
 //   import Iroh from "iroh";
 //   const { events, result } = Iroh.trace("factorial(3);", { events: ["CALL"] });
@@ -87,6 +87,27 @@ export interface TraceOptions {
   stageOptions?: StageOptions;
 }
 
+export interface TraceModuleOptions extends TraceOptions {
+  /**
+   * Base path for relative imports in the traced module. When given,
+   * the instrumented module is written next to this file, so
+   * `import "./sibling.js"` resolves against its directory. Without
+   * it, the module runs from a temp directory and only bare or
+   * absolute imports resolve.
+   */
+  filename?: string;
+}
+
+export interface TraceModuleResult {
+  /** The collected events, in firing order. */
+  events: TraceEvent[];
+  /**
+   * The live module namespace object (the result of the dynamic
+   * import). Use `result.default` for the default export.
+   */
+  result: Record<string, unknown>;
+}
+
 export interface TraceResult {
   /** The collected events, in firing order. */
   events: TraceEvent[];
@@ -108,6 +129,16 @@ export interface StageOptions {
   ecmaVersion?: number | string;
   /** Allow a #! line at the top of the script (default: true). */
   allowHashBang?: boolean;
+  /**
+   * "script" (default) or "module". trace()/traceAsync() reject
+   * "module" — use traceModule() for modules.
+   */
+  sourceType?: "script" | "module";
+  /**
+   * Allow top-level await while parsing (traceAsync() sets this).
+   * trace() rejects programs that use it, pointing at traceAsync().
+   */
+  allowAwaitOutsideFunction?: boolean;
 }
 
 export class Stage {
@@ -156,7 +187,7 @@ export interface IrohAPI {
   readonly CLASS: number;
   readonly AWAIT: number;
 
-  /** The library version, e.g. "0.6.0". */
+  /** The library version, e.g. "0.7.0". */
   readonly VERSION: string;
 
   /** Instruction numbers, keyed by name (e.g. INSTR.FUNCTION_CALL). */
@@ -177,9 +208,22 @@ export interface IrohAPI {
   trace(code: string, options?: TraceOptions): TraceResult;
   /**
    * Async version of trace(): awaits the program's completion value, so
-   * events from async continuations are included.
+   * events from async continuations are included — and so top-level
+   * `await` in scripts works. A program declaring its own top-level
+   * `Iroh` is fine: the async wrapper runs under $$Iroh.
    */
   traceAsync(code: string, options?: TraceOptions): Promise<TraceResult>;
+  /**
+   * Trace an ES module: `import`/`export`, import attributes,
+   * `import.meta`, dynamic `import()`, and top-level await all work.
+   * Node only (the instrumented module is written to a temp .mjs file
+   * and dynamic-imported). Returns a promise of { events, result }
+   * where result is the live module namespace object. Options as for
+   * trace(), plus `filename` — the base path relative imports resolve
+   * against. The temp file is deleted after the trace settles.
+   * trace()/traceAsync() reject module code, pointing here.
+   */
+  traceModule(code: string, options?: TraceModuleOptions): Promise<TraceModuleResult>;
 
   /** Turn a live RuntimeEvent into a plain, JSON-safe object. */
   eventToJSON(event: RuntimeEvent, trigger: Trigger): TraceEvent;

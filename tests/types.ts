@@ -2,7 +2,7 @@
 // Run: npm run test:types
 // This file is type-checked only; it is not executed by `npm test`.
 import Iroh from "../index";
-import type { TraceEvent, TraceResult, RuntimeEvent } from "../index";
+import type { TraceEvent, TraceResult, TraceModuleResult, RuntimeEvent } from "../index";
 
 const sync: TraceResult = Iroh.trace("factorial(3);", { events: ["CALL"] });
 const calls: TraceEvent[] = sync.events.filter((e) => e.event === "FUNCTION_CALL");
@@ -28,6 +28,20 @@ async function main(): Promise<void> {
   );
   const r: unknown = asyncOut.result;
   void r;
+
+  // Top-level await in a script, and modules with a filename base.
+  const tla = await Iroh.traceAsync("await Promise.resolve(42);", {
+    stageOptions: { allowAwaitOutsideFunction: true },
+  });
+  void tla;
+  const mod: TraceModuleResult = await Iroh.traceModule(
+    "export const total = 2 + 3; export default total * 2;",
+    { filename: "/tmp/example.mjs" }
+  );
+  const ns: Record<string, unknown> = mod.result;
+  void ns;
+  const modDefault: unknown = mod.result.default;
+  void modDefault;
 }
 
 const stage = new Iroh.Stage("let x = [1, 2, 3].map(v => v * 2); x;");
