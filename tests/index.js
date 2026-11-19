@@ -12,6 +12,8 @@
 //                             runtime features that needed no syntax change.
 //   tests/trace.test.js     — the modern one-shot SDK: Iroh.trace() /
 //                             traceAsync().
+//   tests/esm.test.mjs      — ESM import of the package itself, through
+//                             the package.json "exports" map.
 //   python/tests/           — the Python client (unittest), needs python3.
 //   cpp/test_client.cpp     — the C++ client, needs g++.
 //   npm test
@@ -29,7 +31,7 @@ function has(cmd) {
 }
 
 execSync(
-  "node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js tests/modern.test.js tests/trace.test.js",
+  "node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js tests/modern.test.js tests/trace.test.js tests/esm.test.mjs",
   { stdio: "inherit" }
 );
 

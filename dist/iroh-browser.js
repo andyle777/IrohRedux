@@ -12068,7 +12068,10 @@ var Stage = function Stage(input, opt) {
   this.links = {};
   this.nodes = null;
   this.symbols = null;
-  this.options = {};
+  // Parser options, honoured by patch(): ecmaVersion (default "latest")
+  // and allowHashBang (default true). Previously the constructor took
+  // `opt` and silently dropped it.
+  this.options = opt || {};
   this.indent = 0;
   this.frame = null;
   this.$$frameHash = 0;
@@ -12384,10 +12387,16 @@ Stage.prototype.patch = function(input) {
   var patcher = new Patcher(this);
   // Parse at the newest language level Acorn supports ("latest": ES2025
   // RegExp modifiers, `using` declarations, import attributes) plus
-  // allowHashBang for #! scripts. Newer node types without a dedicated
-  // patch handler are still walked generically by acorn-walk's base visitors,
-  // so they run — they just don't get their own listener yet.
-  var ast = parse$1(input, { locations: true, ecmaVersion: "latest", allowHashBang: true });
+  // allowHashBang for #! scripts, unless the Stage was constructed with
+  // explicit options. Newer node types without a dedicated patch handler
+  // are still walked generically by acorn-walk's base visitors, so they
+  // run — they just don't get their own listener yet.
+  var opt = this.options || {};
+  var ast = parse$1(input, {
+    locations: true,
+    ecmaVersion: opt.ecmaVersion || "latest",
+    allowHashBang: opt.allowHashBang !== false,
+  });
   this.frame = new Frame(INSTR.PROGRAM, this.$$frameHash);
   patcher.applyPatches(ast);
   // link walk things to stage
@@ -12475,7 +12484,7 @@ function trace(code, options) {
   var this$1 = this;
 
   options = options || {};
-  var stage = new this.Stage(code);
+  var stage = new this.Stage(code, options.stageOptions || {});
   var events = [];
   var onEvent = options.onEvent;
   var names = resolveTraceCategories(this, options.events);
@@ -12520,10 +12529,19 @@ function trace(code, options) {
 function traceAsync(code, options) {
   var out = this.trace(code, options);
   if (out.result && typeof out.result.then === "function") {
-    return out.result.then(function (value) {
-      out.result = value;
-      return out;
-    });
+    return out.result.then(
+      function (value) {
+        out.result = value;
+        return out;
+      },
+      // Like the sync path, an async failure carries the events that
+      // fired before it — otherwise the trace of a rejected program is
+      // lost entirely.
+      function (err) {
+        err.events = out.events;
+        throw err;
+      }
+    );
   }
   return Promise.resolve(out);
 }

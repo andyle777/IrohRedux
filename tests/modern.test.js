@@ -78,3 +78,11 @@ test("import attributes still fail clearly without module support", () => {
     /sourceType: module/
   );
 });
+
+test("Stage constructor honours parser options", () => {
+  // The constructor used to take `opt` and silently drop it.
+  let code = "function f() { using x = { [Symbol.dispose]() {} }; return 1; } f();";
+  assert.throws(() => new Iroh.Stage(code, { ecmaVersion: 2022 }), { name: "SyntaxError" });
+  let stage = new Iroh.Stage(code);
+  assert.equal(eval(stage.script), 1);
+});

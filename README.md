@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-68%20passing-brightgreen.svg?style=flat-square" alt="68 tests passing" />
+  <img src="https://img.shields.io/badge/tests-73%20passing-brightgreen.svg?style=flat-square" alt="73 tests passing" />
 </p>
 
 <p align="center">
@@ -145,7 +145,7 @@ Header-only C++17, with a minimal JSON parser built in — see [`cpp/`](cpp/).
   coalescing, private fields, async/await — all traced, all tested.
 - **Three languages, one protocol.** JavaScript, Python, and C++ all consume
   the same JSON event stream.
-- **No surprises.** 68 tests (56 Node + 7 Python + 5 C++), `npm test` runs
+- **No surprises.** 73 tests (61 Node + 7 Python + 5 C++), `npm test` runs
   them all, plus a TypeScript type test (`npm run test:types`). Zero runtime
   dependencies in the engine beyond Acorn, astring, and acorn-walk.
 
@@ -172,10 +172,11 @@ a single header — just `#include "iroh.hpp"`.
 
 - [Getting started](//github.com/andyle777/IrohRedux/blob/master/GETTING_STARTED.md) — worked examples you can run locally.
 - [API](//github.com/andyle777/IrohRedux/blob/master/API.md) — the full listener and event reference, including `Iroh.assert` / `Iroh.log` and the `INSTR` / `CATEGORY` / `OP` label tables.
-- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, and 0.5.1.
+- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, and 0.6.0.
 
 ---
 
 *IrohRedux is a fork of Felix Maier's [Iroh](https://github.com/maierfelix/Iroh)
 0.3.0 (2018), fixed and extended. The core idea is his; the 0.4.0 fixes, the
-0.5.0 CLI and polyglot clients, and the 0.5.1 polish are the fork's.*
+0.5.0 CLI and polyglot clients, the 0.5.1 polish, and the 0.6.0 syntax and
+modern SDK are the fork's.*

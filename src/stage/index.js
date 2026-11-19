@@ -37,7 +37,10 @@ export default class Stage {
     this.links = {};
     this.nodes = null;
     this.symbols = null;
-    this.options = {};
+    // Parser options, honoured by patch(): ecmaVersion (default "latest")
+    // and allowHashBang (default true). Previously the constructor took
+    // `opt` and silently dropped it.
+    this.options = opt || {};
     this.indent = 0;
     this.frame = null;
     this.$$frameHash = 0;
@@ -342,10 +345,16 @@ Stage.prototype.patch = function(input) {
   let patcher = new Patcher(this);
   // Parse at the newest language level Acorn supports ("latest": ES2025
   // RegExp modifiers, `using` declarations, import attributes) plus
-  // allowHashBang for #! scripts. Newer node types without a dedicated
-  // patch handler are still walked generically by acorn-walk's base visitors,
-  // so they run — they just don't get their own listener yet.
-  let ast = parse(input, { locations: true, ecmaVersion: "latest", allowHashBang: true });
+  // allowHashBang for #! scripts, unless the Stage was constructed with
+  // explicit options. Newer node types without a dedicated patch handler
+  // are still walked generically by acorn-walk's base visitors, so they
+  // run — they just don't get their own listener yet.
+  let opt = this.options || {};
+  let ast = parse(input, {
+    locations: true,
+    ecmaVersion: opt.ecmaVersion || "latest",
+    allowHashBang: opt.allowHashBang !== false,
+  });
   this.frame = new Frame(INSTR.PROGRAM, this.$$frameHash);
   patcher.applyPatches(ast);
   // link walk things to stage

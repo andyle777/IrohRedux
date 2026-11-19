@@ -83,6 +83,8 @@ export interface TraceOptions {
   events?: "ALL" | string[] | string;
   /** Called for every event as it fires. */
   onEvent?: (event: TraceEvent) => void;
+  /** Parser options passed to the Stage (ecmaVersion, allowHashBang). */
+  stageOptions?: StageOptions;
 }
 
 export interface TraceResult {

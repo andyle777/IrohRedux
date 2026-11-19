@@ -70,7 +70,7 @@ function resolveTraceCategories(iroh, events) {
 // events that fired before it attached as error.events.
 export function trace(code, options) {
   options = options || {};
-  let stage = new this.Stage(code);
+  let stage = new this.Stage(code, options.stageOptions || {});
   let events = [];
   let onEvent = options.onEvent;
   let names = resolveTraceCategories(this, options.events);
@@ -113,10 +113,19 @@ export function trace(code, options) {
 export function traceAsync(code, options) {
   let out = this.trace(code, options);
   if (out.result && typeof out.result.then === "function") {
-    return out.result.then((value) => {
-      out.result = value;
-      return out;
-    });
+    return out.result.then(
+      (value) => {
+        out.result = value;
+        return out;
+      },
+      // Like the sync path, an async failure carries the events that
+      // fired before it — otherwise the trace of a rejected program is
+      // lost entirely.
+      (err) => {
+        err.events = out.events;
+        throw err;
+      }
+    );
   }
   return Promise.resolve(out);
 };

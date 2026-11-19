@@ -61,12 +61,40 @@
   can't run through plain `eval` — that is a different execution path
   (the option-C work from the 0.6.0 planning), not this release.
   Import attributes fail with the clear Acorn message, covered by a test.
+- **Pre-existing, found while hardening, not fixed here:** a program
+  whose last top-level statement is a bare block (`{ 1; }`) returns
+  `undefined` from `trace()` instead of the block's completion value
+  (`eval("{ 1; }")` is `1` natively). `$$frameValue` only tracks
+  top-level expression statements. Fixing it means changing how blocks
+  propagate completion values through the patcher — real regression
+  risk for a corner case, so it stays a known limitation for now.
+
+### Hardening (before the GitHub push)
+- **Stage options were silently dropped.** The constructor took `opt`
+  and stored `{}`; the `StageOptions` in `index.d.ts` promised
+  `ecmaVersion` / `allowHashBang` that did nothing. `patch()` now
+  reads `this.options`, and `trace()` accepts `stageOptions` and passes
+  them through. Covered by tests in both `modern.test.js` and
+  `trace.test.js`.
+- **`traceAsync` rejections lost the trace.** The sync path attached
+  prior events to a thrown error, but an async rejection carried none
+  of them. The rejection handler now attaches `err.events` too.
+- **ESM bundle renamed to `.mjs`.** `import Iroh from "iroh"` worked
+  but Node warned that `dist/iroh-node.es.js` "does not parse as
+  CommonJS" and reparsed it as ESM. The bundle is now
+  `dist/iroh-node.es.mjs` (`package.json` `module` + `exports`
+  updated); the warning is gone, verified by a self-reference ESM test
+  (`tests/esm.test.mjs`).
+- **README** footer and changelog line now mention 0.6.0;
+  `package-lock.json` regenerated (was still 0.5.1).
+- Browser bundle smoke-tested in a `vm` with a fake `window`: loads,
+  `VERSION` is 0.6.0, `trace()` works.
 
 ### Tests
-- 68 tests now: 56 Node (16 behaviour + 15 fixtures + 8 CLI + 8 modern
-  syntax + 9 trace) + 7 Python + 5 C++, plus the TypeScript type test.
-  `npm test` runs all three suites; `npm run test:types` checks the
-  types.
+- 73 tests now: 61 Node (16 behaviour + 15 fixtures + 8 CLI + 9 modern
+  syntax + 12 trace + 1 ESM) + 7 Python + 5 C++, plus the TypeScript
+  type test. `npm test` runs all three suites; `npm run test:types`
+  checks the types.
 
 ## 0.5.1 — Spazzed-up README (19 Nov 2026)
 

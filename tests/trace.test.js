@@ -74,6 +74,40 @@ test("traceAsync() awaits the program and includes async events", async () => {
   assert.equal(events.filter((e) => e.event === "AWAIT").length, 1);
 });
 
+test("traceAsync() attaches events to an async rejection", async () => {
+  let caught = null;
+  try {
+    await Iroh.traceAsync(
+      "async function f() { await Promise.resolve(); throw new Error('async-boom'); } f();",
+      { events: ["AWAIT"] }
+    );
+  } catch (e) {
+    caught = e;
+  }
+  assert.ok(caught);
+  assert.equal(caught.message, "async-boom");
+  assert.ok(Array.isArray(caught.events));
+  assert.equal(caught.events.filter((e) => e.event === "AWAIT").length, 1);
+});
+
+test("trace() with an empty events list collects nothing but still runs", () => {
+  let { events, result } = Iroh.trace("let x = 1 + 1; x;", { events: [] });
+  assert.deepEqual(events, []);
+  assert.equal(result, 2);
+});
+
+test("trace() passes stageOptions to the Stage", () => {
+  // `using` needs the latest parser: with ecmaVersion 2022 it is a
+  // parse error, with the default it traces.
+  let code = "function f() { using x = { [Symbol.dispose]() {} }; return 1; } f();";
+  assert.throws(
+    () => Iroh.trace(code, { stageOptions: { ecmaVersion: 2022 } }),
+    { name: "SyntaxError" }
+  );
+  let { result } = Iroh.trace(code);
+  assert.equal(result, 1);
+});
+
 test("eventToJSON matches the shape trace() returns", () => {
   let stage = new Iroh.Stage("let x = 1;");
   let line = null;

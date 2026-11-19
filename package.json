@@ -11,14 +11,14 @@
     "url": "git+https://github.com/andyle777/IrohRedux.git"
   },
   "main": "dist/iroh-node.js",
-  "module": "dist/iroh-node.es.js",
+  "module": "dist/iroh-node.es.mjs",
   "browser": "dist/iroh-browser.js",
   "types": "index.d.ts",
   "exports": {
     ".": {
       "types": "./index.d.ts",
       "browser": "./dist/iroh-browser.js",
-      "import": "./dist/iroh-node.es.js",
+      "import": "./dist/iroh-node.es.mjs",
       "require": "./dist/iroh-node.js"
     },
     "./cli": "./cli/iroh.js",

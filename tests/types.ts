@@ -14,8 +14,12 @@ const opts = Iroh.trace("let x = 1; x;", {
     const n: string | undefined = e.name;
     void n;
   },
+  stageOptions: { ecmaVersion: "latest", allowHashBang: true },
 });
 void opts;
+
+const staged = new Iroh.Stage("let x = 1;", { ecmaVersion: 2022 });
+void staged;
 
 async function main(): Promise<void> {
   const asyncOut = await Iroh.traceAsync(
