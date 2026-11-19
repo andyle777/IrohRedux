@@ -2,12 +2,12 @@
 
 <p align="center">
   <a href="https://github.com/andyle777/IrohRedux/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/version-0.7.0-orange.svg?style=flat-square" alt="Version 0.7.0" />
+  <img src="https://img.shields.io/badge/version-0.8.0-orange.svg?style=flat-square" alt="Version 0.8.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D%2018-339933.svg?style=flat-square" alt="Node >= 18" />
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-120%20passing-brightgreen.svg?style=flat-square" alt="120 tests passing" />
+  <img src="https://img.shields.io/badge/tests-206%20passing-brightgreen.svg?style=flat-square" alt="206 tests passing" />
 </p>
 
 <p align="center">
@@ -153,6 +153,58 @@ auto trace = client.run("[1, 2, 3].map(v => v * 2);", {"VAR"});
 
 Header-only C++17, with a minimal JSON parser built in — see [`cpp/`](cpp/).
 
+### Analyze the trace — and translate the program (0.8.0)
+
+A trace is data. `Iroh.analyze()` turns it into findings and a scorecard
+for the toolkit's own run — deterministic rules, no LLM, no network:
+
+```js
+const { events, result, analysis } = Iroh.analyzeTrace(`
+  let s = 0;
+  for (let i = 0; i < 150; i++) { s += i; }
+  s;
+`);
+// analysis.findings: [{ code: "HOT_LOOP", severity: "warning",
+//   message: "Loop entered 150 times (threshold 100).",
+//   evidence: { hash: 1, kind: "ForStatement", iterations: 150, tests: 151, threshold: 100 },
+//   neuron: { label: "hot", score: 0.0259 } }, ...]
+// analysis.scores.coverage: { fired: 9, total: 30, value: 0.3, ... }
+// analysis.scores.fidelity: { observedRegions, missingRegions,
+//   blindSpotStatements, totalRegions, value, knownBlindSpots }
+// analysis.scores.overhead: { events, statements, regions,
+//   eventsPerStatement, eventsPerRegion, value, denominator: "statements" }
+```
+
+Finding codes: `HOT_LOOP`, `ZERO_ITERATION_LOOP`, `DEEP_RECURSION`,
+`REPEATED_SEQUENCE`, `ONE_SIDED_BRANCH`, `THROWING_PATH` — every finding
+cites its evidence (counts, names, hashes). The neuron is a tiny
+perceptron in pure JS (`Iroh.classifyWindow(events)` returns the label,
+score, and the five feature values, so it is inspectable, not a black
+box). The CLI appends the same analysis with `--analyze`. See
+`API.md` for the full scorecard shape.
+
+The same trace evidence also drives the hybrid translation engine —
+static AST plus the runtime types, values, and branch outcomes the trace
+saw. JavaScript goes to Python or C++; Python and C++ come back to
+JavaScript (static-only — there is no tracer for those languages, and the
+report says so):
+
+```js
+const { code, report } = Iroh.translate(
+  "function add(a, b) { return a + b; } console.log(add(2, 3));",
+  { to: "python" }
+);
+// code: "def add(a, b):\n    return a + b\n\nprint(add(2, 3))\n"
+// report: { ok: true, from: "javascript", to: "python", staticOnly: false,
+//   clean: [...], assumptions: [...], unsupported: [], notes: [...] }
+```
+
+Unsupported constructs are reported in `report.unsupported`, never
+silently mistranslated — the emitted code raises at that point, loudly.
+The CLI translates too: `node cli/iroh.js program.js --translate python`
+(one `{"type":"translation",...}` line, exit 1 when anything was
+unsupported), and `--from` is inferred from `.py` / `.cpp` files.
+
 ### What you get
 
 - **Every event, live.** Calls, ifs, loops, assignments, allocations, awaits —
@@ -163,7 +215,15 @@ Header-only C++17, with a minimal JSON parser built in — see [`cpp/`](cpp/).
   coalescing, private fields, async/await — all traced, all tested.
 - **Three languages, one protocol.** JavaScript, Python, and C++ all consume
   the same JSON event stream.
-- **No surprises.** 120 tests (108 Node + 7 Python + 5 C++), `npm test` runs
+- **Analysis, not just events.** Deterministic findings (hot loops, deep
+  recursion, one-sided branches, throwing paths) plus a toolkit scorecard
+  with denominators on every number — and a tiny inspectable perceptron
+  that classifies a trace window hot vs normal.
+- **Translation, both ways.** JavaScript to Python and C++, Python and C++
+  back to JavaScript — hybrid (AST + trace evidence) out of JavaScript,
+  static-only coming back, with an honest report of what translated, what
+  needed an assumption, and what could not be translated.
+- **No surprises.** 206 tests (194 Node + 7 Python + 5 C++), `npm test` runs
   them all, plus a TypeScript type test (`npm run test:types`). Zero runtime
   dependencies in the engine beyond Acorn, astring, and acorn-walk.
 
@@ -180,7 +240,7 @@ git clone https://github.com/andyle777/IrohRedux.git
 cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
-npm test            # 120 tests: 108 Node + 7 Python + 5 C++
+npm test            # 206 tests: 194 Node + 7 Python + 5 C++
 ```
 
 The Python client installs with `pip install -e python/`; the C++ client is
@@ -190,11 +250,12 @@ a single header — just `#include "iroh.hpp"`.
 
 - [Getting started](//github.com/andyle777/IrohRedux/blob/master/GETTING_STARTED.md) — worked examples you can run locally.
 - [API](//github.com/andyle777/IrohRedux/blob/master/API.md) — the full listener and event reference, including `Iroh.assert` / `Iroh.log` and the `INSTR` / `CATEGORY` / `OP` label tables.
-- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, and 0.7.0.
+- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, 0.7.0, and 0.8.0.
 
 ---
 
 *IrohRedux is a fork of Felix Maier's [Iroh](https://github.com/maierfelix/Iroh)
 0.3.0 (2018), fixed and extended. The core idea is his; the 0.4.0 fixes, the
 0.5.0 CLI and polyglot clients, the 0.5.1 polish, the 0.6.0 syntax and
-modern SDK, and the 0.7.0 modules, top-level await, and decorators are the fork's.*
+modern SDK, and the 0.7.0 modules, top-level await, and decorators, and
+the 0.8.0 analysis layer and translation engine are the fork's.*

@@ -1,5 +1,160 @@
 # Changelog
 
+## 0.8.0 — AI analysis layer and hybrid translation engine (20 Nov 2026)
+
+The machine-learning / neuron / AI-input work, plus the translation
+engine that grew out of it. All 120 prior tests still pass; the suite
+is now 206 tests (194 Node + 7 Python + 5 C++).
+
+### Analysis layer — `Iroh.analyze(events, options)` (new `src/analyze.js`)
+
+- Feed a trace's events in, get `{ findings, scores, summary, neuron }`
+  out. Deterministic rules over the events — no LLM, no network, no
+  randomness: the same events always give the same analysis. Thresholds
+  live in `options` with documented defaults.
+- Finding codes: `HOT_LOOP` (a loop at/above `hotLoopThreshold`, default
+  100 iterations — counted from `LOOP_TEST` events with value `true`,
+  because `LOOP_ENTER` fires once per loop entry, not per iteration),
+  `ZERO_ITERATION_LOOP` (a loop tested but never entered),
+  `DEEP_RECURSION` (call depth at/above `deepRecursionThreshold`,
+  default 20), `REPEATED_SEQUENCE` (the same call sequence repeating
+  at/above `repeatSequenceMinOccurrences`, default 3 — call-name n-grams
+  of length 2..4, most frequent wins), `ONE_SIDED_BRANCH` (an if
+  evaluated at least `oneSidedMinTests` times, default 2, always the
+  same side), `THROWING_PATH` (exceptions caught during the trace —
+  uncaught exceptions end the trace itself and are reported by the
+  caller, since `trace()` throws with the events attached). Every
+  finding cites its evidence (counts, names, hashes) — no finding
+  without evidence.
+- Toolkit scorecard (`scores`), every number with its denominator
+  stated: `coverage` (event categories fired vs total, as
+  `fired`/`total`); `fidelity` (regions observed vs total — observed is
+  distinct event hashes, missing is regions the trace shows were never
+  entered; the known blind spots, private-field and destructuring
+  assignments, are counted from `options.source` when given and listed
+  as uncounted — null, not zero — when it is not, never hidden);
+  `overhead` (events per statement when the source is given, else
+  events per region, with `denominator` saying which).
+- Convenience: `Iroh.analyzeTrace(code, options)` (trace then analyze in
+  one call; `options.analyze.source` defaults to the code),
+  `analyzeTraceAsync()` (via `traceAsync()`, top-level await works),
+  `analyzeModule()` (via `traceModule()`, Node only).
+- CLI: `--analyze` appends a final `{"type":"analysis",...}` line after
+  the result line, same shape `analyze()` returns. (With an `--events`
+  filter, coverage scores the filter — the analysis note says so.)
+  Python/C++ clients get this via the CLI flag; no client changes.
+
+### Neuron layer — a tiny perceptron in pure JS (new `src/neurons.js`)
+
+- Features from a trace window, all normalized to [0, 1]: call count,
+  max call depth, repeat rate, branch imbalance, event-type mix.
+  `Iroh.extractFeatures(events)` computes them;
+  `Iroh.classifyWindow(events)` returns `{ label, score, features }` —
+  label `"hot"` or `"normal"`, the score, and the feature values, so the
+  classification is inspectable, never a black box.
+- The default weights were trained offline on 200 synthetic labeled
+  traces (deterministic LCG, seeds 12345/999): converged at epoch 1,
+  train 200/200, held-out 100/100. They are frozen constants — no
+  randomness at runtime. `Iroh.createPerceptron(weights, bias)` builds
+  a perceptron with a deterministic `train(samples, epochs,
+  learningRate)` for re-training or checking in tests.
+- The perceptron classifies hotness only, and the analyzer says so:
+  hotness findings (`HOT_LOOP`, `DEEP_RECURSION`, `REPEATED_SEQUENCE`)
+  carry `neuron: { label, score }`; `ONE_SIDED_BRANCH`,
+  `ZERO_ITERATION_LOOP` and `THROWING_PATH` carry `neuron: null` with a
+  `neuronNote`, rather than a forced label.
+
+### Translation engine — `Iroh.translate(code, options)` (new `src/translate.js`)
+
+- Hybrid, both directions: JavaScript -> Python / C++ AND Python ->
+  JavaScript / C++ -> JavaScript. `Iroh.translate(code, { from, to })`
+  returns `{ code, report }` where `report` is `{ ok, from, to,
+  staticOnly, clean, assumptions, unsupported, notes }`.
+- "Hybrid" means static + dynamic: the JavaScript-out leg runs the
+  program through the tracer first and uses the events to resolve what
+  static analysis cannot — runtime types (C++ parameter and return
+  types come from the first call's arguments / return value), values,
+  which branches actually fired. Assumptions cite their trace evidence
+  (e.g. `FUNCTION_CALL 'add' arguments [2,3]`). The reverse legs are
+  static-only — there is no tracer for Python or C++, and the report
+  says so (`staticOnly: true`).
+- Python -> JavaScript parses with Python's own `ast` module: a small
+  stdlib-only Python helper (embedded in the source) is run through
+  `python3` and emits the AST as JSON; no hand-rolled Python parser.
+  C++ -> JavaScript uses a scoped subset parser written for this
+  engine. v1 scope, both directions: functions, arithmetic, loops,
+  conditionals, arrays (Python lists / C++ vectors), strings, console
+  output (`console.log` / `print` / `std::cout`). No classes, no
+  closures-as-objects, no async.
+- Unsupported constructs are reported in `report.unsupported`, never
+  silently mistranslated: the emitted code raises/throws at that point,
+  loudly. `options.types` supplies C++ types the trace could not
+  (`{ functions: { add: { params: ["int", "int"], returns: "int" } } }`).
+- The JS-out leg runs the program through the tracer for evidence, and
+  its `console.log` output is silenced while it runs — `translate()` is
+  a pure function with no visible side effects. (The traced program's
+  `console.log` runs natively — the instrumenter does not rewrite it —
+  so the global `console.log` is swapped for the duration, not just
+  `Iroh.log`.)
+- `Iroh.translateAsync(code, options)` is the async version — in the
+  ESM build the Python leg loads `child_process` by dynamic import (the
+  sync version needs the CJS build's `require` for that leg); in a
+  browser the Python leg throws a clear error and the C++ leg works.
+- CLI: `--translate python|cpp|javascript` prints one
+  `{"type":"translation",...}` line instead of tracing (exit 1 when
+  anything was unsupported); `--from` defaults by file extension (`.py`
+  -> python, `.cpp`/`.cc`/`.cxx` -> cpp, else javascript); `--translate`
+  takes precedence over `--events`/`--module`.
+
+### Known limitations (0.8.0)
+
+- Analysis: `HOT_LOOP` counts true `LOOP_TEST` events, so a loop whose
+  test has side effects (or a `do...while`, whose first iteration has no
+  test) counts slightly differently from a plain iteration count — the
+  evidence states the test count, so the number is checkable.
+  `REPEATED_SEQUENCE` looks at call names only, not arguments — two
+  different calls to the same function in the same pattern read as one
+  sequence. `THROWING_PATH` sees caught exceptions only; an uncaught
+  exception is the caller's, not the analyzer's. The perceptron is a
+  heuristic, not a verdict — its weights were trained on synthetic
+  traces, not on real programs, and it answers one question (hot vs
+  normal) only.
+- Translation: C++ parameter types come from the FIRST call in the
+  trace — a function called later with different argument types would
+  break the translation, and the report says so. Functions never called
+  in the trace need a type hint, or they are reported unsupported. A
+  `Math.round` in Python is emulated as `math.floor(x + 0.5)` (Python's
+  `round()` is banker's rounding); string concatenation of a double in
+  C++ is refused outright (`std::to_string` prints 6 decimals, unlike
+  JS). Python `%` and JS `%` differ for negative operands — the report
+  notes it. The C++ subset parser rejects anything outside v1 with a
+  clear message rather than guessing. The Python leg needs `python3` on
+  `PATH` (and the CJS build, or `translateAsync`, for the sync path).
+- The `translate()` evidence trace runs the program: a program with
+  side effects (writes, network) performs them during translation, and
+  a program that never terminates never translates. That is the price
+  of the hybrid leg; the report notes when the trace was unavailable
+  and the translation falls back to static inference.
+
+### Tests
+
+- `tests/analyze.test.js` (18 tests): every finding code has a trace
+  that triggers it and one that does not; scorecard denominators;
+  perceptron determinism (same input, same output, twice) and learning
+  (a fresh perceptron converges on a synthetic task); the CLI
+  `--analyze` line.
+- `tests/translate.test.js` (68 tests): for every covered construct,
+  the translated Python runs under `python3` and the translated C++
+  compiles with `g++` and runs, both producing the same output as the
+  original JS — and the translated JavaScript runs under `node` and
+  matches the original Python/C++ program's output. Unsupported
+  constructs assert `report.ok === false` with the construct listed;
+  `staticOnly` is true for the reverse legs, false for the JS-out legs.
+  The Python and C++ legs are skipped (not failed) when their
+  toolchain is absent.
+- Full suite: 206 tests (194 Node + 7 Python + 5 C++), all passing,
+  plus the TypeScript type test (`npm run test:types`).
+
 ## 0.7.0 — Modules, top-level await, and decorators (20 Nov 2026)
 
 The option-C work from the 0.6.0 planning, plus the two features that

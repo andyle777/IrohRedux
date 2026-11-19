@@ -6,6 +6,9 @@ import Frame from "./frame";
 
 import * as _utils from "./utils";
 import * as _setup from "./setup";
+import * as _analyze from "./analyze";
+import * as _neurons from "./neurons";
+import * as _translate from "./translate";
 
 class Iroh {
   constructor() {
@@ -29,6 +32,9 @@ class Iroh {
 // link methods to main class
 extend(Iroh, _utils);
 extend(Iroh, _setup);
+extend(Iroh, _analyze);
+extend(Iroh, _neurons);
+extend(Iroh, _translate);
 
 const iroh = new Iroh();
 

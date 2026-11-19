@@ -6,11 +6,24 @@
 //   node cli/iroh.js program.js [--events CALL,IF,VAR]
 //   node cli/iroh.js program.mjs [--module] [--events CALL,IF,VAR]
 //   cat program.js | node cli/iroh.js [--events CALL]
+//   node cli/iroh.js program.js --analyze
+//   node cli/iroh.js program.js --translate python
+//   node cli/iroh.js program.py --translate javascript
 //
 // Output (stdout, JSONL):
 //   {"type":"event","event":"CALL","category":"CALL","trigger":"before",
 //    "hash":12,"indent":0,"name":"factorial","arguments":[[3]],"external":false}
 //   {"type":"result","value":6}
+//   {"type":"analysis","findings":[...],"scores":{...},"summary":{...},"neuron":{...}}
+//   {"type":"translation","from":"javascript","to":"python","code":"...","report":{...}}
+//
+// --analyze appends an analysis line (see src/analyze.js) after the
+// result line. --translate skips tracing and translates the program
+// instead (see src/translate.js); it takes precedence over --events
+// and --module, and exits 1 when the report lists anything
+// unsupported. --from defaults by file extension (.py -> python,
+// .cpp/.cc/.cxx -> cpp, anything else -> javascript); stdin defaults
+// to javascript.
 //
 // Errors are a final {"type":"error",...} line and a non-zero exit code.
 // Use --no-result to skip the result line. Requires the built dist
@@ -49,13 +62,18 @@ function printLine(obj) {
 
 function printUsage() {
   process.stderr.write(
-    "Usage: iroh <file.js> [--events CALL,IF,VAR] [--no-result]\n" +
+    "Usage: iroh <file.js> [--events CALL,IF,VAR] [--no-result] [--analyze]\n" +
     "       iroh <file.mjs> [--module] [--events CALL,IF,VAR]\n" +
     "       cat file.js | iroh [--events CALL,IF,VAR]\n" +
+    "       iroh <file.js> --translate python|cpp [--from javascript]\n" +
+    "       iroh <file.py|.cpp> --translate javascript [--from python|cpp]\n" +
     "Events are streamed as JSON lines on stdout, then a result line.\n" +
     "Use --events ALL (default) or a comma list of categories, e.g. CALL.\n" +
     ".mjs files (or --module) run as ES modules through Iroh.traceModule();\n" +
-    "everything else runs as a script through Iroh.traceAsync().\n"
+    "everything else runs as a script through Iroh.traceAsync().\n" +
+    "--analyze appends an analysis line after the result line.\n" +
+    "--translate prints one translation line instead of tracing; --from\n" +
+    "defaults by file extension (.py -> python, .cpp/.cc/.cxx -> cpp).\n"
   );
 }
 
@@ -65,6 +83,9 @@ async function main() {
   let eventsArg = "ALL";
   let wantResult = true;
   let moduleFlag = false;
+  let analyzeFlag = false;
+  let translateTo = null;
+  let fromArg = null;
   for (let ii = 0; ii < args.length; ++ii) {
     let arg = args[ii];
     if (arg === "--events") {
@@ -81,6 +102,18 @@ async function main() {
       wantResult = false;
     } else if (arg === "--module") {
       moduleFlag = true;
+    } else if (arg === "--analyze") {
+      analyzeFlag = true;
+    } else if (arg === "--translate") {
+      translateTo = args[++ii];
+      if (translateTo === void 0) { printUsage(); process.exitCode = 2; return; }
+    } else if (arg.startsWith("--translate=")) {
+      translateTo = arg.slice("--translate=".length);
+    } else if (arg === "--from") {
+      fromArg = args[++ii];
+      if (fromArg === void 0) { printUsage(); process.exitCode = 2; return; }
+    } else if (arg.startsWith("--from=")) {
+      fromArg = arg.slice("--from=".length);
     } else if (arg === "--help" || arg === "-h") {
       printUsage();
       return;
@@ -113,6 +146,29 @@ async function main() {
   } else {
     printUsage();
     process.exitCode = 2;
+    return;
+  }
+
+  // Translate mode takes precedence over tracing: no events, no
+  // result line — one translation line, exit 1 when anything was
+  // unsupported.
+  if (translateTo !== null) {
+    let from = fromArg;
+    if (!from) {
+      if (file !== null && file.endsWith(".py")) from = "python";
+      else if (file !== null && /\.(cpp|cc|cxx)$/.test(file)) from = "cpp";
+      else from = "javascript";
+    }
+    let out;
+    try {
+      out = Iroh.translate(code, { from: from, to: translateTo });
+    } catch (e) {
+      printLine(errorLine(e));
+      process.exitCode = 1;
+      return;
+    }
+    printLine({ type: "translation", from: from, to: translateTo, code: out.code, report: out.report });
+    process.exitCode = out.report.ok ? 0 : 1;
     return;
   }
 
@@ -158,6 +214,14 @@ async function main() {
   }
   if (wantResult) {
     printLine({ type: "result", value: Iroh.safeValue(out.result, 4, new Set()) });
+  }
+  if (analyzeFlag) {
+    // The analysis runs over the collected events, with the source
+    // attached so the fidelity score can count its blind spots.
+    // (With an --events filter, coverage scores the filter — the
+    // analysis note says so.)
+    let analysis = Iroh.analyze(out.events || [], { source: code });
+    printLine(Object.assign({ type: "analysis" }, analysis));
   }
 }
 

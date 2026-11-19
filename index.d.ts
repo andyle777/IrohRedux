@@ -1,4 +1,4 @@
-// TypeScript definitions for IrohRedux 0.7.0.
+// TypeScript definitions for IrohRedux 0.8.0.
 //
 //   import Iroh from "iroh";
 //   const { events, result } = Iroh.trace("factorial(3);", { events: ["CALL"] });
@@ -154,6 +154,211 @@ export class Stage {
   symbols: Record<string, unknown>;
 }
 
+// --- 0.8.0: AI analysis layer (src/analyze.js, src/neurons.js) -----------
+
+/** The five trace-window features, all normalized to [0, 1]. */
+export interface TraceFeatures {
+  /** Call volume: min(FUNCTION_CALL count / 50, 1). */
+  calls: number;
+  /** Call depth: min(max FUNCTION_ENTER indent / 20, 1). */
+  depth: number;
+  /** Repetition: 1 - distinct (event, hash) pairs / total events. */
+  repeat: number;
+  /** Branch imbalance: |true - false| / (true + false) over IF_TEST. */
+  imbalance: number;
+  /** Busy share: (CALL + LOOP events) / total events. */
+  mix: number;
+}
+
+/** A perceptron classification: label, score, and the features it used. */
+export interface NeuronClassification {
+  /** "hot" (a busy, repetitive, deeply-nested run) or "normal". */
+  label: "hot" | "normal";
+  /** dot(weights, features) + bias, rounded to 4 decimals. */
+  score: number;
+  /** The feature values — always visible, never a black box. */
+  features: TraceFeatures;
+}
+
+/** A single perceptron (see createPerceptron). */
+export interface Perceptron {
+  /** The five weights, in FEATURE_NAMES order. */
+  weights: number[];
+  bias: number;
+  predict(features: TraceFeatures | number[]): { score: number; label: "hot" | "normal" };
+  /**
+   * Classic perceptron update over the samples in order
+   * (deterministic — no shuffling). A sample is
+   * { x: [n, n, n, n, n] | TraceFeatures, y: 0 | 1 }.
+   * Returns the number of updates made.
+   */
+  train(samples: Array<{ x: TraceFeatures | number[]; y: 0 | 1 }>, epochs?: number, learningRate?: number): number;
+}
+
+/** Finding codes the analyzer emits. */
+export type FindingCode =
+  | "HOT_LOOP"
+  | "ZERO_ITERATION_LOOP"
+  | "DEEP_RECURSION"
+  | "REPEATED_SEQUENCE"
+  | "ONE_SIDED_BRANCH"
+  | "THROWING_PATH";
+
+/** One finding: every finding cites its evidence. */
+export interface AnalysisFinding {
+  code: FindingCode;
+  severity: "warning" | "info";
+  message: string;
+  /** Counts, names and hashes — never empty. */
+  evidence: Record<string, unknown>;
+  /**
+   * The neuron classification, for hotness findings (HOT_LOOP,
+   * DEEP_RECURSION, REPEATED_SEQUENCE); null for the others — the
+   * perceptron classifies hot vs normal only.
+   */
+  neuron: { label: "hot" | "normal"; score: number } | null;
+  /** Present when neuron is null: why this finding has no label. */
+  neuronNote?: string;
+}
+
+export interface AnalyzeOptions {
+  /** A loop is hot at this many iterations (default 100). */
+  hotLoopThreshold?: number;
+  /** Call depth is deep at this threshold (default 20). */
+  deepRecursionThreshold?: number;
+  /** A call sequence repeats at this many occurrences (default 3). */
+  repeatSequenceMinOccurrences?: number;
+  /** An if is one-sided after this many same-side tests (default 2). */
+  oneSidedMinTests?: number;
+  /**
+   * The traced program's source, for the fidelity score's blind-spot
+   * count and the overhead score's per-statement ratio. analyzeTrace()
+   * passes the code automatically; without it, blindSpotStatements
+   * is null (uncounted, not zero) and overhead is per-region.
+   */
+  source?: string;
+}
+
+export interface AnalysisScores {
+  coverage: {
+    /** Event categories fired. */
+    fired: number;
+    /** Total categories in CATEGORY. */
+    total: number;
+    /** fired / total, rounded to 4 decimals. */
+    value: number;
+    firedCategories: string[];
+    missingCategories: string[];
+    note: string;
+  };
+  fidelity: {
+    /** Distinct event hashes observed. */
+    observedRegions: number;
+    /** Regions the trace shows were never entered. */
+    missingRegions: number;
+    /** Known blind-spot statements in the source, or null without source. */
+    blindSpotStatements: number | null;
+    /** observedRegions + missingRegions + blind spots. */
+    totalRegions: number;
+    /** observedRegions / totalRegions, rounded to 4 decimals. */
+    value: number;
+    knownBlindSpots: Array<{ kind: string; note: string }>;
+  };
+  overhead: {
+    /** Total events in the trace. */
+    events: number;
+    /** Statements in the source, or null without source. */
+    statements: number | null;
+    /** Distinct regions observed. */
+    regions: number;
+    /** events / statements, or null without source. */
+    eventsPerStatement: number | null;
+    /** events / regions. */
+    eventsPerRegion: number;
+    /** eventsPerStatement when available, else eventsPerRegion. */
+    value: number;
+    /** Which ratio `value` is: "statements" or "regions". */
+    denominator: "statements" | "regions";
+  };
+}
+
+export interface AnalysisSummary {
+  events: number;
+  findings: number;
+  warnings: number;
+  infos: number;
+  maxCallDepth: number;
+  distinctRegions: number;
+}
+
+export interface AnalysisResult {
+  findings: AnalysisFinding[];
+  scores: AnalysisScores;
+  summary: AnalysisSummary;
+  /** The whole-trace window classification. */
+  neuron: NeuronClassification;
+}
+
+export interface AnalyzeTraceOptions extends TraceOptions {
+  /** Thresholds / source override — `source` defaults to the code. */
+  analyze?: AnalyzeOptions;
+}
+
+export interface AnalyzeTraceResult extends TraceResult {
+  analysis: AnalysisResult;
+}
+
+export interface AnalyzeModuleResult extends TraceModuleResult {
+  analysis: AnalysisResult;
+}
+
+// --- 0.8.0: hybrid translation engine (src/translate.js) -----------------
+
+export type TranslateFrom = "javascript" | "python" | "cpp";
+export type TranslateTo = "python" | "cpp" | "javascript";
+
+export interface TranslateTypeHints {
+  functions?: Record<string, { params?: string[]; returns?: string }>;
+  variables?: Record<string, string>;
+}
+
+export interface TranslateOptions {
+  /** Source language (default "javascript"). */
+  from?: TranslateFrom;
+  /** Target language. */
+  to: TranslateTo;
+  /**
+   * C++ types the trace could not supply, e.g.
+   * { functions: { add: { params: ["int", "int"], returns: "int" } } }.
+   */
+  types?: TranslateTypeHints;
+}
+
+export interface TranslateReport {
+  /** False when anything was unsupported. */
+  ok: boolean;
+  from: TranslateFrom;
+  to: TranslateTo;
+  /**
+   * True for the reverse legs (Python/C++ -> JavaScript): there is no
+   * tracer for those languages, so the translation is static-only.
+   */
+  staticOnly: boolean;
+  /** What translated cleanly: { construct, count, detail }. */
+  clean: Array<{ construct: string; count: number; detail: string }>;
+  /** What needed an assumption, with the trace evidence cited. */
+  assumptions: Array<{ what: string; evidence: string }>;
+  /** What could not be translated: { construct, message }. */
+  unsupported: Array<{ construct: string; message: string }>;
+  notes: string[];
+}
+
+export interface TranslateResult {
+  /** The translated program. */
+  code: string;
+  report: TranslateReport;
+}
+
 export interface IrohAPI {
   // --- Categories (numbers; use them with addListener) ---
   readonly THIS: number;
@@ -187,7 +392,7 @@ export interface IrohAPI {
   readonly CLASS: number;
   readonly AWAIT: number;
 
-  /** The library version, e.g. "0.7.0". */
+  /** The library version, e.g. "0.8.0". */
   readonly VERSION: string;
 
   /** Instruction numbers, keyed by name (e.g. INSTR.FUNCTION_CALL). */
@@ -224,6 +429,53 @@ export interface IrohAPI {
    * trace()/traceAsync() reject module code, pointing here.
    */
   traceModule(code: string, options?: TraceModuleOptions): Promise<TraceModuleResult>;
+
+  /**
+   * AI analysis layer (0.8.0, deterministic — no LLM, no network).
+   * Analyze a trace's events: deterministic findings over the
+   * events, a toolkit scorecard with denominators on every number,
+   * and the neuron's window classification. Thresholds in `options`
+   * (see AnalyzeOptions); findings are HOT_LOOP,
+   * ZERO_ITERATION_LOOP, DEEP_RECURSION, REPEATED_SEQUENCE,
+   * ONE_SIDED_BRANCH and THROWING_PATH, each citing its evidence.
+   */
+  analyze(events: TraceEvent[], options?: AnalyzeOptions): AnalysisResult;
+  /** Trace then analyze in one call; `options.analyze.source` defaults to the code. */
+  analyzeTrace(code: string, options?: AnalyzeTraceOptions): AnalyzeTraceResult;
+  /** Async version of analyzeTrace(), via traceAsync() (top-level await works). */
+  analyzeTraceAsync(code: string, options?: AnalyzeTraceOptions): Promise<AnalyzeTraceResult>;
+  /** Module version of analyzeTrace(), via traceModule(). Node only. */
+  analyzeModule(code: string, options?: AnalyzeTraceOptions): Promise<AnalyzeModuleResult>;
+
+  /**
+   * The neuron layer (0.8.0): a tiny perceptron in pure JS.
+   * extractFeatures() computes the five trace-window features;
+   * classifyWindow() classifies a trace as "hot" or "normal" and
+   * returns the label, score and features; createPerceptron() builds
+   * a perceptron (default: the trained weights) that can be
+   * re-trained deterministically in tests.
+   */
+  extractFeatures(events: TraceEvent[]): TraceFeatures;
+  classifyWindow(events: TraceEvent[]): NeuronClassification;
+  createPerceptron(weights?: number[], bias?: number): Perceptron;
+
+  /**
+   * Hybrid translation engine (0.8.0): JavaScript -> Python / C++
+   * (static AST + trace evidence), Python -> JavaScript and C++ ->
+   * JavaScript (static-only — there is no tracer for those languages,
+   * and the report says so). Returns { code, report }; unsupported
+   * constructs are reported in the report, never silently
+   * mistranslated. The JS-out leg runs the program through the
+   * tracer for evidence — its console.log output is silenced while
+   * it runs, so translate() has no visible side effects.
+   */
+  translate(code: string, options: TranslateOptions): TranslateResult;
+  /**
+   * Async version of translate(). In the ESM build, the Python leg
+   * loads child_process by dynamic import (the sync version needs
+   * the CJS build's require for that leg).
+   */
+  translateAsync(code: string, options: TranslateOptions): Promise<TranslateResult>;
 
   /** Turn a live RuntimeEvent into a plain, JSON-safe object. */
   eventToJSON(event: RuntimeEvent, trigger: Trigger): TraceEvent;

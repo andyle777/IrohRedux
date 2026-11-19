@@ -58,6 +58,84 @@ directory and only bare or absolute imports resolve. The temp file is
 deleted after the trace settles. `import.meta.url` is the temp file's
 URL, not the caller's. Throws a clear error in the browser.
 
+``analyze(events, options)``: AI analysis layer (0.8.0, deterministic —
+no LLM, no network, no randomness). Takes a trace's events array (what
+`trace()` / `traceModule()` return, and what the CLI streams) and returns
+`{ findings, scores, summary, neuron }`. Findings are `{ code, severity,
+message, evidence, neuron }` from deterministic rules — every finding
+cites its evidence (counts, names, hashes), no finding without evidence.
+Codes: `HOT_LOOP` (a loop at/above `hotLoopThreshold`, default 100
+iterations), `ZERO_ITERATION_LOOP` (a loop tested but never entered),
+`DEEP_RECURSION` (call depth at/above `deepRecursionThreshold`, default
+20), `REPEATED_SEQUENCE` (the same call sequence repeating at/above
+`repeatSequenceMinOccurrences`, default 3), `ONE_SIDED_BRANCH` (an if
+evaluated at least `oneSidedMinTests` times, default 2, always the same
+side), `THROWING_PATH` (exceptions caught during the trace — uncaught
+exceptions end the trace itself and are reported by the caller, since
+`trace()` throws with the events attached). The hotness findings
+(`HOT_LOOP`, `DEEP_RECURSION`, `REPEATED_SEQUENCE`) carry a `neuron`
+classification `{ label, score }`; the others carry `neuron: null` and a
+`neuronNote` — the perceptron classifies hot vs normal only, so it is
+not forced onto findings it does not fit. Scores: `coverage` (event
+categories fired vs total, as `fired` / `total` with `value` =
+fired/total), `fidelity` (regions observed vs total, with known blind
+spots — private-field and destructuring assignments produce no `ASSIGN`
+event, so they are counted from `options.source` when given and listed
+as uncounted, never hidden, when it is not), `overhead` (events per
+statement when the source is given, else events per region, with
+`denominator` saying which). `summary` counts the events, findings,
+warnings, infos, max call depth, and distinct regions. `neuron` is the
+whole-trace window classification from `classifyWindow()`.
+
+``analyzeTrace(code, options)``: Trace then analyze in one call (0.8.0).
+Returns `{ events, result, analysis }`; `options.analyze` holds the
+analyze thresholds, and `analyze.source` defaults to the code being
+traced. `analyzeTraceAsync(code, options)` is the async version, via
+`traceAsync()` (top-level await works); `analyzeModule(code, options)`
+is the module version, via `traceModule()` (Node only). All three return
+a Promise of the same shape except `analyzeTrace()`, which is sync.
+
+``extractFeatures(events)`` / ``classifyWindow(events)`` /
+``createPerceptron(weights, bias)``: The neuron layer (0.8.0) — a tiny
+perceptron in pure JS, no dependencies. Features, all normalized to
+[0, 1]: call count, max call depth, repeat rate, branch imbalance,
+event-type mix. `classifyWindow()` returns `{ label, score, features }`
+— label `"hot"` or `"normal"`, the score, and the feature values, so the
+classification is inspectable, never a black box. `createPerceptron()`
+builds a perceptron with the frozen trained weights by default (trained
+offline on 200 synthetic labeled traces, deterministic; train 200/200,
+held-out 100/100) and a deterministic `train(samples, epochs,
+learningRate)` for re-training or checking in tests. The perceptron
+classifies hotness only.
+
+``translate(code, options)``: Hybrid translation engine (0.8.0). Returns
+`{ code, report }` where `report` is `{ ok, from, to, staticOnly, clean,
+assumptions, unsupported, notes }`. JavaScript out (`to: "python" |
+"cpp"`) is hybrid: the AST (static) plus trace evidence (dynamic — the
+program is run through the tracer first, and the events resolve what
+static analysis cannot: runtime types, values, which branches fired).
+The reverse legs (`from: "python" | "cpp"`, `to: "javascript"`) are
+static-only — there is no tracer for Python or C++, and the report says
+so (`staticOnly: true`). Python is parsed with Python's own `ast`
+module (a small stdlib-only helper run through `python3`, which emits
+the AST as JSON); C++ is parsed by a scoped subset parser in the
+library. v1 scope, both directions: functions, arithmetic, loops,
+conditionals, arrays (Python lists / C++ vectors), strings, console
+output (`console.log` / `print` / `std::cout`). No classes, no
+closures-as-objects, no async. Unsupported constructs are reported in
+`report.unsupported` and the emitted code raises/throws at that point,
+loudly — never silently mistranslated. Assumptions cite their trace
+evidence (e.g. `FUNCTION_CALL 'add' arguments [2,3]` for a C++
+parameter type). `options.types` supplies C++ types the trace could not
+(`{ functions: { add: { params: ["int", "int"], returns: "int" } } }`).
+The JS-out leg runs the program through the tracer for evidence, and
+its `console.log` output is silenced while it runs, so `translate()` has
+no visible side effects. `translateAsync(code, options)` is the async
+version — in the ESM build the Python leg loads `child_process` by
+dynamic import (the sync version needs the CJS build's `require` for
+that leg); in a browser, the Python leg throws a clear error and the
+C++ leg works.
+
 ``eventToJSON(event, trigger)``: Turns a live RuntimeEvent into the plain
 object `trace()` returns. The CLI uses this too, so its JSON lines and
 `trace()` events are the same shape.

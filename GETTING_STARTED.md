@@ -38,6 +38,65 @@ Decorators trace too (0.7.0): `@dec` on classes, methods, getters,
 setters, and fields parses and runs, and the decorator calls fire
 `CALL` events. `accessor` fields are not supported.
 
+## Analyze the trace (0.8.0)
+
+```js
+import Iroh from "iroh";
+
+const { events, result, analysis } = Iroh.analyzeTrace(`
+  let s = 0;
+  for (let i = 0; i < 150; i++) { s += i; }
+  s;
+`);
+// result === 11175
+// analysis.findings[0].code === "HOT_LOOP" — "Loop entered 150 times
+// (threshold 100).", with evidence { hash, kind, iterations: 150,
+// tests: 151, threshold: 100 } and neuron { label: "hot", score: 0.0259 }
+// analysis.scores.coverage.value === 0.3  (9 of 30 categories fired)
+// analysis.scores.fidelity.value === 1    (every region observed)
+// analysis.scores.overhead.denominator === "statements"
+```
+
+`Iroh.analyze(events, options)` works on any events array — including
+one the CLI streamed. Thresholds are options (`hotLoopThreshold`,
+`deepRecursionThreshold`, `repeatSequenceMinOccurrences`,
+`oneSidedMinTests`); `analyzeTraceAsync()` and `analyzeModule()` are the
+async and module versions. The CLI appends the same analysis with
+`--analyze`, after the result line. The neuron is a tiny perceptron:
+`Iroh.classifyWindow(events)` returns its label, score, and the five
+feature values, so the classification can be checked by hand.
+
+## Translate the program (0.8.0)
+
+```js
+import Iroh from "iroh";
+
+// JavaScript -> Python (hybrid: AST + trace evidence)
+const py = Iroh.translate(
+  "function add(a, b) { return a + b; } console.log(add(2, 3));",
+  { to: "python" }
+);
+// py.code === "def add(a, b):\n    return a + b\n\nprint(add(2, 3))\n"
+// py.report.ok === true, py.report.staticOnly === false
+
+// Python -> JavaScript (static-only — no tracer for Python)
+const js = Iroh.translate("def add(a, b):\n    return a + b\n\nprint(add(2, 3))\n", {
+  from: "python",
+  to: "javascript",
+});
+// js.report.staticOnly === true
+```
+
+`to` is `"python" | "cpp" | "javascript"`; `from` defaults to
+`"javascript"`. The report lists what translated cleanly, what needed an
+assumption (with the trace evidence cited — C++ parameter types come from
+the first call's arguments), and what could not be translated. A function
+never called in the trace has no parameter types: pass them in
+`options.types`, or the report lists it unsupported. The CLI translates
+too: `node cli/iroh.js program.js --translate python` (exit 1 when
+anything was unsupported), and `--from` is inferred from `.py` / `.cpp`
+files.
+
 The rest of this guide uses the classic Stage API, which is still fully
 supported and gives you live listeners that can change values mid-flight.
 

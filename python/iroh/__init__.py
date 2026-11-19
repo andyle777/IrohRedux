@@ -32,7 +32,7 @@ import subprocess
 from pathlib import Path
 
 __all__ = ["run", "trace_file", "TraceError", "find_cli"]
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 
 class TraceError(Exception):

@@ -2,7 +2,18 @@
 // Run: npm run test:types
 // This file is type-checked only; it is not executed by `npm test`.
 import Iroh from "../index";
-import type { TraceEvent, TraceResult, TraceModuleResult, RuntimeEvent } from "../index";
+import type {
+  TraceEvent,
+  TraceResult,
+  TraceModuleResult,
+  RuntimeEvent,
+  AnalysisResult,
+  AnalyzeTraceResult,
+  TraceFeatures,
+  NeuronClassification,
+  Perceptron,
+  TranslateResult,
+} from "../index";
 
 const sync: TraceResult = Iroh.trace("factorial(3);", { events: ["CALL"] });
 const calls: TraceEvent[] = sync.events.filter((e) => e.event === "FUNCTION_CALL");
@@ -74,6 +85,52 @@ const json: TraceEvent = Iroh.eventToJSON(
   "before"
 );
 void json;
+
+// 0.8.0: the analysis layer and the translation engine.
+const analysis: AnalysisResult = Iroh.analyze(sync.events, { hotLoopThreshold: 10 });
+const codes: string[] = analysis.findings.map((f) => f.code);
+void codes;
+const coverageValue: number = analysis.scores.coverage.value;
+void coverageValue;
+const blindSpots: number | null = analysis.scores.fidelity.blindSpotStatements;
+void blindSpots;
+const overheadDenominator: "statements" | "regions" = analysis.scores.overhead.denominator;
+void overheadDenominator;
+
+const traced: AnalyzeTraceResult = Iroh.analyzeTrace("let s = 0; s;", {
+  analyze: { source: "let s = 0; s;" },
+});
+void traced;
+const neuron: NeuronClassification = Iroh.classifyWindow(sync.events);
+void neuron;
+const features: TraceFeatures = Iroh.extractFeatures(sync.events);
+void features;
+const perceptron: Perceptron = Iroh.createPerceptron();
+const prediction: { score: number; label: "hot" | "normal" } = perceptron.predict(features);
+void prediction;
+const updates: number = perceptron.train([{ x: features, y: 0 }], 10, 0.1);
+void updates;
+
+const translated: TranslateResult = Iroh.translate("console.log(1 + 2);", { to: "python" });
+const translatedCode: string = translated.code;
+void translatedCode;
+const reportOk: boolean = translated.report.ok;
+void reportOk;
+const staticOnly: boolean = translated.report.staticOnly;
+void staticOnly;
+
+async function translateAsync(): Promise<void> {
+  const out = await Iroh.translateAsync("def f():\n    return 1\n", {
+    from: "python",
+    to: "javascript",
+  });
+  void out;
+  const analyzed = await Iroh.analyzeTraceAsync("await Promise.resolve(1);");
+  void analyzed;
+  const modAnalyzed = await Iroh.analyzeModule("export const x = 1;");
+  void modAnalyzed;
+}
+void translateAsync;
 
 void main;
 void firstArgs;

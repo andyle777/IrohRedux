@@ -14,6 +14,13 @@
 //                             traceAsync(), including top-level await.
 //   tests/modules.test.js    — ES modules: Iroh.traceModule().
 //   tests/decorators.test.js — the TC39 decorators proposal.
+//   tests/analyze.test.js    — the 0.8.0 AI analysis layer: findings,
+//                             the toolkit scorecard, the perceptron,
+//                             and the CLI --analyze flag.
+//   tests/translate.test.js  — the 0.8.0 hybrid translation engine,
+//                             both directions, with every translated
+//                             program actually run in its target
+//                             language.
 //   tests/esm.test.mjs      — ESM import of the package itself, through
 //                             the package.json "exports" map.
 //   python/tests/           — the Python client (unittest), needs python3.
@@ -33,7 +40,7 @@ function has(cmd) {
 }
 
 execSync(
-  "node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js tests/modern.test.js tests/trace.test.js tests/modules.test.js tests/decorators.test.js tests/esm.test.mjs",
+  "node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js tests/modern.test.js tests/trace.test.js tests/modules.test.js tests/decorators.test.js tests/analyze.test.js tests/translate.test.js tests/esm.test.mjs",
   { stdio: "inherit" }
 );
 
