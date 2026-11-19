@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "iroh"
-version = "0.5.0"
-description = "IrohRedux for Python: trace JavaScript at runtime from Python"
+version = "0.5.1"
+description = "IrohRedux for Python: watch JavaScript run and trace it live, from Python"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"

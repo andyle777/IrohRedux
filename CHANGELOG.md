@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.1 — Spazzed-up README (19 Nov 2026)
+
+Presentation only, no code changes to the engine or the clients.
+
+- New banner (`assets/banner.png`): "IrohRedux — Watch your code run.
+  Change it while it runs.", with the factorial trace woven through it.
+- README rewritten: badges (license, version, Node, Python, C++, tests),
+  the factorial demo up front, a Mermaid diagram of the one-engine /
+  three-languages layout, quick starts for JavaScript, the CLI, Python and
+  C++, and a plain list of what you get. The old imgur logo is gone —
+  the banner replaces it.
+- Descriptions tightened: `package.json` ("Watch JavaScript run — and
+  change it mid-flight..."), Python package ("watch JavaScript run and
+  trace it live, from Python").
+
 ## 0.5.0 — C++, JavaScript and Python friendly (19 Nov 2026)
 
 The engine is still JavaScript — Iroh traces JavaScript, and that hasn't

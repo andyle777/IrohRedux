@@ -1,7 +1,7 @@
 {
   "name": "iroh",
-  "version": "0.5.0",
-  "description": "Intercept, record and analyze JavaScript at runtime — from JavaScript, Python, and C++",
+  "version": "0.5.1",
+  "description": "Watch JavaScript run — and change it mid-flight. Dynamic code analysis for JavaScript, with a CLI, Python and C++ clients.",
   "bin": {
     "iroh": "cli/iroh.js"
   },
