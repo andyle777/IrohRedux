@@ -139,6 +139,7 @@ export let CATEGORY = {};
   OP["instanceof"] = ii++;
   OP["&&"] = ii++;
   OP["||"] = ii++;
+  OP["??"] = ii++;
   OP["=="] = ii++;
   OP["==="] = ii++;
   OP["!="] = ii++;

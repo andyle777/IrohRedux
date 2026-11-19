@@ -499,12 +499,9 @@ export function DEBUG_SUPER_FIX(ctx) {
 // # CLASS METHOD
 export function DEBUG_METHOD_ENTER(hash, cls, isConstructor, args) {
   // API TODO
-  if (isConstructor) {
-    let tree = getInheritanceTree(cls);
-    console.log(indentString(this.indent) + "ctor", tree.join("->"));
-  } else {
-    console.log(indentString(this.indent) + "method");
-  }
+  // (Silenced: these console.logs printed "method"/"ctor" to the user's
+  // stdout on every class method call. Every other debug trace in this
+  // file is already commented out; these two were the only ones left live.)
   this.indent += INDENT_FACTOR;
   let frame = this.pushFrame(INSTR.METHOD_ENTER, hash);
   frame.values = [hash, cls, isConstructor, args];
@@ -512,7 +509,6 @@ export function DEBUG_METHOD_ENTER(hash, cls, isConstructor, args) {
 export function DEBUG_METHOD_LEAVE(hash, cls, isConstructor) {
   // API TODO
   this.indent -= INDENT_FACTOR;
-  console.log(indentString(this.indent) + (isConstructor ? "ctor" : "method") + " end");
   this.popFrame();
 };
 
@@ -732,6 +728,9 @@ export function DEBUG_LOGICAL(hash, op, a, b) {
     break;
     case OP["||"]:
       result = a ? a : b();
+    break;
+    case OP["??"]:
+      result = (a !== null && a !== void 0) ? a : b();
     break;
   };
   // API

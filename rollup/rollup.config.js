@@ -5,7 +5,7 @@ export default {
   moduleName: "iroh",
   external: [
     "acorn",
-    "acorn/dist/walk.es",
+    "acorn-walk",
     "astring"
   ],
   plugins: [

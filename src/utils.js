@@ -23,8 +23,9 @@ export function uBranchHash() {
   return ubidx++;
 };
 
-export function parse() {
-  return prs.apply(null, arguments);
+export function parse(input, options) {
+  // Same default as helpers.parse: Acorn 8 requires ecmaVersion.
+  return prs(input, Object.assign({ ecmaVersion: 2022 }, options));
 };
 
 export function generate() {

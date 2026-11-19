@@ -174,30 +174,22 @@ STAGE1.ArrowFunctionExpression = function(node, patcher) {
     type: "Identifier",
     name: name
   };
-  // arrow fns auto return, inject return record
-  if (node.body.type !== "BlockStatement") {
-    let call = {
-      magic: true,
-      type: "CallExpression",
-      callee: {
-        magic: true,
-        type: "Identifier",
-        name: patcher.instance.getLink("DEBUG_FUNCTION_RETURN")
-      },
-      arguments: [
-        parseExpression(`"${node.id}"`),
-        node.body
-      ]
-    };
-    node.argument = call;
-  }
-  // give a body
+  // Arrow functions with an expression body implicitly return it. Convert
+  // to a block with a real ReturnStatement so the value is actually
+  // returned — and let the normal ReturnStatement handler wrap it with
+  // DEBUG_FUNCTION_RETURN, like every other function.
+  // (The old code built a DEBUG_FUNCTION_RETURN call into the dead
+  // `node.argument` field and left the expression bare in the block, so
+  // `x => x * 2` ran but always returned undefined.)
   if (node.body.type !== "BlockStatement") {
     node.expression = false;
     node.body = {
       magic: true,
       type: "BlockStatement",
-      body: [node.body]
+      body: [{
+        type: "ReturnStatement",
+        argument: node.body
+      }]
     };
   }
   node.params.map((param) => { patcher.walk(param, patcher, patcher.stage); });
@@ -547,7 +539,11 @@ STAGE1.MemberExpression = function(node, patcher) {
   patcher.walk(node.object, patcher, patcher.stage);
   patcher.walk(node.property, patcher, patcher.stage);
   let property = node.property;
-  if (node.property.type === "Identifier") {
+  if (node.property.type === "Identifier" || node.property.type === "PrivateIdentifier") {
+    // PrivateIdentifier (`this.#x`) must also become a string literal here:
+    // passed as a bare argument it is invalid JS (`#x` is only legal after
+    // `.` in a member expression), and the outer member below keeps the
+    // original PrivateIdentifier node so `.#x` still generates correctly.
     property = {
       magic: true,
       type: "Literal",

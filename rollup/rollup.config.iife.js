@@ -14,14 +14,22 @@ config.external = [];
 config.plugins = [
   json(),
   buble(),
+  // NOTE: resolve the CJS entry points (main), not the ESM ones (jsnext/module):
+  // buble is ES2015-only and cannot parse astring 1.9's .mjs.
   resolve({
-    jsnext: true,
+    main: true,
+    module: false,
+    jsnext: false,
     browser: true
   }),
+  // namedExports only where the plugin fails to infer them: acorn's
+  // `parse` and acorn-walk's walkers. astring must NOT be listed — its
+  // 1.9 CJS file already exports `generate` and a manual entry creates a
+  // duplicate export.
   commonjs({
     namedExports: {
-      "node_modules/astring/dist/astring.js": [ "generate" ],
-      "node_modules/acorn/dist/walk.js": [ "base", "full", "recursive" ]
+      "node_modules/acorn/dist/acorn.js": ["parse"],
+      "node_modules/acorn-walk/dist/walk.js": ["base", "full", "recursive"]
     }
   })
 ];

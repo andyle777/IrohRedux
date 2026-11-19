@@ -5,7 +5,7 @@ import {
 } from "./labels";
 
 import { parse as prs } from "acorn";
-import { full } from "acorn/dist/walk";
+import { full } from "acorn-walk";
 import { generate as gen } from "astring";
 
 export function getInheritanceTree(cls) {
@@ -291,8 +291,11 @@ export function deepMagicPatch(node) {
   });
 };
 
-export function parse() {
-  return prs.apply(null, arguments);
+export function parse(input, options) {
+  // Acorn 8 requires ecmaVersion; default it so every internal
+  // parseExpression/parseExpressionStatement call parses modern syntax
+  // instead of warning and falling back to ES2020.
+  return prs(input, Object.assign({ ecmaVersion: 2022 }, options));
 };
 
 export function generate() {

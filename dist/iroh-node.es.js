@@ -1,6 +1,6 @@
 import { parse } from 'acorn';
 import { generate } from 'astring';
-import { base, full, recursive } from 'acorn/dist/walk';
+import { base, full, recursive } from 'acorn-walk';
 
 /**
  * @param {Class} cls
@@ -17,7 +17,7 @@ var extend = function(cls, prot) {
   }
 };
 
-var version = "0.3.0";
+var version = "0.4.0";
 
 // indent factor
 const INDENT_FACTOR = 1;
@@ -182,6 +182,7 @@ let CATEGORY = {};
   OP["instanceof"] = ii++;
   OP["&&"] = ii++;
   OP["||"] = ii++;
+  OP["??"] = ii++;
   OP["=="] = ii++;
   OP["==="] = ii++;
   OP["!="] = ii++;
@@ -215,8 +216,9 @@ function uBranchHash() {
   return ubidx++;
 }
 
-function parse$1() {
-  return parse.apply(null, arguments);
+function parse$1(input, options) {
+  // Same default as helpers.parse: Acorn 8 requires ecmaVersion.
+  return parse(input, Object.assign({ ecmaVersion: 2022 }, options));
 }
 
 function generate$1() {
@@ -231,17 +233,6 @@ var _utils = Object.freeze({
 	parse: parse$1,
 	generate: generate$1
 });
-
-function getInheritanceTree(cls) {
-  let base$$1 = cls;
-  let tree = [cls.name];
-  while (true) {
-    base$$1 = Object.getPrototypeOf(base$$1);
-    if (base$$1 === Function.prototype) break;
-    tree.push(base$$1.name);
-  }
-  return tree;
-}
 
 function instructionToString(n) {
   for (let key in INSTR) {
@@ -459,9 +450,7 @@ function getCallee(callee, call) {
   return call;
 }
 
-function indentString(n) {
-  return " ".repeat(n);
-}
+
 
 function cloneNode(node) {
   let clone = JSON.parse(JSON.stringify(node));
@@ -475,8 +464,11 @@ function deepMagicPatch(node) {
   });
 }
 
-function parse$2() {
-  return parse.apply(null, arguments);
+function parse$2(input, options) {
+  // Acorn 8 requires ecmaVersion; default it so every internal
+  // parseExpression/parseExpressionStatement call parses modern syntax
+  // instead of warning and falling back to ES2020.
+  return parse(input, Object.assign({ ecmaVersion: 2022 }, options));
 }
 
 function generate$2() {
@@ -850,30 +842,22 @@ STAGE1.ArrowFunctionExpression = function(node, patcher) {
     type: "Identifier",
     name: name
   };
-  // arrow fns auto return, inject return record
-  if (node.body.type !== "BlockStatement") {
-    let call = {
-      magic: true,
-      type: "CallExpression",
-      callee: {
-        magic: true,
-        type: "Identifier",
-        name: patcher.instance.getLink("DEBUG_FUNCTION_RETURN")
-      },
-      arguments: [
-        parseExpression(`"${node.id}"`),
-        node.body
-      ]
-    };
-    node.argument = call;
-  }
-  // give a body
+  // Arrow functions with an expression body implicitly return it. Convert
+  // to a block with a real ReturnStatement so the value is actually
+  // returned — and let the normal ReturnStatement handler wrap it with
+  // DEBUG_FUNCTION_RETURN, like every other function.
+  // (The old code built a DEBUG_FUNCTION_RETURN call into the dead
+  // `node.argument` field and left the expression bare in the block, so
+  // `x => x * 2` ran but always returned undefined.)
   if (node.body.type !== "BlockStatement") {
     node.expression = false;
     node.body = {
       magic: true,
       type: "BlockStatement",
-      body: [node.body]
+      body: [{
+        type: "ReturnStatement",
+        argument: node.body
+      }]
     };
   }
   node.params.map((param) => { patcher.walk(param, patcher, patcher.stage); });
@@ -1223,7 +1207,11 @@ STAGE1.MemberExpression = function(node, patcher) {
   patcher.walk(node.object, patcher, patcher.stage);
   patcher.walk(node.property, patcher, patcher.stage);
   let property = node.property;
-  if (node.property.type === "Identifier") {
+  if (node.property.type === "Identifier" || node.property.type === "PrivateIdentifier") {
+    // PrivateIdentifier (`this.#x`) must also become a string literal here:
+    // passed as a bare argument it is invalid JS (`#x` is only legal after
+    // `.` in a member expression), and the outer member below keeps the
+    // original PrivateIdentifier node so `.#x` still generates correctly.
     property = {
       magic: true,
       type: "Literal",
@@ -2028,7 +2016,14 @@ STAGE6.FunctionDeclaration = function(node, patcher) {
   end.expression.arguments.push(parseExpression("this"));
   start.expression.arguments.push(hashExpr);
   start.expression.arguments.push(parseExpression("this"));
-  start.expression.arguments.push(parseExpression(node.id.name));
+  // NOTE: pass the function name as a string literal, not a bare identifier.
+  // astring only emits an id binding for named function expressions; for
+  // arrows, object methods and getters the id is dropped, so a bare
+  // `$$ANON_*` reference was never declared and the patched code threw
+  // `ReferenceError: $$ANON_* is not defined` at runtime.
+  // DEBUG_FUNCTION_ENTER only stores this as currentScope and reads the
+  // event name from nodes[hash].node.id.name, so a string is safe here.
+  start.expression.arguments.push(parseExpression(`"${node.id.name}"`));
   start.expression.arguments.push(parseExpression("arguments"));
   node.body.body.unshift(start);
   node.body.body.push(end);
@@ -2056,7 +2051,11 @@ STAGE6.FunctionExpression = function(node, patcher) {
   end.expression.arguments.push(parseExpression("this"));
   start.expression.arguments.push(hashExpr);
   start.expression.arguments.push(parseExpression("this"));
-  start.expression.arguments.push(parseExpression(node.id.name));
+  // See FunctionDeclaration above: name as a string literal, not a bare
+  // identifier. Function expressions used as object methods/getters also
+  // lose their artificial id in generated code (astring emits method
+  // shorthand), so a bare $$ANON_* reference would be unbound there too.
+  start.expression.arguments.push(parseExpression(`"${node.id.name}"`));
   start.expression.arguments.push(parseExpression("arguments"));
   node.body.body.unshift(start);
   node.body.body.push(end);
@@ -2082,7 +2081,11 @@ STAGE6.ArrowFunctionExpression = function(node, patcher) {
   end.expression.arguments.push(parseExpression("this"));
   start.expression.arguments.push(hashExpr);
   start.expression.arguments.push(parseExpression("this"));
-  start.expression.arguments.push(parseExpression(node.id.name));
+  // See FunctionDeclaration above: name as a string literal. Arrows have
+  // no id in ESTree and astring never emits one, so the bare identifier
+  // `$$ANON_ARROW_*` was unbound and every arrow callback (e.g. .map(x => …))
+  // threw ReferenceError at runtime.
+  start.expression.arguments.push(parseExpression(`"${node.id.name}"`));
   let args = {
     magic: true,
     type: "ArrayExpression",
@@ -3147,12 +3150,9 @@ function DEBUG_SUPER_FIX(ctx) {
 // # CLASS METHOD
 function DEBUG_METHOD_ENTER(hash, cls, isConstructor, args) {
   // API TODO
-  if (isConstructor) {
-    let tree = getInheritanceTree(cls);
-    console.log(indentString(this.indent) + "ctor", tree.join("->"));
-  } else {
-    console.log(indentString(this.indent) + "method");
-  }
+  // (Silenced: these console.logs printed "method"/"ctor" to the user's
+  // stdout on every class method call. Every other debug trace in this
+  // file is already commented out; these two were the only ones left live.)
   this.indent += INDENT_FACTOR;
   let frame = this.pushFrame(INSTR.METHOD_ENTER, hash);
   frame.values = [hash, cls, isConstructor, args];
@@ -3160,7 +3160,6 @@ function DEBUG_METHOD_ENTER(hash, cls, isConstructor, args) {
 function DEBUG_METHOD_LEAVE(hash, cls, isConstructor) {
   // API TODO
   this.indent -= INDENT_FACTOR;
-  console.log(indentString(this.indent) + (isConstructor ? "ctor" : "method") + " end");
   this.popFrame();
 }
 
@@ -3380,6 +3379,9 @@ function DEBUG_LOGICAL(hash, op, a, b) {
     break;
     case OP["||"]:
       result = a ? a : b();
+    break;
+    case OP["??"]:
+      result = (a !== null && a !== void 0) ? a : b();
     break;
   }
   // API
@@ -3850,7 +3852,12 @@ Stage.prototype.getFrameByHashFrom = function(frm, hash) {
 
 Stage.prototype.patch = function(input) {
   let patcher = new Patcher(this);
-  let ast = parse$2(input, { locations: true });
+  // Pin the language level explicitly: Acorn 8 parses up to ES2022 here
+  // (optional chaining, nullish coalescing, async/await, class fields,
+  // private fields, logical assignment). Newer node types without a dedicated
+  // patch handler are still walked generically by acorn-walk's base visitors,
+  // so they run — they just don't get their own listener yet.
+  let ast = parse$2(input, { locations: true, ecmaVersion: 2022 });
   this.frame = new Frame(INSTR.PROGRAM, this.$$frameHash);
   patcher.applyPatches(ast);
   // link walk things to stage

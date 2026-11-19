@@ -2,7 +2,7 @@
 
 The idea behind Iroh is simple. You attach listeners to your code and as soon as the specified code part is reached, it will fire. You can listen for calls, returns, loops or any other supported code type.
 
-Iroh's listeners are named in regard to [EStree](//github.com/estree/estree/blob/master/es5.md) which is an AST specification format for JavaScript. There is also a list [here](//github.com/maierfelix/Iroh/blob/master/API.md#specification) which gives an simple overview of all code types you can listen for.
+Iroh's listeners are named in regard to [EStree](//github.com/estree/estree/blob/master/es5.md) which is an AST specification format for JavaScript. There is also a list [here](//github.com/andyle777/IrohRedux/blob/master/API.md#specification) which gives an simple overview of all code types you can listen for.
 
 ## Examples
 
@@ -35,7 +35,7 @@ let stage = new Iroh.Stage(code);
 
 ##### 2. Add listeners
 
-After creating a stage, we now need to specify what exactly we want to listen for. Let's listen for all variable declarations in our code. All event listeners provide specific events to listen for, you can find the whole list [here](//github.com/maierfelix/Iroh/blob/master/API.md#runtimeevent).
+After creating a stage, we now need to specify what exactly we want to listen for. Let's listen for all variable declarations in our code. All event listeners provide specific events to listen for, you can find the whole list [here](//github.com/andyle777/IrohRedux/blob/master/API.md#runtimeevent).
 
 E.g. ``Iroh.VAR`` has two events:
   * ``before``: What to do before a variable got it's value assigned

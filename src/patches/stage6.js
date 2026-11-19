@@ -33,7 +33,14 @@ STAGE6.FunctionDeclaration = function(node, patcher) {
   end.expression.arguments.push(parseExpression("this"));
   start.expression.arguments.push(hashExpr);
   start.expression.arguments.push(parseExpression("this"));
-  start.expression.arguments.push(parseExpression(node.id.name));
+  // NOTE: pass the function name as a string literal, not a bare identifier.
+  // astring only emits an id binding for named function expressions; for
+  // arrows, object methods and getters the id is dropped, so a bare
+  // `$$ANON_*` reference was never declared and the patched code threw
+  // `ReferenceError: $$ANON_* is not defined` at runtime.
+  // DEBUG_FUNCTION_ENTER only stores this as currentScope and reads the
+  // event name from nodes[hash].node.id.name, so a string is safe here.
+  start.expression.arguments.push(parseExpression(`"${node.id.name}"`));
   start.expression.arguments.push(parseExpression("arguments"));
   node.body.body.unshift(start);
   node.body.body.push(end);
@@ -61,7 +68,11 @@ STAGE6.FunctionExpression = function(node, patcher) {
   end.expression.arguments.push(parseExpression("this"));
   start.expression.arguments.push(hashExpr);
   start.expression.arguments.push(parseExpression("this"));
-  start.expression.arguments.push(parseExpression(node.id.name));
+  // See FunctionDeclaration above: name as a string literal, not a bare
+  // identifier. Function expressions used as object methods/getters also
+  // lose their artificial id in generated code (astring emits method
+  // shorthand), so a bare $$ANON_* reference would be unbound there too.
+  start.expression.arguments.push(parseExpression(`"${node.id.name}"`));
   start.expression.arguments.push(parseExpression("arguments"));
   node.body.body.unshift(start);
   node.body.body.push(end);
@@ -87,7 +98,11 @@ STAGE6.ArrowFunctionExpression = function(node, patcher) {
   end.expression.arguments.push(parseExpression("this"));
   start.expression.arguments.push(hashExpr);
   start.expression.arguments.push(parseExpression("this"));
-  start.expression.arguments.push(parseExpression(node.id.name));
+  // See FunctionDeclaration above: name as a string literal. Arrows have
+  // no id in ESTree and astring never emits one, so the bare identifier
+  // `$$ANON_ARROW_*` was unbound and every arrow callback (e.g. .map(x => …))
+  // threw ReferenceError at runtime.
+  start.expression.arguments.push(parseExpression(`"${node.id.name}"`));
   let args = {
     magic: true,
     type: "ArrayExpression",
