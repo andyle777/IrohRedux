@@ -161,8 +161,8 @@ Or clone and build from source:
 git clone https://github.com/andyle777/IrohRedux.git
 cd IrohRedux
 npm install
-npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.js, dist/iroh-browser.js
-npm test            # 51 tests: Node + Python + C++
+npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
+npm test            # 79 tests: 67 Node + 7 Python + 5 C++
 ```
 
 The Python client installs with `pip install -e python/`; the C++ client is
