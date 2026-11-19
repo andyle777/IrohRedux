@@ -162,6 +162,30 @@ test("binary/assign/update/member/alloc/literal listeners fire", () => {
   }
 });
 
+test("AWAIT listener fires and async tracing keeps frames straight", async () => {
+  // Regression: an async function that awaited inside a try block crashed
+  // its continuation with "Unexpected frame type FUNCTION_CALL", because
+  // the shared frame stack had moved on while it was suspended. DEBUG_AWAIT
+  // now saves the frame state at each await and restores it on settle.
+  const awaited = [];
+  const stage = new Iroh.Stage(
+    `async function fetchFails() {
+       try {
+         await Promise.reject(new Error("nope"));
+         return "unreached";
+       } catch (e) {
+         return "caught";
+       }
+     };
+     fetchFails();`
+  );
+  stage.addListener(Iroh.AWAIT).on("fire", (e) => awaited.push(e.value));
+  const result = await eval(stage.script);
+  assert.equal(result, "caught");
+  assert.equal(awaited.length, 1);
+  assert.ok(awaited[0] instanceof Promise);
+});
+
 test("Iroh.parse and Iroh.generate round-trip modern syntax", () => {
   const ast = Iroh.parse(`let x = null ?? 7;`, { ecmaVersion: 2022 });
   assert.equal(ast.body[0].type, "VariableDeclaration");

@@ -116,6 +116,8 @@ var CATEGORY = {};
   INSTR.BLOCK_ENTER = ii++;
   INSTR.BLOCK_LEAVE = ii++;
 
+  INSTR.AWAIT = ii++;
+
   INSTR.PROGRAM_FRAME_VALUE = ii++;
   INSTR.PROGRAM_ENTER = ii++;
   INSTR.PROGRAM_LEAVE = ii++;
@@ -153,6 +155,7 @@ var CATEGORY = {};
   CATEGORY.PROGRAM = ii++;
   CATEGORY.METHOD = ii++;
   CATEGORY.SUPER = ii++;
+  CATEGORY.AWAIT = ii++;
 })();
 
 (function () {
@@ -8756,6 +8759,8 @@ function getCategoryFromInstruction(type) {
       return CATEGORY.ALLOC | 0;
     case INSTR.MEMBER_EXPR:
       return CATEGORY.MEMBER | 0;
+    case INSTR.AWAIT:
+      return CATEGORY.AWAIT | 0;
     case INSTR.LITERAL:
       return CATEGORY.LITERAL | 0;
     case INSTR.IDENTIFIER:
@@ -9005,6 +9010,54 @@ STAGE1.BlockStatement = function(node, patcher) {
     var child = body[ii];
     //if (child.magic) continue;
     patcher.walk(child, patcher, patcher.stage);
+    // Intercept toString for function declarations: a patched function is
+    // a different function object than the one the user wrote, so without
+    // this `fn.toString()` leaks the instrumented source. Redefine it to
+    // return the original source text (taken from the input via the node's
+    // original start/end positions).
+    // The assignment and member nodes are marked magic so the injection
+    // itself stays invisible in traces (no CALL/MEMBER/ASSIGN events for
+    // code the user never wrote). The replacement function itself is NOT
+    // magic, so it gets the normal treatment — an id, a wrapped return,
+    // ENTER/LEAVE — and its frame stays balanced.
+    // Covers declarations that are direct children of a block or of the
+    // program; declarations used as a bare `if` consequent and function
+    // expressions are not covered yet.
+    // Guard: STAGE1.BlockStatement is aliased by stages 2, 4, 5, 6 and 8,
+    // so this runs once per stage pass — inject the override only once.
+    if (child.type === "FunctionDeclaration" && child.id && !child.toStringIntercepted) {
+      child.toStringIntercepted = true;
+      var original = patcher.instance.input.slice(child.start, child.end);
+      var override = {
+        type: "ExpressionStatement",
+        expression: {
+          magic: true,
+          type: "AssignmentExpression",
+          operator: "=",
+          left: {
+            magic: true,
+            type: "MemberExpression",
+            object: { type: "Identifier", name: child.id.name },
+            property: { type: "Identifier", name: "toString" },
+            computed: false
+          },
+          right: {
+            type: "FunctionExpression",
+            id: null,
+            params: [],
+            body: {
+              type: "BlockStatement",
+              body: [{
+                type: "ReturnStatement",
+                argument: { magic: true, type: "Literal", value: original }
+              }]
+            }
+          }
+        }
+      };
+      body.splice(ii + 1, 0, override);
+      ii++;
+    }
   }
 };
 
@@ -9157,6 +9210,15 @@ STAGE1.CallExpression = function(node, patcher) {
               type: "Literal",
               value: property.name
             });
+          }
+          // private method call (`this.#reset()`): the method cannot be
+          // looked up by string — `this["reset"]` is undefined, private
+          // members only exist behind `#`. Pass the member expression
+          // itself as the callee, so DEBUG_FUNCTION_CALL receives the
+          // actual function. (Plain private *reads* use the literal
+          // path in the MemberExpression handler instead.)
+          if (property.type === "PrivateIdentifier") {
+            return node.callee;
           }
           return property;
         }
@@ -9501,6 +9563,30 @@ STAGE1.AssignmentExpression = function(node, patcher) {
   node.left.magic = true;
   var left = node.left;
   var right = node.right;
+  // Destructuring assignment (`[a, b] = [b, a]`, `({x} = y)`): the left
+  // side is a pattern, not a member or an identifier, so there is nothing
+  // for DEBUG_ASSIGN to do — and passing null as its object/property
+  // arguments would put literal nulls in the AST and crash the walker.
+  // Walk both sides and leave the assignment alone, like the magic path.
+  if (left.type !== "MemberExpression" && left.type !== "Identifier") {
+    patcher.walk(node.left, patcher, patcher.stage);
+    patcher.walk(node.right, patcher, patcher.stage);
+    return;
+  }
+  // Private-field assignment (`this.#count += 1`): DEBUG_ASSIGN does the
+  // assignment as `obj[prop]` with prop a string, and `obj["count"]` is a
+  // *public* property — a different slot from `#count`. Routing it
+  // through DEBUG_ASSIGN would silently write the wrong slot. Leave the
+  // native assignment in place (no ASSIGN event for it) and walk both
+  // sides so the operands are still traced.
+  if (
+    left.type === "MemberExpression" &&
+    left.property.type === "PrivateIdentifier"
+  ) {
+    patcher.walk(node.left, patcher, patcher.stage);
+    patcher.walk(node.right, patcher, patcher.stage);
+    return;
+  }
   var operator = node.operator;
   if (operator !== "=") {
     operator = operator.substr(0, operator.length - 1);
@@ -9521,6 +9607,13 @@ STAGE1.AssignmentExpression = function(node, patcher) {
           value: left.property.name
         };
       }
+    } else if (left.property.type === "PrivateIdentifier") {
+      // `#x` is only legal after `.` — pass it as a string literal.
+      property = {
+        magic: true,
+        type: "Literal",
+        value: left.property.name
+      };
     } else {
       property = left.property;
     }
@@ -10714,6 +10807,37 @@ STAGE8.Identifier = function(node) {
 };
 */
 
+// `await X` becomes `await DEBUG_AWAIT(hash, X)`. The debug call saves
+// the frame stack at the await point and restores it when the awaited
+// value settles, before the async function's continuation runs — without
+// this, a continuation that returns or leaves a try block resolves frames
+// against whatever stack other code left behind and throws
+// "Unexpected frame type FUNCTION_CALL". See DEBUG_AWAIT in stage/debug.js.
+STAGE8.AwaitExpression = function(node, patcher) {
+  if (node.magic) { return; }
+  var hash = uBranchHash();
+  // create node link
+  patcher.nodes[hash] = {
+    hash: hash,
+    node: cloneNode(node)
+  };
+  patcher.walk(node.argument, patcher, patcher.stage);
+  node.magic = true;
+  node.argument = {
+    magic: true,
+    type: "CallExpression",
+    callee: {
+      magic: true,
+      type: "Identifier",
+      name: patcher.instance.getLink("DEBUG_AWAIT")
+    },
+    arguments: [
+      parseExpression(hash),
+      node.argument
+    ]
+  };
+};
+
 STAGE8.Program = STAGE1.Program;
 STAGE8.BlockStatement = STAGE1.BlockStatement;
 STAGE8.MethodDefinition = STAGE1.MethodDefinition;
@@ -10897,6 +11021,20 @@ function evalObjectAssignmentExpression(op, obj, prop, value) {
     case OP["&"]:   return obj[prop] &=   value;
     case OP["^"]:   return obj[prop] ^=   value;
     case OP["|"]:   return obj[prop] |=   value;
+    // Logical assignment (ES2021). Written out longhand: the patcher
+    // strips `||=` to `||` before calling here, and the right-hand value
+    // was already evaluated by the caller, so these only decide whether
+    // to store it. (Identifier assignments, `x ||= y`, are handled by
+    // the native operator in the outer assignment instead.)
+    case OP["||"]:
+      if (obj[prop]) { return obj[prop]; }
+      return obj[prop] = value;
+    case OP["&&"]:
+      if (obj[prop]) { return obj[prop] = value; }
+      return obj[prop];
+    case OP["??"]:
+      if (obj[prop] !== null && obj[prop] !== void 0) { return obj[prop]; }
+      return obj[prop] = value;
     default:
       throw new Error(("Invalid operator " + op));
     break;
@@ -11135,8 +11273,18 @@ function DEBUG_CASE_LEAVE(hash) {
 
 // #CALL
 function DEBUG_FUNCTION_CALL(hash, ctx, object, call, args) {
+  // Optional call (`?.()`): if the object is nullish, or the method
+  // does not exist, the call never happens and the value is undefined —
+  // and no CALL event fires for a call that did not happen. This check
+  // must come first: `object.constructor` below would throw on null.
+  var node = this.nodes[hash].node;
+  if (node.optional) {
+    if (object === null || object === void 0) { return void 0; }
+    if (call !== null && (object[call] === null || object[call] === void 0)) { return void 0; }
+    if (call === null && (object === null || object === void 0)) { return void 0; }
+  }
   var ctor = object.constructor.prototype;
-  var callee = getCallee(object, call);
+  var callee = (typeof call === "function") ? call.name : getCallee(object, call);
   var previous = this.$$frameHash;
   var value = null;
   var root = null;
@@ -11144,7 +11292,12 @@ function DEBUG_FUNCTION_CALL(hash, ctx, object, call, args) {
   var proto = null;
 
   // create function
-  if (call !== null) {
+  if (typeof call === "function") {
+    // private method call: the caller passed the member expression
+    // itself, because `this["reset"]` cannot reach a `#reset` method.
+    root = call;
+    proto = object;
+  } else if (call !== null) {
     root = object[call];
     proto = object;
   } else {
@@ -11153,7 +11306,6 @@ function DEBUG_FUNCTION_CALL(hash, ctx, object, call, args) {
   }
   name = root.name;
 
-  var node = this.nodes[hash].node;
   // external functions are traced as sloppy
   var isSloppy = this.symbols[name] === void 0;
 
@@ -11294,6 +11446,47 @@ function DEBUG_FUNCTION_RETURN(hash, name, value) {
     //console.log(indentString(this.indent) + "call", name, "end #sloppy", "->", [value]);
   }
   return event.return;
+}
+
+// # AWAIT
+function DEBUG_AWAIT(hash, value) {
+  // An async function suspends at `await` and its continuation resumes
+  // later, after other code has run and moved the shared frame stack on.
+  // Save the stack state now and restore it in the promise handlers,
+  // which run before the async continuation — otherwise the continuation's
+  // RETURN / TRY_LEAVE handlers resolve frames against the wrong stack
+  // and throw "Unexpected frame type FUNCTION_CALL".
+  // Limitation: this restores the pointer to the saved frames, it does
+  // not snapshot them. Code that runs while suspended and pops frames
+  // below the saved point (e.g. an outer function returning) can still
+  // leave the restored chain stale. Async tracing is best-effort.
+  var stage = this;
+  var frame = this.frame;
+  var frameHash = this.$$frameHash;
+  var indent = this.indent;
+  var currentScope = this.currentScope;
+  var previousScope = this.previousScope;
+
+  // API
+  var event = this.createEvent(INSTR.AWAIT);
+  event.hash = hash;
+  event.value = value;
+  event.indent = this.indent;
+  event.trigger("fire");
+  // API END
+
+  function restore(v) {
+    stage.frame = frame;
+    stage.$$frameHash = frameHash;
+    stage.indent = indent;
+    stage.currentScope = currentScope;
+    stage.previousScope = previousScope;
+    return v;
+  }
+  return Promise.resolve(value).then(
+    function (v) { return restore(v); },
+    function (e) { restore(void 0); throw e; }
+  );
 }
 
 // # DECLS
@@ -11739,6 +11932,7 @@ var _debug = Object.freeze({
 	DEBUG_FUNCTION_ENTER: DEBUG_FUNCTION_ENTER,
 	DEBUG_FUNCTION_LEAVE: DEBUG_FUNCTION_LEAVE,
 	DEBUG_FUNCTION_RETURN: DEBUG_FUNCTION_RETURN,
+	DEBUG_AWAIT: DEBUG_AWAIT,
 	DEBUG_VAR_DECLARE: DEBUG_VAR_DECLARE,
 	DEBUG_VAR_INIT: DEBUG_VAR_INIT,
 	DEBUG_OP_NEW: DEBUG_OP_NEW,
@@ -12119,6 +12313,26 @@ Stage.prototype.patch = function(input) {
 
 function setup() {
   this.generateCategoryBits();
+  // Test assertions, for code running inside a stage. The 2017 fixtures
+  // in tests/expressions/ and tests/other/ were written against this API,
+  // but it was never implemented — `Iroh.assert` was undefined at runtime.
+  // assert() records and returns the result instead of throwing, so one
+  // failing check does not hide the rest of the fixture; the harness (or
+  // the user) reads Iroh.assertions afterwards. resetAssertions() clears
+  // the record, e.g. between fixture runs.
+  this.assertions = [];
+  this.assert = function(name, condition) {
+    var passed = !!condition;
+    this.assertions.push({ name: String(name), passed: passed });
+    return passed;
+  };
+  this.resetAssertions = function() {
+    this.assertions = [];
+  };
+  // Iroh.log is the fixtures' way to print from inside traced code.
+  this.log = function() {
+    console.log.apply(console, arguments);
+  };
 }
 
 function generateCategoryBits() {

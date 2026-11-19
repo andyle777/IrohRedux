@@ -223,6 +223,37 @@ STAGE8.Identifier = function(node) {
 };
 */
 
+// `await X` becomes `await DEBUG_AWAIT(hash, X)`. The debug call saves
+// the frame stack at the await point and restores it when the awaited
+// value settles, before the async function's continuation runs — without
+// this, a continuation that returns or leaves a try block resolves frames
+// against whatever stack other code left behind and throws
+// "Unexpected frame type FUNCTION_CALL". See DEBUG_AWAIT in stage/debug.js.
+STAGE8.AwaitExpression = function(node, patcher) {
+  if (node.magic) return;
+  let hash = uBranchHash();
+  // create node link
+  patcher.nodes[hash] = {
+    hash: hash,
+    node: cloneNode(node)
+  };
+  patcher.walk(node.argument, patcher, patcher.stage);
+  node.magic = true;
+  node.argument = {
+    magic: true,
+    type: "CallExpression",
+    callee: {
+      magic: true,
+      type: "Identifier",
+      name: patcher.instance.getLink("DEBUG_AWAIT")
+    },
+    arguments: [
+      parseExpression(hash),
+      node.argument
+    ]
+  };
+};
+
 STAGE8.Program = STAGE1.Program;
 STAGE8.BlockStatement = STAGE1.BlockStatement;
 STAGE8.MethodDefinition = STAGE1.MethodDefinition;

@@ -95,6 +95,54 @@ STAGE1.BlockStatement = function(node, patcher) {
     let child = body[ii];
     //if (child.magic) continue;
     patcher.walk(child, patcher, patcher.stage);
+    // Intercept toString for function declarations: a patched function is
+    // a different function object than the one the user wrote, so without
+    // this `fn.toString()` leaks the instrumented source. Redefine it to
+    // return the original source text (taken from the input via the node's
+    // original start/end positions).
+    // The assignment and member nodes are marked magic so the injection
+    // itself stays invisible in traces (no CALL/MEMBER/ASSIGN events for
+    // code the user never wrote). The replacement function itself is NOT
+    // magic, so it gets the normal treatment — an id, a wrapped return,
+    // ENTER/LEAVE — and its frame stays balanced.
+    // Covers declarations that are direct children of a block or of the
+    // program; declarations used as a bare `if` consequent and function
+    // expressions are not covered yet.
+    // Guard: STAGE1.BlockStatement is aliased by stages 2, 4, 5, 6 and 8,
+    // so this runs once per stage pass — inject the override only once.
+    if (child.type === "FunctionDeclaration" && child.id && !child.toStringIntercepted) {
+      child.toStringIntercepted = true;
+      let original = patcher.instance.input.slice(child.start, child.end);
+      let override = {
+        type: "ExpressionStatement",
+        expression: {
+          magic: true,
+          type: "AssignmentExpression",
+          operator: "=",
+          left: {
+            magic: true,
+            type: "MemberExpression",
+            object: { type: "Identifier", name: child.id.name },
+            property: { type: "Identifier", name: "toString" },
+            computed: false
+          },
+          right: {
+            type: "FunctionExpression",
+            id: null,
+            params: [],
+            body: {
+              type: "BlockStatement",
+              body: [{
+                type: "ReturnStatement",
+                argument: { magic: true, type: "Literal", value: original }
+              }]
+            }
+          }
+        }
+      };
+      body.splice(ii + 1, 0, override);
+      ii++;
+    }
   };
 };
 
@@ -247,6 +295,15 @@ STAGE1.CallExpression = function(node, patcher) {
               type: "Literal",
               value: property.name
             });
+          }
+          // private method call (`this.#reset()`): the method cannot be
+          // looked up by string — `this["reset"]` is undefined, private
+          // members only exist behind `#`. Pass the member expression
+          // itself as the callee, so DEBUG_FUNCTION_CALL receives the
+          // actual function. (Plain private *reads* use the literal
+          // path in the MemberExpression handler instead.)
+          if (property.type === "PrivateIdentifier") {
+            return node.callee;
           }
           return property;
         }
@@ -593,6 +650,30 @@ STAGE1.AssignmentExpression = function(node, patcher) {
   node.left.magic = true;
   let left = node.left;
   let right = node.right;
+  // Destructuring assignment (`[a, b] = [b, a]`, `({x} = y)`): the left
+  // side is a pattern, not a member or an identifier, so there is nothing
+  // for DEBUG_ASSIGN to do — and passing null as its object/property
+  // arguments would put literal nulls in the AST and crash the walker.
+  // Walk both sides and leave the assignment alone, like the magic path.
+  if (left.type !== "MemberExpression" && left.type !== "Identifier") {
+    patcher.walk(node.left, patcher, patcher.stage);
+    patcher.walk(node.right, patcher, patcher.stage);
+    return;
+  }
+  // Private-field assignment (`this.#count += 1`): DEBUG_ASSIGN does the
+  // assignment as `obj[prop]` with prop a string, and `obj["count"]` is a
+  // *public* property — a different slot from `#count`. Routing it
+  // through DEBUG_ASSIGN would silently write the wrong slot. Leave the
+  // native assignment in place (no ASSIGN event for it) and walk both
+  // sides so the operands are still traced.
+  if (
+    left.type === "MemberExpression" &&
+    left.property.type === "PrivateIdentifier"
+  ) {
+    patcher.walk(node.left, patcher, patcher.stage);
+    patcher.walk(node.right, patcher, patcher.stage);
+    return;
+  }
   let operator = node.operator;
   if (operator !== "=") {
     operator = operator.substr(0, operator.length - 1);
@@ -613,6 +694,13 @@ STAGE1.AssignmentExpression = function(node, patcher) {
           value: left.property.name
         };
       }
+    } else if (left.property.type === "PrivateIdentifier") {
+      // `#x` is only legal after `.` — pass it as a string literal.
+      property = {
+        magic: true,
+        type: "Literal",
+        value: left.property.name
+      };
     } else {
       property = left.property;
     }

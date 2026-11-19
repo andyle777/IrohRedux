@@ -76,6 +76,8 @@ export let CATEGORY = {};
   INSTR.BLOCK_ENTER = ii++;
   INSTR.BLOCK_LEAVE = ii++;
 
+  INSTR.AWAIT = ii++;
+
   INSTR.PROGRAM_FRAME_VALUE = ii++;
   INSTR.PROGRAM_ENTER = ii++;
   INSTR.PROGRAM_LEAVE = ii++
@@ -113,6 +115,7 @@ export let CATEGORY = {};
   CATEGORY.PROGRAM = ii++;
   CATEGORY.METHOD = ii++;
   CATEGORY.SUPER = ii++;
+  CATEGORY.AWAIT = ii++;
 })();
 
 (() => {

@@ -337,6 +337,8 @@ export function getCategoryFromInstruction(type) {
       return CATEGORY.ALLOC | 0;
     case INSTR.MEMBER_EXPR:
       return CATEGORY.MEMBER | 0;
+    case INSTR.AWAIT:
+      return CATEGORY.AWAIT | 0;
     case INSTR.LITERAL:
       return CATEGORY.LITERAL | 0;
     case INSTR.IDENTIFIER:

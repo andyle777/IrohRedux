@@ -251,8 +251,18 @@ export function DEBUG_CASE_LEAVE(hash) {
 
 // #CALL
 export function DEBUG_FUNCTION_CALL(hash, ctx, object, call, args) {
+  // Optional call (`?.()`): if the object is nullish, or the method
+  // does not exist, the call never happens and the value is undefined —
+  // and no CALL event fires for a call that did not happen. This check
+  // must come first: `object.constructor` below would throw on null.
+  let node = this.nodes[hash].node;
+  if (node.optional) {
+    if (object === null || object === void 0) return void 0;
+    if (call !== null && (object[call] === null || object[call] === void 0)) return void 0;
+    if (call === null && (object === null || object === void 0)) return void 0;
+  }
   let ctor = object.constructor.prototype;
-  let callee = getCallee(object, call);
+  let callee = (typeof call === "function") ? call.name : getCallee(object, call);
   let previous = this.$$frameHash;
   let value = null;
   let root = null;
@@ -260,7 +270,12 @@ export function DEBUG_FUNCTION_CALL(hash, ctx, object, call, args) {
   let proto = null;
 
   // create function
-  if (call !== null) {
+  if (typeof call === "function") {
+    // private method call: the caller passed the member expression
+    // itself, because `this["reset"]` cannot reach a `#reset` method.
+    root = call;
+    proto = object;
+  } else if (call !== null) {
     root = object[call];
     proto = object;
   } else {
@@ -269,7 +284,6 @@ export function DEBUG_FUNCTION_CALL(hash, ctx, object, call, args) {
   };
   name = root.name;
 
-  let node = this.nodes[hash].node;
   // external functions are traced as sloppy
   let isSloppy = this.symbols[name] === void 0;
 
@@ -410,6 +424,47 @@ export function DEBUG_FUNCTION_RETURN(hash, name, value) {
     //console.log(indentString(this.indent) + "call", name, "end #sloppy", "->", [value]);
   }
   return event.return;
+};
+
+// # AWAIT
+export function DEBUG_AWAIT(hash, value) {
+  // An async function suspends at `await` and its continuation resumes
+  // later, after other code has run and moved the shared frame stack on.
+  // Save the stack state now and restore it in the promise handlers,
+  // which run before the async continuation — otherwise the continuation's
+  // RETURN / TRY_LEAVE handlers resolve frames against the wrong stack
+  // and throw "Unexpected frame type FUNCTION_CALL".
+  // Limitation: this restores the pointer to the saved frames, it does
+  // not snapshot them. Code that runs while suspended and pops frames
+  // below the saved point (e.g. an outer function returning) can still
+  // leave the restored chain stale. Async tracing is best-effort.
+  let stage = this;
+  let frame = this.frame;
+  let frameHash = this.$$frameHash;
+  let indent = this.indent;
+  let currentScope = this.currentScope;
+  let previousScope = this.previousScope;
+
+  // API
+  let event = this.createEvent(INSTR.AWAIT);
+  event.hash = hash;
+  event.value = value;
+  event.indent = this.indent;
+  event.trigger("fire");
+  // API END
+
+  function restore(v) {
+    stage.frame = frame;
+    stage.$$frameHash = frameHash;
+    stage.indent = indent;
+    stage.currentScope = currentScope;
+    stage.previousScope = previousScope;
+    return v;
+  }
+  return Promise.resolve(value).then(
+    function (v) { return restore(v); },
+    function (e) { restore(void 0); throw e; }
+  );
 };
 
 // # DECLS

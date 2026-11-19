@@ -54,17 +54,84 @@ listeners while the code runs.
 ### Tests — first real suite
 - `tests/index.js` was a stub that threw `Not implemented yet`. There is
   now a real suite in `tests/iroh.test.js` on Node's built-in test runner
-  (no new dependencies): **15 tests, all passing on Node v24.22.1** —
+  (no new dependencies): **16 tests, all passing on Node v24.22.1** —
   factorial trace, VAR/CALL/FUNCTION listeners, return-value rewriting,
   the arrow/method/getter regressions, stdout silence for class methods,
-  modern syntax, control flow, and listener coverage.
+  modern syntax, control flow, listener coverage, and an AWAIT test.
+
+### Fixtures — the 2017 fixtures finally run
+- `tests/expressions/*` and `tests/other/*` were dead since 2017: they
+  were written against an `Iroh.assert` / `Iroh.log` API that was never
+  implemented, so nothing ever ran them. That API now exists in the
+  library (`src/setup.js`): `Iroh.assert(name, condition)` records
+  `{name, passed}` in `Iroh.assertions` (and returns the boolean) instead
+  of throwing, so one failing check does not hide the rest;
+  `Iroh.resetAssertions()` clears the record between runs; `Iroh.log`
+  is a `console.log` passthrough. See `API.md`.
+- `tests/fixtures.test.js` runs every fixture file through a Stage in its
+  own `vm` context and requires every assertion to pass — a fixture with
+  no assertions at all fails loudly instead of passing silently. Async
+  fixtures are awaited via the program frame value.
+- 8 new fixtures in the same style, for the 2026 functionality:
+  `arrow-callbacks`, `optional-chaining`, `nullish`, `async-await`,
+  `private-fields`, `class-fields`, `logical-assignment`,
+  `destructuring-spread` — **31 tests total (16 + 15 fixtures), all
+  passing on Node v24.22.1**.
+
+### Fixed — found by running the fixtures
+- **`fn.toString()` leaked instrumented source.** Patched functions now
+  report their original source: stage1 injects `fn.toString = function()
+  { return "<original source>"; }` after each function declaration, using
+  the node's original start/end positions. The injection is invisible in
+  traces (magic assignment/member nodes, no CALL/MEMBER/ASSIGN events)
+  and the replacement function gets the normal treatment so its frame
+  stays balanced. Covers declarations that are direct children of a block
+  or of the program; bare-`if` consequents and function expressions are
+  not covered yet. This makes the 2017 `tests/other/toString.js` fixture
+  pass.
+- **Optional calls crashed.** `g?.goodbye?.()` threw inside
+  `DEBUG_FUNCTION_CALL` (`root.name` on `undefined`). It now
+  short-circuits: if the call is optional and the object is nullish or
+  the method does not exist, the value is `undefined` and no CALL event
+  fires for a call that did not happen.
+- **Logical assignment on members crashed.** `obj.x ||= 7` threw
+  `Invalid operator 21`: `evalObjectAssignmentExpression` had no cases
+  for `||`, `&&`, `??`. Added, written longhand (the browser build's
+  buble cannot parse `||=` in library source). Note: the right-hand value
+  is evaluated eagerly — native `||=` would short-circuit it.
+- **Destructuring assignment crashed the walker.** `[a, b] = [b, a]`
+  passed literal `null` as the DEBUG_ASSIGN object/property arguments.
+  Pattern assignments (and private-field assignments, below) are now
+  left as native assignments — walked, but not wrapped — so they run
+  correctly without an ASSIGN event.
+- **Private fields/methods, three fixes.** (1) `this.#reset()` calls
+  passed the bare `#reset` node into the debug call — the callee is now
+  the member expression itself, and `DEBUG_FUNCTION_CALL` accepts a
+  function as its `call` argument, because `this["reset"]` cannot reach
+  a `#reset` method. (2) `this.#count += 1` went through DEBUG_ASSIGN
+  as `obj["count"]`, which is a *public* property — a different slot from
+  `#count` — and silently wrote the wrong one; private-field assignments
+  are now left native. (3) Same bare-`#x` fix in the member-expression
+  patch (0.4.0, earlier round).
+- **Async tracing crashed after an `await` inside `try`.** An async
+  function that awaited inside a try block threw "Unexpected frame type
+  FUNCTION_CALL" on its continuation: the shared frame stack had moved
+  on while it was suspended, so TRY_LEAVE/RETURN resolved frames against
+  the wrong stack. New `DEBUG_AWAIT` (stage8 `AwaitExpression` handler)
+  saves the frame state at each `await` and restores it when the awaited
+  value settles, before the continuation runs. New listener
+  `Iroh.AWAIT` (`fire`, with the awaited value). Limitation: it restores
+  the pointer to the saved frames, not a snapshot — code that pops frames
+  below the saved point while suspended can still leave the chain stale.
 
 ### Known limitations
-- No dedicated listeners yet for the new constructs (optional chaining,
-  `await`, class fields) — they execute and can be observed through the
-  listeners on the expressions around them, but there is no `Iroh.AWAIT`
-  or `Iroh.CHAIN` event.
-- `tests/expressions/*` fixtures from 2017 are still unused by the suite.
+- No dedicated listeners yet for optional chaining or class fields — they
+  execute and can be observed through the listeners on the expressions
+  around them, but there is no `Iroh.CHAIN` event.
+- Private-field and destructuring assignments run correctly but produce
+  no ASSIGN event.
+- The right-hand side of a member logical assignment (`obj.x ||= y`) is
+  evaluated eagerly; native `||=` would short-circuit it.
 
 ## 0.3.0 — upstream (Jan 2018)
 

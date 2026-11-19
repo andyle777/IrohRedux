@@ -16,6 +16,12 @@
 
 ``generate``: A reference to ``astring.generate`` to turn an AST back into source code.
 
+``assert(name, condition)``: Records a test assertion from code running inside a stage — `{name, passed}` appended to ``Iroh.assertions`` — and returns the boolean. It records instead of throwing, so one failing check does not hide the rest. Use ``Iroh.resetAssertions()`` to clear the record between runs. This is the API the fixtures in ``tests/expressions/`` and ``tests/other/`` were written against (see ``tests/fixtures.test.js``).
+
+``log(...args)``: Prints from inside traced code (a ``console.log`` passthrough), also used by the fixtures.
+
+``assertions``: The recorded assertions from ``Iroh.assert`` calls, in order.
+
 #### Iroh.Stage:
 
 ``key``: The stage's unique key.
@@ -163,6 +169,12 @@ This list gives you an overview, which events a listener supports and which prop
     * ``call``: Called function if object is null
     * ``callee``: String version of the called function name
     * ``external``: E.g. ``Array.map`` and ``eval`` are external calls
+
+**``Iroh.AWAIT``** (new in 0.4.0):
+ * ``fire``
+    * ``hash``: Unique hash
+    * ``indent``: Indent level
+    * ``value``: The value being awaited
 
 **``Iroh.FUNCTION``**:
  * ``enter``
@@ -365,6 +377,8 @@ Iroh.ALLOC
 Iroh.MEMBER
   a.b
   a[b]
+Iroh.AWAIT
+  await x
 Iroh.THIS
   this
 Iroh.LITERAL
