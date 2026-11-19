@@ -55,21 +55,7 @@
   `trace`/`traceAsync`/`eventToJSON`/`safeValue` in `API.md`, and the
   `trace()` one-liner in the README's JavaScript quick start.
 
-### Not done — deliberately
-- **Module syntax is still out of scope.** `import` / `export` and
-  import attributes need `sourceType: "module"`, and traced modules
-  can't run through plain `eval` — that is a different execution path
-  (the option-C work from the 0.6.0 planning), not this release.
-  Import attributes fail with the clear Acorn message, covered by a test.
-- **Pre-existing, found while hardening, not fixed here:** a program
-  whose last top-level statement is a bare block (`{ 1; }`) returns
-  `undefined` from `trace()` instead of the block's completion value
-  (`eval("{ 1; }")` is `1` natively). `$$frameValue` only tracks
-  top-level expression statements. Fixing it means changing how blocks
-  propagate completion values through the patcher — real regression
-  risk for a corner case, so it stays a known limitation for now.
-
-### Hardening (before the GitHub push)
+### Hardening, first pass (before the GitHub push)
 - **Stage options were silently dropped.** The constructor took `opt`
   and stored `{}`; the `StageOptions` in `index.d.ts` promised
   `ecmaVersion` / `allowHashBang` that did nothing. `patch()` now
@@ -90,9 +76,45 @@
 - Browser bundle smoke-tested in a `vm` with a fake `window`: loads,
   `VERSION` is 0.6.0, `trace()` works.
 
+### Hardening, second pass (before the GitHub push)
+- **Bare blocks now return their completion value.** The known
+  limitation from the first pass is fixed: STAGE1.Program scans
+  backwards for the last expression statement and recurses into
+  trailing blocks (and nested blocks) to find one, so `{ 1; }` is `1`
+  and `{ { 2; } }` is `2`. Blocks with no expression statement still
+  return `undefined`, and the old looseness (the last expression
+  statement wins even when a declaration follows it) is unchanged.
+- **A program may declare its own top-level `Iroh`.** `trace()` runs
+  the script through a `Function` whose parameter is named `Iroh`, so
+  `const Iroh = 5;` used to fail with "Identifier 'Iroh' has already
+  been declared". On that exact SyntaxError it retries with the
+  instance under `$$Iroh` and the generated header rewritten; the
+  user's own `Iroh` then works as their variable. (Writing the retry
+  caught a second bug: in a replacement string `$$` means a literal
+  `$`, so the rewrite used a replacement function.)
+- **Primitive throws no longer risk masking.** `trace()` attached
+  prior events with `e.events = events`, which throws a TypeError in
+  strict mode when the program threw a string, a number, or null —
+  hiding the original error. Events are now attached only when the
+  thrown value is an object or function (both sync and async paths);
+  primitives rethrow unchanged.
+- **The CLI reports non-Error throws.** A program throwing a string
+  used to produce a bare `{"type":"error"}` line with no name or
+  message. A shared `errorLine()` normalizes any thrown value
+  (`name: "Error"`, `message: String(e)`).
+- Buble re-checked on every changed `src/` file after this pass: no
+  `async`/`await`, no `for...of` anywhere.
+
+### Not done — deliberately
+- **Module syntax is still out of scope.** `import` / `export` and
+  import attributes need `sourceType: "module"`, and traced modules
+  can't run through plain `eval` — that is a different execution path
+  (the option-C work from the 0.6.0 planning), not this release.
+  Import attributes fail with the clear Acorn message, covered by a test.
+
 ### Tests
-- 73 tests now: 61 Node (16 behaviour + 15 fixtures + 8 CLI + 9 modern
-  syntax + 12 trace + 1 ESM) + 7 Python + 5 C++, plus the TypeScript
+- 79 tests now: 67 Node (16 behaviour + 15 fixtures + 9 CLI + 11 modern
+  syntax + 15 trace + 1 ESM) + 7 Python + 5 C++, plus the TypeScript
   type test. `npm test` runs all three suites; `npm run test:types`
   checks the types.
 

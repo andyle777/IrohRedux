@@ -27,6 +27,17 @@ const CATEGORY = Iroh.CATEGORY;
 
 const TRIGGERS = ["before", "after", "enter", "leave", "fire", "test", "return"];
 
+// Normalize any thrown value into an error line. A program may throw a
+// string, a number, or null — those have no .name/.message, so without
+// this the error line would carry no information at all.
+function errorLine(e, message) {
+  let name = (e && typeof e === "object" && e.name) ? e.name : "Error";
+  let msg = message !== undefined
+    ? message
+    : ((e && typeof e === "object" && e.message !== undefined) ? e.message : String(e));
+  return { type: "error", name: name, message: msg };
+}
+
 function printLine(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
@@ -82,7 +93,7 @@ async function main() {
     try {
       code = fs.readFileSync(file, "utf8");
     } catch (e) {
-      printLine({ type: "error", name: e.name, message: "Cannot read " + file + ": " + e.message });
+      printLine(errorLine(e, "Cannot read " + file + ": " + (e.message || String(e))));
       process.exitCode = 1;
       return;
     }
@@ -114,7 +125,7 @@ async function main() {
   try {
     stage = new Iroh.Stage(code);
   } catch (e) {
-    printLine({ type: "error", name: e.name, message: e.message });
+    printLine(errorLine(e));
     process.exitCode = 1;
     return;
   }
@@ -133,7 +144,7 @@ async function main() {
     result = eval(stage.script);
     if (result && typeof result.then === "function") result = await result;
   } catch (e) {
-    printLine({ type: "error", name: e.name, message: e.message });
+    printLine(errorLine(e));
     process.exitCode = 1;
     return;
   }

@@ -90,10 +90,47 @@ test("traceAsync() attaches events to an async rejection", async () => {
   assert.equal(caught.events.filter((e) => e.event === "AWAIT").length, 1);
 });
 
+test("traceAsync() rethrows a primitive rejection unchanged", async () => {
+  let caught = "not caught";
+  try {
+    await Iroh.traceAsync(
+      "async function f() { await Promise.resolve(); throw 'async-oops'; } f();"
+    );
+  } catch (e) {
+    caught = e;
+  }
+  assert.equal(caught, "async-oops");
+});
+
 test("trace() with an empty events list collects nothing but still runs", () => {
   let { events, result } = Iroh.trace("let x = 1 + 1; x;", { events: [] });
   assert.deepEqual(events, []);
   assert.equal(result, 2);
+});
+
+test("trace() returns the completion value of a trailing bare block", () => {
+  // Was undefined before the patcher learned to look inside blocks.
+  assert.equal(Iroh.trace("{ 1; }").result, 1);
+  assert.equal(Iroh.trace("{ { 2; } }").result, 2);
+  assert.equal(Iroh.trace("let x = 1; { x + 1; }").result, 2);
+  assert.equal(Iroh.trace("{ let y = 1; }").result, undefined);
+  // Pre-existing looseness, kept: the last expression statement wins
+  // even when a declaration follows it.
+  assert.equal(Iroh.trace("let a = 5; a; let b = 1;").result, 5);
+});
+
+test("trace() lets a program declare its own top-level Iroh", () => {
+  // The Function parameter is named Iroh, so a program declaring its
+  // own Iroh used to fail with "Identifier 'Iroh' has already been
+  // declared". The fallback retries with the instance under $$Iroh.
+  let { result } = Iroh.trace("const Iroh = 5; Iroh;");
+  assert.equal(result, 5);
+});
+
+test("trace() rethrows primitive values unchanged", () => {
+  assert.throws(() => Iroh.trace("throw 'oops';"), (e) => e === "oops");
+  assert.throws(() => Iroh.trace("throw 42;"), (e) => e === 42);
+  assert.throws(() => Iroh.trace("throw null;"), (e) => e === null);
 });
 
 test("trace() passes stageOptions to the Stage", () => {

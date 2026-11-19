@@ -25,11 +25,25 @@ STAGE1.Program = function(node, patcher) {
     // program frame value id
     let frameValueId = "$$frameValue";
     // patch program frame value debug
-    let last = null;
-    for (let ii = 0; ii < node.body.length; ++ii) {
-      let child = node.body[ii];
-      if (child.type === "ExpressionStatement" && !child.magic) last = child;
-    };
+    // The completion value of the program is the value of its last
+    // expression statement — but a bare block as the last statement
+    // used to be skipped, so `{ 1; }` returned undefined instead of 1.
+    // Scan backwards for the last expression statement, recursing into
+    // trailing blocks (and nested blocks) to find one. Other last
+    // statements (declarations, ifs, loops) have an empty completion,
+    // so they are skipped the same way the old scan skipped them.
+    function lastExpressionStatement(body) {
+      for (let ii = body.length - 1; ii >= 0; --ii) {
+        let child = body[ii];
+        if (child.type === "ExpressionStatement" && !child.magic) return child;
+        if (child.type === "BlockStatement") {
+          let inner = lastExpressionStatement(child.body);
+          if (inner !== null) return inner;
+        }
+      }
+      return null;
+    }
+    let last = lastExpressionStatement(node.body);
     // only patch the very last expr statement
     if (last !== null) {
       last.expression = {

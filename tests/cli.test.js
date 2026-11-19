@@ -76,6 +76,14 @@ test("CLI reports a runtime error after the events leading up to it", () => {
   assert.equal(lines.find((l) => l.type === "result"), undefined);
 });
 
+test("CLI reports a non-Error throw with its value", () => {
+  let { proc, lines } = runCli(`throw "cli-boom";`, []);
+  assert.equal(proc.status, 1);
+  let error = lines.find((l) => l.type === "error");
+  assert.equal(error.name, "Error");
+  assert.equal(error.message, "cli-boom");
+});
+
 test("CLI rejects an unknown event category with exit code 2", () => {
   let { proc } = runCli(`1;`, ["--events", "NOPE"]);
   assert.equal(proc.status, 2);

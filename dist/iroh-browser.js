@@ -9031,11 +9031,25 @@ STAGE1.Program = function(node, patcher) {
     // program frame value id
     var frameValueId = "$$frameValue";
     // patch program frame value debug
-    var last = null;
-    for (var ii = 0; ii < node.body.length; ++ii) {
-      var child = node.body[ii];
-      if (child.type === "ExpressionStatement" && !child.magic) { last = child; }
+    // The completion value of the program is the value of its last
+    // expression statement — but a bare block as the last statement
+    // used to be skipped, so `{ 1; }` returned undefined instead of 1.
+    // Scan backwards for the last expression statement, recursing into
+    // trailing blocks (and nested blocks) to find one. Other last
+    // statements (declarations, ifs, loops) have an empty completion,
+    // so they are skipped the same way the old scan skipped them.
+    function lastExpressionStatement(body) {
+      for (var ii = body.length - 1; ii >= 0; --ii) {
+        var child = body[ii];
+        if (child.type === "ExpressionStatement" && !child.magic) { return child; }
+        if (child.type === "BlockStatement") {
+          var inner = lastExpressionStatement(child.body);
+          if (inner !== null) { return inner; }
+        }
+      }
+      return null;
     }
+    var last = lastExpressionStatement(node.body);
     // only patch the very last expr statement
     if (last !== null) {
       last.expression = {
@@ -12510,15 +12524,43 @@ function trace(code, options) {
   // instance passed in as its `Iroh` parameter. The function is strict,
   // matching the eval-based usage, and returns $$frameValue — the
   // program's completion value, the same value eval() returns.
-  var run = new Function("Iroh", '"use strict";\n' + stage.script + "\n; return $$frameValue;");
+  var run;
+  try {
+    run = new Function("Iroh", '"use strict";\n' + stage.script + "\n; return $$frameValue;");
+  } catch (e) {
+    // A program that declares its own top-level `Iroh` collides with
+    // the Function parameter of the same name ("Identifier 'Iroh' has
+    // already been declared"). Retry with the instance under a
+    // $$-prefixed name and rewrite the generated header to match; the
+    // user's own Iroh then works as their variable.
+    if (e instanceof SyntaxError && e.message.indexOf("'Iroh' has already been declared") !== -1) {
+      // Replace via a function: in a replacement string "$$" means a
+      // literal "$", so "$$Iroh" would come out as "$Iroh".
+      var renamed = stage.script.replace("Iroh.stages[", function () { return "$$Iroh.stages["; });
+      run = new Function("$$Iroh", '"use strict";\n' + renamed + "\n; return $$frameValue;");
+    } else {
+      throw e;
+    }
+  }
   var result;
   try {
     result = run(this);
   } catch (e) {
-    e.events = events;
+    attachTraceEvents(e, events);
     throw e;
   }
   return { events: events, result: result };
+}
+
+// Attach the events that fired before an error to the error itself, so
+// the trace of a failed program is not lost. Only objects can carry a
+// property — a program may throw a string, a number, or null, and in
+// strict mode assigning to a primitive throws, masking the original
+// error. Those rethrow unchanged.
+function attachTraceEvents(err, events) {
+  if (err !== null && (typeof err === "object" || typeof err === "function")) {
+    err.events = events;
+  }
 }
 
 // Async version of trace(): awaits the program's completion value before
@@ -12538,7 +12580,7 @@ function traceAsync(code, options) {
       // fired before it — otherwise the trace of a rejected program is
       // lost entirely.
       function (err) {
-        err.events = out.events;
+        attachTraceEvents(err, out.events);
         throw err;
       }
     );

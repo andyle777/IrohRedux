@@ -79,6 +79,11 @@ test("import attributes still fail clearly without module support", () => {
   );
 });
 
+test("bare blocks return their completion value", () => {
+  assert.equal(run("{ 1; }"), 1);
+  assert.equal(run("{ { 2; } }"), 2);
+});
+
 test("Stage constructor honours parser options", () => {
   // The constructor used to take `opt` and silently drop it.
   let code = "function f() { using x = { [Symbol.dispose]() {} }; return 1; } f();";

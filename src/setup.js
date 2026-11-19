@@ -94,16 +94,44 @@ export function trace(code, options) {
   // instance passed in as its `Iroh` parameter. The function is strict,
   // matching the eval-based usage, and returns $$frameValue — the
   // program's completion value, the same value eval() returns.
-  let run = new Function("Iroh", '"use strict";\n' + stage.script + "\n; return $$frameValue;");
+  let run;
+  try {
+    run = new Function("Iroh", '"use strict";\n' + stage.script + "\n; return $$frameValue;");
+  } catch (e) {
+    // A program that declares its own top-level `Iroh` collides with
+    // the Function parameter of the same name ("Identifier 'Iroh' has
+    // already been declared"). Retry with the instance under a
+    // $$-prefixed name and rewrite the generated header to match; the
+    // user's own Iroh then works as their variable.
+    if (e instanceof SyntaxError && e.message.indexOf("'Iroh' has already been declared") !== -1) {
+      // Replace via a function: in a replacement string "$$" means a
+      // literal "$", so "$$Iroh" would come out as "$Iroh".
+      let renamed = stage.script.replace("Iroh.stages[", () => "$$Iroh.stages[");
+      run = new Function("$$Iroh", '"use strict";\n' + renamed + "\n; return $$frameValue;");
+    } else {
+      throw e;
+    }
+  }
   let result;
   try {
     result = run(this);
   } catch (e) {
-    e.events = events;
+    attachTraceEvents(e, events);
     throw e;
   }
   return { events: events, result: result };
 };
+
+// Attach the events that fired before an error to the error itself, so
+// the trace of a failed program is not lost. Only objects can carry a
+// property — a program may throw a string, a number, or null, and in
+// strict mode assigning to a primitive throws, masking the original
+// error. Those rethrow unchanged.
+function attachTraceEvents(err, events) {
+  if (err !== null && (typeof err === "object" || typeof err === "function")) {
+    err.events = events;
+  }
+}
 
 // Async version of trace(): awaits the program's completion value before
 // returning, so events from async continuations (await, promises) are
@@ -122,7 +150,7 @@ export function traceAsync(code, options) {
       // fired before it — otherwise the trace of a rejected program is
       // lost entirely.
       (err) => {
-        err.events = out.events;
+        attachTraceEvents(err, out.events);
         throw err;
       }
     );
