@@ -56,7 +56,11 @@
     "test:cpp": "make -C cpp test",
     "test:types": "tsc --noEmit --strict --module esnext --moduleResolution bundler --target es2022 tests/types.ts",
     "codegen:irohscript": "npm run build && node scripts/compile-irohscript-core.mjs && npm run build",
- "check:dist": "node scripts/check-dist-drift.mjs"
+ "check:dist": "node scripts/check-dist-drift.mjs",
+    "check:summary": "node scripts/check-suite-summary.mjs",
+    "check:matrix": "tools/check-translate-matrix.sh",
+    "check:api-txt": "node scripts/check-api-txt.mjs",
+    "build:ai-bundle": "node scripts/build-ai-bundle.mjs"
   },
   "devDependencies": {
     "fast-check": "^4.10.3",
