@@ -299,7 +299,7 @@ function makeJSEmitter(target, report, env, hints) {
   let isPy = target === "python";
   let lines = [];
   let indentLevel = 0;
-  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, cstdlib: false, sysexit: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false };
+  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, cstdlib: false, sysexit: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false, jsbool: false };
   let noted = {};
   function noteOnce(key, text) {
     if (!noted[key]) {
@@ -524,7 +524,13 @@ function makeJSEmitter(target, report, env, hints) {
           if (t === "std::string" || t === "int") {
             parts.push("{" + expr(e, 16) + "}");
           } else if (t === "bool") {
-            parts.push("{(\"true\" if " + expr(e, 16) + " else \"false\")}");
+            // A bool interpolates as "true"/"false". The inline ternary
+            // ("true" if v else "false") nests double quotes inside an
+            // f-string replacement field — legal only on Python 3.12+
+            // (PEP 701) — so route it through a helper, same pattern
+            // as __iroh_jsnum for doubles.
+            needs.jsbool = true;
+            parts.push("{__iroh_jsbool(" + expr(e, 16) + ")}");
           } else if (t === "double") {
             needs.jsnum = true;
             parts.push("{__iroh_jsnum(" + expr(e, 16) + ")}");
@@ -1600,6 +1606,14 @@ function makeJSEmitter(target, report, env, hints) {
         // and floats float, matching JS output exactly.
         header.push("def __iroh_jsmod(a, b):");
         header.push("    return a - int(a / b) * b");
+        header.push("");
+      }
+      if (needs.jsbool) {
+        // JS bool -> string: "true"/"false". A helper, not an inline
+        // ternary, so the double quotes never sit inside an f-string
+        // replacement field (SyntaxError on Python < 3.12, PEP 701).
+        header.push("def __iroh_jsbool(v):");
+        header.push("    return \"true\" if v else \"false\"");
         header.push("");
       }
       if (needs.jsnum) {
