@@ -159,7 +159,7 @@ var CATEGORY = {};
 })();
 
 (function () {
-  var ii = 0;  
+  var ii = 0;
   OP["="] = ii++;
   OP["+"] = ii++;
   OP["-"] = ii++;
@@ -195,6 +195,38 @@ var CATEGORY = {};
   OP["--"] = ii++;
 
 })();
+
+// Reachable categories per tracer (1.1.1, F4): the categories each
+// tracer CAN emit, read from the tracer's own emit sites — not from
+// one program's run, which might not exercise them all. A C++ trace
+// firing 2 categories is complete for its tracer (2 of 2 reachable),
+// not 28 short (2 of 30). The sets are:
+//   javascript: the Stage emits all 30 (the full engine).
+//   python: python/iroh/trace.py _emit sites — ASSIGN, CATCH, CALL,
+//     FUNCTION, IF, LOOP.
+//   cpp: cpp/iroh_trace_rt.cpp emit sites — CALL, FUNCTION only
+//     (function-level by design; no loop/branch instrumentation).
+//   irohscript: irohscript/src/tracer.py sink.emit sites — ASSIGN,
+//     CALL, FUNCTION, IF.
+//   basic: irohscript/src/basic_trace.py sink.emit sites — ASSIGN,
+//     CALL, FUNCTION, IF, LOOP.
+// A language not listed here (or an unknown one) falls back to all
+// 30, which is the JavaScript default — and that fallback is the
+// reason a consumer must never treat a missing `reachable` field as
+// `total`: it would read a non-JS trace as if it were JS.
+var REACHABLE_CATEGORIES = {
+  javascript: null, // null = all categories (the full engine)
+  python: ["ASSIGN", "CATCH", "CALL", "FUNCTION", "IF", "LOOP"],
+  cpp: ["CALL", "FUNCTION"],
+  irohscript: ["ASSIGN", "CALL", "FUNCTION", "IF"],
+  basic: ["ASSIGN", "CALL", "FUNCTION", "IF", "LOOP"],
+};
+
+function reachableCategories(language) {
+  var list = REACHABLE_CATEGORIES[language];
+  if (list === void 0 || list === null) { return Object.keys(CATEGORY); }
+  return list.slice();
+}
 
 var commonjsGlobal = typeof window !== 'undefined' ? window : typeof global !== 'undefined' ? global : typeof self !== 'undefined' ? self : {};
 
@@ -15787,27 +15819,39 @@ function analyze(events, options) {
     : null;
 
   // --- Scorecard -------------------------------------------------------
-  // Coverage: categories fired vs total categories.
+  // Coverage: categories fired vs the categories this tracer can
+  // reach (1.1.1, F4). The denominator is the reachable set for the
+  // trace's language, not the whole model: a C++ trace firing CALL
+  // and FUNCTION is 2 of 2 reachable, not 2 of 30. `missingCategories`
+  // lists the reachable categories that did NOT fire — the ones a
+  // reader could have seen but did not. A consumer must never treat
+  // a missing `reachable` field as `total`: that would read a
+  // non-JS trace as if it were JavaScript.
+  var language = options.language || "javascript";
+  var reachableList = reachableCategories(language);
+  var reachableSet = {};
+  for (var ii$9 = 0; ii$9 < reachableList.length; ++ii$9) { reachableSet[reachableList[ii$9]] = true; }
   var totalCategories = Object.keys(CATEGORY).length;
   var firedSet = {};
-  for (var ii$9 = 0; ii$9 < events.length; ++ii$9) {
-    if (events[ii$9].category) { firedSet[events[ii$9].category] = true; }
+  for (var ii$10 = 0; ii$10 < events.length; ++ii$10) {
+    if (events[ii$10].category) { firedSet[events[ii$10].category] = true; }
   }
   var firedCategories = Object.keys(firedSet).sort();
   var missingCategories = [];
-  var allCategories = Object.keys(CATEGORY);
-  for (var ii$10 = 0; ii$10 < allCategories.length; ++ii$10) {
-    if (!firedSet[allCategories[ii$10]]) { missingCategories.push(allCategories[ii$10]); }
+  for (var ii$11 = 0; ii$11 < reachableList.length; ++ii$11) {
+    if (!firedSet[reachableList[ii$11]]) { missingCategories.push(reachableList[ii$11]); }
   }
   var coverage = {
     fired: firedCategories.length,
+    reachable: reachableList.length,
     total: totalCategories,
-    value: totalCategories > 0
-      ? Math.round((firedCategories.length / totalCategories) * 10000) / 10000
+    value: reachableList.length > 0
+      ? Math.round((firedCategories.length / reachableList.length) * 10000) / 10000
       : 0,
     firedCategories: firedCategories,
     missingCategories: missingCategories,
-    note: "Assumes an unfiltered trace (events: ALL). A trace collected with an events filter scores the filter, not the toolkit.",
+    note: firedCategories.length + " of " + reachableList.length + " reachable for a " + language +
+      " trace (" + totalCategories + " exist in the model). Assumes an unfiltered trace (events: ALL). A trace collected with an events filter scores the filter, not the toolkit.",
   };
 
   // Fidelity: observed regions vs all regions. Observed = distinct
@@ -15816,16 +15860,16 @@ function analyze(events, options) {
   // spots = known uninstrumented constructs found in the source, when
   // the source was given.
   var hashSet = {};
-  for (var ii$11 = 0; ii$11 < events.length; ++ii$11) {
-    if (typeof events[ii$11].hash === "number") { hashSet[events[ii$11].hash] = true; }
+  for (var ii$12 = 0; ii$12 < events.length; ++ii$12) {
+    if (typeof events[ii$12].hash === "number") { hashSet[events[ii$12].hash] = true; }
   }
   var observedRegions = Object.keys(hashSet).length;
   var missingRegions = 0;
-  for (var ii$12 = 0; ii$12 < testHashes.length; ++ii$12) {
-    if (!loopEnters[String(loopTests[testHashes[ii$12]].hash)]) { missingRegions += 1; }
+  for (var ii$13 = 0; ii$13 < testHashes.length; ++ii$13) {
+    if (!loopEnters[String(loopTests[testHashes[ii$13]].hash)]) { missingRegions += 1; }
   }
-  for (var ii$13 = 0; ii$13 < ifHashes.length; ++ii$13) {
-    var g$4 = ifTests[ifHashes[ii$13]];
+  for (var ii$14 = 0; ii$14 < ifHashes.length; ++ii$14) {
+    var g$4 = ifTests[ifHashes[ii$14]];
     var t = 0;
     var f = 0;
     for (var jj$3 = 0; jj$3 < g$4.events.length; ++jj$3) {
@@ -15878,8 +15922,8 @@ function analyze(events, options) {
 
   var warnings = 0;
   var infos = 0;
-  for (var ii$14 = 0; ii$14 < findings.length; ++ii$14) {
-    if (findings[ii$14].severity === "warning") { warnings += 1; }
+  for (var ii$15 = 0; ii$15 < findings.length; ++ii$15) {
+    if (findings[ii$15].severity === "warning") { warnings += 1; }
     else { infos += 1; }
   }
   var summary = {
@@ -15969,17 +16013,22 @@ var VECTOR_FEATURE_NAMES = FEATURE_NAMES.concat(["coverage"]);
 // plain array Iroh.trace() returns (or the CLI's event lines, or a
 // Python/C++ tracer's — the projection only reads event/category/
 // trigger/hash/indent/value, so it works the same across languages).
-function toVector(events) {
+// `options.language` (default "javascript") picks the reachable
+// set for the coverage feature (1.1.1, F4): the coverage feature is
+// fired / reachable, not fired / total, so a function-level C++
+// trace is not penalised for the categories its tracer cannot emit.
+function toVector(events, options) {
+  options = options || {};
   events = Array.isArray(events) ? events : [];
   var features = extractFeatures(events);
-  var totalCategories = Object.keys(CATEGORY).length;
+  var reachableList = reachableCategories(options.language || "javascript");
   var fired = {};
   for (var ii = 0; ii < events.length; ++ii) {
     if (events[ii].category) { fired[events[ii].category] = true; }
   }
   var firedCount = Object.keys(fired).length;
-  var coverage = totalCategories > 0
-    ? Math.round((firedCount / totalCategories) * 10000) / 10000
+  var coverage = reachableList.length > 0
+    ? Math.round((firedCount / reachableList.length) * 10000) / 10000
     : 0;
   var named = {
     calls: features.calls,
@@ -16130,7 +16179,7 @@ function scan(events, options) {
   }
   maxFindings = Math.max(0, Math.floor(maxFindings));
   var analysis = analyze(events, options);
-  var vectors = toVector(events);
+  var vectors = toVector(events, { language: options.language || "javascript" });
   var allFindings = analysis.findings;
   var truncated = 0;
   var findings = allFindings;
@@ -18982,7 +19031,7 @@ function makeJSEmitter(target, report, env, hints) {
   var isPy = target === "python";
   var lines = [];
   var indentLevel = 0;
-  var needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, cstdlib: false, sysexit: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false };
+  var needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, cstdlib: false, sysexit: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false, jsbool: false };
   var noted = {};
   function noteOnce(key, text) {
     if (!noted[key]) {
@@ -19207,7 +19256,13 @@ function makeJSEmitter(target, report, env, hints) {
           if (t === "std::string" || t === "int") {
             parts$1.push("{" + expr(e, 16) + "}");
           } else if (t === "bool") {
-            parts$1.push("{(\"true\" if " + expr(e, 16) + " else \"false\")}");
+            // A bool interpolates as "true"/"false". The inline ternary
+            // ("true" if v else "false") nests double quotes inside an
+            // f-string replacement field — legal only on Python 3.12+
+            // (PEP 701) — so route it through a helper, same pattern
+            // as __iroh_jsnum for doubles.
+            needs.jsbool = true;
+            parts$1.push("{__iroh_jsbool(" + expr(e, 16) + ")}");
           } else if (t === "double") {
             needs.jsnum = true;
             parts$1.push("{__iroh_jsnum(" + expr(e, 16) + ")}");
@@ -20283,6 +20338,14 @@ function makeJSEmitter(target, report, env, hints) {
         // and floats float, matching JS output exactly.
         header$1.push("def __iroh_jsmod(a, b):");
         header$1.push("    return a - int(a / b) * b");
+        header$1.push("");
+      }
+      if (needs.jsbool) {
+        // JS bool -> string: "true"/"false". A helper, not an inline
+        // ternary, so the double quotes never sit inside an f-string
+        // replacement field (SyntaxError on Python < 3.12, PEP 701).
+        header$1.push("def __iroh_jsbool(v):");
+        header$1.push("    return \"true\" if v else \"false\"");
         header$1.push("");
       }
       if (needs.jsnum) {
