@@ -1,3 +1,35 @@
+# FOR HUMANS
+
+This guide teaches you to run IrohRedux, step by step: trace a
+program, analyze the trace, translate it, watch it live, direct
+it, and check the box it runs on. If you only want the facts
+(flags, JSON shapes, coverage denominators), skip to the
+[FOR AI](#for-ai) section at the end — the same file, machine
+first.
+
+## Install
+
+Download from the [Releases page](https://github.com/andyle777/IrohRedux/releases).
+No Node install needed for the binaries.
+
+- **Windows, Linux, macOS:** the EXE for your system. Download,
+  run. The EXE embeds its own Node runtime, version 18.5.0.
+- **Android:** the APK. Install it on your phone. JavaScript legs
+  only — there is no python3 on Android.
+
+Or from source (needs Node >= 18):
+
+```sh
+git clone https://github.com/andyle777/IrohRedux.git
+cd IrohRedux
+npm install
+npm run dist
+npm test
+```
+
+Works offline — no network required. Nothing phones home, checks
+for updates, or downloads at first run.
+
 ### Getting started
 
 The idea behind Iroh is simple. You attach listeners to your code and as soon as the specified code part is reached, it will fire. You can listen for calls, returns, loops or any other supported code type.
@@ -52,7 +84,9 @@ const { events, result, analysis } = Iroh.analyzeTrace(`
 // analysis.findings[0].code === "HOT_LOOP" — "Loop entered 150 times
 // (threshold 100).", with evidence { hash, kind, iterations: 150,
 // tests: 151, threshold: 100 } and neuron { label: "hot", score: 0.0259 }
-// analysis.scores.coverage.value === 0.3  (9 of 30 categories fired)
+// analysis.scores.coverage.value === 0.2333  (7 of 30 categories
+// fired — the denominator is always 30 in 1.1.0, the full model;
+// a C++ trace fires 2 and reads "2 of 30", complete for its tracer)
 // analysis.scores.fidelity.value === 1    (every region observed)
 // analysis.scores.overhead.denominator === "statements"
 ```
@@ -101,6 +135,20 @@ anything was unsupported), and `--from` is inferred from `.py` / `.cpp` /
 language; anything else goes two-hop via JavaScript and the report says
 so.
 
+Two 1.1.0-patch facts about translate. First, template literals to
+Python now emit concatenation, not f-strings: `` `a=${"lit"}` `` becomes
+`("a=" + "lit")`, so the emitted code parses and runs on Python 3.9–3.12
+(the old f-string output was a SyntaxError below 3.12 while the report
+said `ok: true` — and in 1.1.0 the bool case was broken too, so this
+patch also adds the `__iroh_jsbool` helper that 1.1.0 never had).
+Second, every translate result carries a `verify`
+block: `{attempted, ran, interpreter, exit}` — for the Python leg the
+emitted code is actually executed under `python3` (10 s cap) and `ran`
+is true only when it exited 0; when it fails, `stderr` carries the
+interpreter's output verbatim. `ran: null` means not attempted, never
+success. Other legs record `attempted: false` with a reason. See
+`API.md` for the full shape.
+
 ## Trace Python and C++ natively (0.9.0) — and IrohScript and BASIC (1.1.0)
 
 ```sh
@@ -145,22 +193,26 @@ category; a call that raises has no `CALL_END` / `LEAVE`.
 
 BASIC (stdlib only, `irohscript/src/basic.py` + `src/basic_trace.py`):
 a small dedicated interpreter — `FOR`/`NEXT` loops (`LOOP_TEST` /
-`LOOP_ENTER`), `IF` tests, `GOSUB` subroutines (as calls named
+`LOOP_ENTER`), `WHILE`/`WEND` loops (nested, since 1.1.0 — one
+`LOOP_TEST` per iteration plus the final false test, kind `"While"`),
+`IF` tests, `GOSUB` subroutines (as calls named
 `gosub@<line>`), assignments, `INPUT`. A 150-iteration `FOR` loop
 analyzes to `HOT_LOOP` (150 iterations, 151 tests), a never-entered one
 to `ZERO_ITERATION_LOOP`. Honest limits: `GOTO` has no event category,
 so `GOTO` loops are invisible in the trace; `DIM` and array reads have
-no events. The v1 subset is LET, PRINT, IF/THEN/ELSE, FOR/NEXT, GOTO,
-GOSUB/RETURN, INPUT, DIM/arrays, END/STOP — anything else (DATA/READ,
-WHILE/WEND, DEF FN, built-in functions) is a clear error naming the
-construct.
+no events. The v1 subset is LET, PRINT, IF/THEN/ELSE, FOR/NEXT,
+WHILE/WEND, GOTO, GOSUB/RETURN, INPUT, DIM/arrays, END/STOP — anything
+else (DATA/READ, DEF FN, built-in functions) is a clear error naming
+the construct.
 
 C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
 `-finstrument-functions -rdynamic -O0` and linked against the runtime
 (compiled without instrumentation — the hooks must live in a separate
-file). Function-level only in v1: no loop/branch/line events, so coverage
-is honestly low (2 of 30 categories) and `HOT_LOOP`/`ONE_SIDED_BRANCH`
-cannot fire on a C++ trace. Names resolve via `dladdr` +
+file). Function-level only in v1: no loop/branch/line events, so
+coverage reads "2 of 30" for a C++ trace (CALL and FUNCTION
+are the only categories its tracer can emit; 1.1.0 has no
+per-language reachable sets, so the denominator stays 30)
+and `HOT_LOOP`/`ONE_SIDED_BRANCH` cannot fire on a C++ trace. Names resolve via `dladdr` +
 `__cxa_demangle`, falling back to the executable's `.symtab` for local
 symbols (lambdas, `static` and anonymous-namespace functions);
 unresolved names carry `"name": null` and the raw
@@ -292,6 +344,28 @@ top-level await work: `--direct` on a `.mjs` file or a script with
 top-level await directs it (via `directModule()` / `directAsync()`).
 `--direct` combines with `--analyze`, `--scan`, and `--live`; the
 analysis and scan lines follow the direct-summary.
+
+## Check the box and the run (1.1.0)
+
+One command answers "which engine is this, and what is it running
+on":
+
+```sh
+node cli/iroh.js --version
+# iroh 1.1.0 (engine dist iroh-node.js 7c8b83675a15, runtime node v24.22.1)
+```
+
+`iroh --version` prints the version, the SHA-256 of the engine
+actually in this build, and the runtime actually running it. In a
+packaged binary the runtime is the embedded Node 18.5.0.
+
+1.1.0 has no `iroh capabilities` or `iroh doctor` — those are 1.1.1
+commands, not backported. There is also no `--max-events` cap and
+no `--verify` CLI flag in this generation (both 1.1.1 work), and
+no phone-as-server feature (`iroh serve` / `iroh node` are 1.1.1
+only). To check what a box can run, run the legs: a Python leg
+with no `python3` on PATH fails loudly and names the missing
+toolchain instead of pretending to run.
 
 The rest of this guide uses the classic Stage API, which is still fully
 supported and gives you live listeners that can change values mid-flight.
@@ -448,3 +522,43 @@ After the program finished, your console should come up with something like this
 With each branch deepness level we move in by 1 blank sign.
 
 You may noticed the first blank sign which is caused by ``Iroh.PROGRAM`` - when entering a program, the branch level increments by one and after the program is finished it decrements.
+
+---
+
+# FOR AI
+
+Machine-readable facts. Load this section without guessing. If a
+fact here disagrees with a prose paragraph above, this section wins
+— and the disagreement is a bug; file it.
+
+- Engine: IrohRedux 1.1.0 (patched in place, 20 Nov 2026). No
+  1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
+  `7c8b83675a15efbd0d701be4bf47ae4ea07a4acc1b985c58cc0e35fd360a5dbf`.
+- Ask for JSON. Never parse console prose; it is for humans and
+  will change. Event streams are JSON lines, one object per line,
+  with the `language` field always set.
+- `--scan` returns `{vectors, findings, scores, summary}`.
+  Findings are capped at 200; when `summary.findingsTruncated`
+  > 0 your list is a prefix, say so when you report.
+- Every coverage number carries its own denominator. In 1.1.0
+  the denominator is always 30 (the full category model), for
+  every language — there are no per-language reachable sets in
+  this generation (those are 1.1.1 work). A C++ trace at 2 of 30
+  is complete for its tracer, not 28 short.
+- Translate results carry a `verify` block:
+  `{attempted, ran, interpreter, exit}` plus `stderr` when `ran`
+  is false or `reason` when `attempted` is false. `ran: null`
+  means not attempted, not success. Only the Python leg is
+  executed (under `python3`, 10 s cap).
+- Template literals to Python emit concatenation, not f-strings:
+  `` `a=${x}` `` becomes `("a=" + str(x))`. The old f-string
+  output was a SyntaxError on Python 3.9–3.11 while the report
+  said `ok: true` — and in 1.1.0 the bool case was broken too.
+- No server / node surface in 1.1.0 (`iroh serve` / `iroh node`
+  are 1.1.1 work).
+- Works offline — no network required. No artifact phones home,
+  checks for updates, or downloads at first run.
+- Full machine-readable reference: `API.md` (FOR AI section) and
+  `README.md` (FOR AI section). The AI bundle regenerates its
+  `txt/` files from the same markdown sources, so they cannot
+  drift.
