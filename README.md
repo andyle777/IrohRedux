@@ -32,6 +32,11 @@ throwing paths), translates programs between all five languages, and can
 find the inputs that drive a program down each branch. No LLM, no
 network, no model — deterministic rules over a trace.
 
+The original Iroh 0.3.0 (2018) lives in `original-iroh/`, alongside
+IrohRedux, preserved untouched. IrohRedux is the fork that builds on it —
+the core idea is Felix Maier's, and the original is here so anyone can see
+where it started.
+
 ### Releases
 
 Three releases, all on the
