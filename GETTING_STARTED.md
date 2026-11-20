@@ -373,11 +373,11 @@ certified).
 ```sh
 node cli/iroh.js doctor
 # Last test run: 2026-11-20T08:22:43.349Z on Node v24.22.1
-#   node: ran 452, failed 0, skipped 0
+#   node: ran 454, failed 0, skipped 0
 #   python: ran 25, failed 0, skipped 0
 #   ...
 # Toolchains: node v24.22.1, python3 3.12.3, g++ ...
-# dist: iroh-node.js 3650052798f7, ...
+# dist: iroh-node.js d7e463beb794, ...
 ```
 
 `iroh doctor` prints the last recorded test run (from
@@ -596,7 +596,7 @@ fact here disagrees with a prose paragraph above, this section wins
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `6ceaeceb3013eefa8182757389370877266f50b2a3bd4bddf3cec20c0b9784a9`.
+  `d7e463beb794c0638a395d0470f696093d4be834fbfe72535cfb48d48463766d`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set.

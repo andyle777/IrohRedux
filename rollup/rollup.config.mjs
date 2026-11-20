@@ -8,6 +8,6 @@ export default {
     "astring"
   ],
   plugins: [
-    json()
+    json({ compact: true })
   ]
 }

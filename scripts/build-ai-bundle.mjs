@@ -135,12 +135,22 @@ function main() {
       ["GETTING_STARTED.md", "GETTING_STARTED.txt"],
       ["SERVER.md", "SERVER.txt"],
       [path.join("docs", "memory.md"), "memory.md"],
+      [path.join("docs", "offline-memory-catalog.md"), "offline-memory-catalog.md"],
     ];
     for (const [source, destination] of textFiles) {
       copyFile(path.join(root, source), path.join(stage, "txt", destination));
     }
+    run("python3", [
+      path.join(root, "scripts", "build-memory-catalog.py"),
+      "--check",
+    ], { cwd: root });
     copyFile(path.join(root, "package.json"), path.join(stage, "json", "package.json"));
     copyFile(path.join(root, "generations.json"), path.join(stage, "json", "generations.json"));
+    copyFile(path.join(root, "personality-matrix.json"), path.join(stage, "json", "personality-matrix.json"));
+    copyFile(
+      path.join(root, "memory", "iroh-memory.sqlite3"),
+      path.join(stage, "sqlite", "iroh-memory.sqlite3")
+    );
     for (const name of fs.readdirSync(path.join(root, "schemas")).filter((entry) => entry.endsWith(".json")).sort()) {
       copyFile(path.join(root, "schemas", name), path.join(stage, "json", "schemas", name));
     }

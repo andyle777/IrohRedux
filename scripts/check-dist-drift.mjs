@@ -13,9 +13,9 @@
 //
 // The rebuild happens in a temp dir, never in place: rebuilding in
 // place would rewrite the checked-in dist/ and hide the drift it is
-// meant to catch. The temp tree gets copies of src/, rollup/ and
-// package.json (the build's inputs) plus a hardlinked node_modules,
-// so no dependency is reinstalled and no extra disk is used.
+// meant to catch. The temp tree gets copies of src/, rollup/,
+// package.json and the personality matrix (the build's inputs) plus
+// a hardlinked node_modules, so no dependency is reinstalled.
 //
 // The temp dir MUST live on the same filesystem as the repo (a
 // sibling of the repo root), because node_modules is hardlinked, not
@@ -65,6 +65,10 @@ function main() {
     copyDir(path.join(ROOT, "src"), path.join(tmp, "src"));
     copyDir(path.join(ROOT, "rollup"), path.join(tmp, "rollup"));
     fs.copyFileSync(path.join(ROOT, "package.json"), path.join(tmp, "package.json"));
+    fs.copyFileSync(
+      path.join(ROOT, "personality-matrix.json"),
+      path.join(tmp, "personality-matrix.json")
+    );
     hardlinkDir(path.join(ROOT, "node_modules"), path.join(tmp, "node_modules"));
     let build = spawnSync("npm", ["run", "dist"], {
       cwd: tmp,

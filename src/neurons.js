@@ -11,6 +11,7 @@
 // rule of this module, not the neuron's math.
 
 import { PredictScore, PredictLabel, Features, Weights } from "./neurons-irohscript.js";
+import personalityMatrix from "../personality-matrix.json";
 //
 // The perceptron answers one question: is this trace window "hot"
 // (a busy, repetitive, deeply-nested run) or "normal"? It is a
@@ -30,17 +31,18 @@ import { PredictScore, PredictLabel, Features, Weights } from "./neurons-irohscr
 // The default weights were trained offline (see the training script
 // in the 0.8.0 report) on 200 synthetic labeled feature vectors
 // (deterministic LCG, seeds 12345/999): train 200/200, held-out
-// 100/100. They are frozen constants here — no randomness at runtime.
+// 100/100. The portable JSON is their source of truth; there is no
+// randomness at runtime.
 // train() exists so the perceptron can be re-trained or checked in
 // tests; it is deterministic (fixed order, fixed learning rate, no
 // shuffling).
 
-export const FEATURE_NAMES = ["calls", "depth", "repeat", "imbalance", "mix"];
+const MODEL = personalityMatrix.model;
+export const FEATURE_NAMES = MODEL.featureNames;
 
-// Frozen weights from the offline training run (200 synthetic samples,
-// converged at epoch 1, 200/200 train, 100/100 held-out).
-export const DEFAULT_WEIGHTS = [0.1218, 0.1037, 0.1217, -0.0253, 0.0328];
-export const DEFAULT_BIAS = -0.1;
+// Keep the runtime and the portable JSON model on the same weights.
+export const DEFAULT_WEIGHTS = MODEL.weights[0];
+export const DEFAULT_BIAS = MODEL.bias[0];
 
 // Extract the five features from a trace's events array (the plain
 // objects Iroh.trace() returns). An empty trace is all zeros.

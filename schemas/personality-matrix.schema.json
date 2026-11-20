@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/andyle777/IrohRedux/schemas/personality-matrix.schema.json",
+  "title": "IrohRedux Personality Matrix",
+  "description": "The portable, inspectable one-unit perceptron used to classify trace hotness.",
+  "type": "object",
+  "required": ["format", "model"],
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "const": "iroh.personality-matrix.v1"
+    },
+    "model": {
+      "type": "object",
+      "required": [
+        "id",
+        "version",
+        "description",
+        "featureNames",
+        "featureRanges",
+        "weights",
+        "bias",
+        "labels",
+        "decision",
+        "training"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "const": "trace-hotness-perceptron"
+        },
+        "version": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "featureNames": {
+          "const": ["calls", "depth", "repeat", "imbalance", "mix"]
+        },
+        "featureRanges": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": {
+            "const": [0, 1]
+          }
+        },
+        "weights": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "array",
+            "minItems": 5,
+            "maxItems": 5,
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "bias": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "number"
+          }
+        },
+        "labels": {
+          "type": "object",
+          "required": ["negative", "positive"],
+          "additionalProperties": false,
+          "properties": {
+            "negative": {
+              "const": "normal"
+            },
+            "positive": {
+              "const": "hot"
+            }
+          }
+        },
+        "decision": {
+          "type": "object",
+          "required": ["threshold", "roundingDigits", "rounding"],
+          "additionalProperties": false,
+          "properties": {
+            "threshold": {
+              "const": 0
+            },
+            "roundingDigits": {
+              "const": 4
+            },
+            "rounding": {
+              "const": "Math.round(score * 10000) / 10000"
+            }
+          }
+        },
+        "training": {
+          "type": "object",
+          "required": [
+            "method",
+            "trainingSamples",
+            "trainingCorrect",
+            "validationSamples",
+            "validationCorrect"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "type": "string"
+            },
+            "trainingSamples": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "trainingCorrect": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "validationSamples": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "validationCorrect": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    }
+  }
+}

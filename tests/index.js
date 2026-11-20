@@ -52,6 +52,8 @@
 //                             that drive a program down each branch, on
 //                             the live wire, and the CLI --synthesize
 //                             flag (with --live streaming).
+//   tests/memory-catalog.test.js — verifies the exported perceptron
+//                             matrix and SQLite catalog.
 //   tests/dist-drift.test.js  — the 1.1.1 dist drift gate (F3): rebuilds
 //                             dist/ into a temp dir and byte-compares
 //                             it against the checked-in dist/.
@@ -170,6 +172,7 @@ legs.push(
       "tests/synth.test.js",
       "tests/determinism.test.js",
       "tests/memory.test.js",
+      "tests/memory-catalog.test.js",
       "tests/properties.test.js",
       "tests/fuzz.test.js",
       "tests/dist-drift.test.js",
