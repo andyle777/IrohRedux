@@ -1,5 +1,73 @@
 # Changelog
 
+## Unreleased
+
+- 1.1.1 patch (in place, same version, no 1.1.2, no version bump):
+  template literals to Python now emit concatenation, not
+  f-strings — `` `a=${"lit"}` `` becomes `("a=" + "lit")` — so the
+  emitted code parses and runs on Python 3.9–3.12 (the old output
+  was a SyntaxError below 3.12 while the report said ok). Gates
+  first: `tools/check_fstring_fields.py` (field-level property
+  check) and `tools/check-translate-matrix.sh` (6 cases x Python
+  3.9/3.10/3.11/3.12, `npm run check:matrix`); the old dist
+  `5eb030dd…` fails the matrix with 16 FAIL lines, the patched
+  dist `36500527…` passes 6 x 4. Every translate result now
+  carries a `verify` block (`{attempted, ran, interpreter,
+  exit}`, plus `stderr` verbatim when `ran` is false); only the
+  Python leg is executed (python3, 10 s cap). APK shell Fix B:
+  Node ships as `lib/arm64-v8a/libnode.so` (bundled Node
+  v26.13.1), `extractNativeLibs=true`, targetSdk 34, no copy, no
+  chmod, no `assets/node` duplicate; versionCode 112. `iroh
+  --version` prints version, dist hash, and the runtime actually
+  embedded. All four desktop EXEs rebuilt from the patched engine
+  (pkg 5.8.1, node18 targets — the embedded runtime is Node
+  v18.5.0, stated honestly in `doctor`, `--version`, and the
+  README). README, GETTING_STARTED.md, and API.md rewritten for
+  two audiences (FOR HUMANS / FOR AI); `docs/memory.md` is new
+  (trace memory/state model); `generations.json` is new
+  (`iroh.generations.v1`). The AI bundle is regenerated from the
+  patched engine (see `scripts/build-ai-bundle.mjs`) with a
+  per-file hash manifest. Works offline — no network required.
+  Not verified: no phone install, no Windows/macOS run, no
+  Android emulator — the APK is verified structurally (badging,
+  signatures, alignment, contents) and the serve + node split
+  was exercised end-to-end with the packaged Linux EXE on
+  loopback only.
+
+- Server & node (phone = local server, laptop = local node):
+  `iroh serve` (default port 8471, local network only, no internet
+  needed) serves /trace, /analyze, /scan, /translate, /capabilities
+  and /health as JSON, runs the legs the box can run locally, and
+  delegates the rest to connected laptop nodes; `iroh node
+  --server <host:port>` registers a laptop's legs, long-polls for
+  jobs, runs each leg with the local CLI, and posts the result back,
+  reconnecting with backoff when the server drops. Every result
+  shape is the shape the engine already produces, plus one field,
+  `ranOn` ("local" or the node id); a leg nobody can run returns
+  HTTP 503, never a faked result. Optional `--token` requires the
+  `x-iroh-token` header. The Android app starts the server after
+  setup and shows its address on the status line. New files:
+  lib/serve.js, lib/node.js, lib/leg.js, SERVER.md (protocol +
+  discovery), tests/server.test.js (8 tests, loopback only). No new
+  dependencies (built-in `http` only), no dist change, no version
+  bump. Discovery is manual host:port in v1; mDNS is a follow-up.
+  Not verified on a real phone or second machine — the split was
+  tested with two local processes only; the APK is rebuilt with
+  the server in the 1.1.1 patched set (same version, versionCode
+  112), and the Linux EXE is rebuilt from the same tree so there
+  is a laptop node binary to test against the phone.
+
+- CI fix: the suite-summary test read the PREVIOUS run's
+  `test-results/suite-summary.json` and demanded hardcoded leg counts
+  (node 433). The suite has 435 node tests since F3/F4, so the test
+  failed on every run after the count changed — and on a fresh
+  checkout the file does not exist at all, so CI failed on all 28
+  runs of 1.1.1 while the code itself passed 434 of 435. The test now
+  checks shape only and skips when no previous file exists; the
+  values are gated after the run by `npm run check:summary`
+  (`scripts/check-suite-summary.mjs`), a new CI step right after
+  `npm test`.
+
 ## 1.1.1 — patch: trace memory release (20 Nov 2026)
 
 1.1.1 is a patch on 1.1.0, stability first: no new languages, no event-shape

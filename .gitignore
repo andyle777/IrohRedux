@@ -96,3 +96,11 @@ cpp/test_filter
 # Python bytecode
 __pycache__/
 *.pyctest-results/
+
+# Local standalone Python interpreters for the translate matrix gate
+# (indygreg builds; not checked in — CI installs via setup-python).
+.pythons/
+
+# Test-run output (suite-summary.json is read back by `doctor` and
+# by the suite-summary gate, but it is a local artifact, not source).
+test-results/

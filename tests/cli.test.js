@@ -215,3 +215,17 @@ test("CLI --verify with --direct is a usage error", () => {
   let { proc } = runCli("let x = 1; x;", ["--direct", "--verify"]);
   assert.equal(proc.status, 2);
 });
+
+// 1.1.1 patch: `iroh --version` prints the one-line self-report
+// (Fix Spec 6.7) — engine version, the dist SHA actually in this
+// build, and the runtime actually running it. In a pkg binary the
+// runtime is the embedded Node 18.5.0; here it is the local node.
+test("CLI --version prints version, dist SHA and runtime, exit 0", () => {
+  let proc = spawnSync(process.execPath, [CLI, "--version"], { encoding: "utf8" });
+  assert.equal(proc.status, 0);
+  let pkg = require("../package.json");
+  let crypto = require("node:crypto");
+  let fs = require("node:fs");
+  let distSha = crypto.createHash("sha256").update(fs.readFileSync(path.join(__dirname, "..", "dist", "iroh-node.js"))).digest("hex").slice(0, 12);
+  assert.equal(proc.stdout.trim(), "iroh " + pkg.version + " (engine dist iroh-node.js " + distSha + ", runtime node " + process.version + ")");
+});

@@ -206,12 +206,27 @@ function printUsage() {
     "       iroh <file.js> --synthesize --entry <fn> [--seeds '[[5]]'] [--max-runs 50]\n" +
     "       iroh capabilities [--json]\n" +
     "       iroh doctor\n" +
+    "       iroh --version\n" +
+    "       iroh serve [--port 8471] [--host 0.0.0.0] [--token T]\n" +
+    "       iroh node --server <host:port> [--token T]\n" +
     "capabilities prints one row per language leg and per syntax feature:\n" +
     "available, or unavailable and why. --json prints the same as JSON.\n" +
     "doctor prints the recorded suite summary (from the last npm test\n" +
     "run), the live toolchain versions, the dist hash, and the\n" +
     "capabilities, so a reader can tell whether the box can run the\n" +
     "package and whether the last run actually ran every leg.\n" +
+    "serve starts the local server (see SERVER.md): the phone side.\n" +
+    "It serves /trace, /analyze, /scan, /translate, /capabilities\n" +
+    "and /health as JSON over the local network (default port 8471,\n" +
+    "all interfaces), runs the legs this box can run, and delegates\n" +
+    "the rest to connected nodes. --token requires the header\n" +
+    "x-iroh-token on every executing route; without it there is no\n" +
+    "auth and the local network is the whole security model.\n" +
+    "node connects this machine to a server as a worker (see\n" +
+    "SERVER.md): the laptop side. It registers the legs this box\n" +
+    "can run, long-polls for jobs, runs each leg with the local CLI,\n" +
+    "and posts the result back. It reconnects with backoff when the\n" +
+    "server drops, and stops cleanly on SIGINT/SIGTERM.\n" +
     "Events are streamed as JSON lines on stdout, then a result line.\n" +
     "Use --events ALL (default) or a comma list of categories, e.g. CALL.\n" +
     ".mjs files (or --module) run as ES modules through Iroh.traceModule();\n" +
@@ -440,6 +455,31 @@ async function main() {
     }
     return;
   }
+  // 1.1.1 patch: `iroh --version` — the one-line self-report every
+  // artifact should print (Fix Spec 6.7): engine version, the dist
+  // SHA actually in this binary, and the runtime actually running
+  // it. In a pkg binary process.version is the embedded Node 18.5.0,
+  // not the floor in engines.node — that is the point. package.json
+  // is require()d, so pkg includes it in the snapshot; if it cannot
+  // be read the version prints as "unknown" rather than failing.
+  if (args[0] === "--version") {
+    let version = "unknown";
+    try {
+      version = require("../package.json").version || "unknown";
+    } catch (e) {
+      // Keep going with "unknown".
+    }
+    let distSha = "missing";
+    try {
+      let crypto = require("node:crypto");
+      let bytes = fs.readFileSync(path.join(__dirname, "..", "dist", "iroh-node.js"));
+      distSha = crypto.createHash("sha256").update(bytes).digest("hex").slice(0, 12);
+    } catch (e) {
+      // Keep going with "missing".
+    }
+    process.stdout.write("iroh " + version + " (engine dist iroh-node.js " + distSha + ", runtime node " + process.version + ")\n");
+    return;
+  }
   // 1.1.1 (F2): `iroh doctor` — the recorded suite summary (from
   // the last `npm test` run) plus the live toolchain versions, the
   // dist hash, and the capabilities. It does not run the suite
@@ -493,6 +533,115 @@ async function main() {
     for (let ii = 0; ii < report.legs.length; ++ii) {
       let leg = report.legs[ii];
       process.stdout.write("  leg " + leg.leg + ": " + (leg.available ? "available" : "unavailable") + " (" + leg.why + ")\n");
+    }
+    return;
+  }
+  // Server / node (see SERVER.md): the phone is the local server,
+  // the laptop is a local node. Both are subcommands, not files to
+  // trace, so they dispatch before the file parsing below.
+  if (args[0] === "serve") {
+    let port = void 0;
+    let host = void 0;
+    let token = null;
+    let timeoutMs = void 0;
+    let localLegs = void 0;
+    for (let ii = 1; ii < args.length; ++ii) {
+      let arg = args[ii];
+      if (arg === "--port") {
+        port = Number(args[++ii]);
+        if (port === void 0 || !Number.isInteger(port) || port <= 0 || port > 65535) { process.stderr.write("--port must be an integer 1-65535\n"); printUsage(); process.exitCode = 2; return; }
+      } else if (arg.startsWith("--port=")) {
+        port = Number(arg.slice("--port=".length));
+        if (!Number.isInteger(port) || port <= 0 || port > 65535) { process.stderr.write("--port must be an integer 1-65535\n"); printUsage(); process.exitCode = 2; return; }
+      } else if (arg === "--host") {
+        host = args[++ii];
+        if (host === void 0) { printUsage(); process.exitCode = 2; return; }
+      } else if (arg.startsWith("--host=")) {
+        host = arg.slice("--host=".length);
+      } else if (arg === "--token") {
+        token = args[++ii];
+        if (token === void 0) { printUsage(); process.exitCode = 2; return; }
+      } else if (arg.startsWith("--token=")) {
+        token = arg.slice("--token=".length);
+      } else if (arg === "--timeout-ms") {
+        timeoutMs = Number(args[++ii]);
+        if (timeoutMs === void 0 || !Number.isInteger(timeoutMs) || timeoutMs <= 0) { process.stderr.write("--timeout-ms must be a positive integer\n"); printUsage(); process.exitCode = 2; return; }
+      } else if (arg.startsWith("--timeout-ms=")) {
+        timeoutMs = Number(arg.slice("--timeout-ms=".length));
+        if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) { process.stderr.write("--timeout-ms must be a positive integer\n"); printUsage(); process.exitCode = 2; return; }
+      } else if (arg === "--local-legs") {
+        // Test / phone simulation only: the legs this server may
+        // run locally, comma-separated. The phone passes
+        // "javascript"; without it the capability probe decides.
+        localLegs = args[++ii];
+        if (localLegs === void 0) { printUsage(); process.exitCode = 2; return; }
+        localLegs = localLegs.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+      } else if (arg.startsWith("--local-legs=")) {
+        localLegs = arg.slice("--local-legs=".length).split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+      } else if (arg === "--help" || arg === "-h") {
+        printUsage();
+        return;
+      } else {
+        process.stderr.write("Unknown option for serve: " + arg + "\n");
+        printUsage();
+        process.exitCode = 2;
+        return;
+      }
+    }
+    try {
+      await require("../lib/serve").startServer({
+        port: port,
+        host: host,
+        token: token,
+        timeoutMs: timeoutMs,
+        localLegs: localLegs,
+      });
+    } catch (e) {
+      process.stderr.write("iroh serve failed: " + (e.message || String(e)) + "\n");
+      process.exitCode = 1;
+      return;
+    }
+    // The server holds the process open (its socket is a live
+    // handle); main() returning is fine.
+    return;
+  }
+  if (args[0] === "node") {
+    let server = null;
+    let token = null;
+    for (let ii = 1; ii < args.length; ++ii) {
+      let arg = args[ii];
+      if (arg === "--server") {
+        server = args[++ii];
+        if (server === void 0) { printUsage(); process.exitCode = 2; return; }
+      } else if (arg.startsWith("--server=")) {
+        server = arg.slice("--server=".length);
+      } else if (arg === "--token") {
+        token = args[++ii];
+        if (token === void 0) { printUsage(); process.exitCode = 2; return; }
+      } else if (arg.startsWith("--token=")) {
+        token = arg.slice("--token=".length);
+      } else if (arg === "--help" || arg === "-h") {
+        printUsage();
+        return;
+      } else {
+        process.stderr.write("Unknown option for node: " + arg + "\n");
+        printUsage();
+        process.exitCode = 2;
+        return;
+      }
+    }
+    if (server === null) {
+      process.stderr.write("iroh node needs --server <host:port>\n");
+      printUsage();
+      process.exitCode = 2;
+      return;
+    }
+    try {
+      await require("../lib/node").runNode({ server: server, token: token });
+    } catch (e) {
+      process.stderr.write("iroh node failed: " + (e.message || String(e)) + "\n");
+      process.exitCode = 1;
+      return;
     }
     return;
   }
