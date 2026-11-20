@@ -74,12 +74,25 @@ Three releases, all on the
   audit pass over the rework (five fresh bugs fixed, ES2026 probe fix
   folded in). 649 tests (392 Node + 25 Python + 9 C++ + 223
   IrohScript/BASIC).
-- **1.0.1 — the solid base.** The all-generations audit-and-patch pass
-  over 0.4.0–1.0.0: every known limitation re-read and re-probed, the
+- **1.0.1 — the solid base.** The all-generations audit-and-patch pass:
+  every known limitation re-read and re-probed, the
   real bugs fixed (translator `%` and number formatting, director
   member and scoped sets, `directAsync`/`directModule`, decorated
   computed keys, Python per-assignment events). 348 tests (314 Node +
   25 Python + 9 C++).
+
+### Download — 1.1.1 (current)
+
+Direct links to the [v1.1.1 release](https://github.com/andyle777/IrohRedux/releases/tag/v1.1.1). No Node install needed — the EXEs and the APK are standalone.
+
+- [iroh-1.1.1-linux](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1-linux) — Linux, 46.7 MB. The engine as a single executable. JavaScript legs run standalone; Python, C++, IrohScript and BASIC legs need `python3` (and `g++` for C++) on the machine.
+- [iroh-1.1.1-macos](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1-macos) — macOS (Intel), 51.5 MB. Same engine, same legs.
+- [iroh-1.1.1-macos-arm64](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1-macos-arm64) — macOS (Apple Silicon), 45.9 MB.
+- [iroh-1.1.1-win.exe](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1-win.exe) — Windows, 38.5 MB.
+- [iroh-1.1.1.apk](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1.apk) — Android, 61.9 MB. Debug-signed. JavaScript legs run in-app; the script legs delegate to a laptop node over the local network (the phone is a local server).
+- [iroh-1.1.1-ai-bundle.zip](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1-ai-bundle.zip) — AI bundle, 135 KB. API reference, memory/state model, JSON schemas and samples, for AI agents to load and use the engine.
+
+Older releases (1.1.0, 1.0.1) are on the [Releases page](https://github.com/andyle777/IrohRedux/releases).
 
 ### Install — humans
 
@@ -186,9 +199,9 @@ call factorial ( [3] )
 call factorial end -> [6]
 ```
 
-### Direct the run (1.0.0)
+### Direct the run (1.0.1)
 
-Tracing tells you what happened. 1.0.0 lets you *do something about it*
+Tracing tells you what happened. 1.0.1 lets you *do something about it*
 while the program is still running. A director sits on the live wire,
 reads findings as they fire, and calls the shots — set a variable, skip
 a call, stop the run — and the record says what fired, what was
@@ -650,7 +663,14 @@ entry functions; shipped in 1.1.0.
 
 - [Getting started](//github.com/andyle777/IrohRedux/blob/master/GETTING_STARTED.md) — worked examples you can run locally.
 - [API](//github.com/andyle777/IrohRedux/blob/master/API.md) — the full listener and event reference, including `Iroh.assert` / `Iroh.log` and the `INSTR` / `CATEGORY` / `OP` label tables.
-- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, 0.7.0, 0.8.0, 0.9.0, 1.0.0, 1.0.1, 1.1.0, and 1.1.1.
+- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, 0.7.0, 0.8.0, 0.9.0, 1.0.1, 1.1.0, and 1.1.1.
+
+### Credits
+
+- **Samus Aran** — Andy's Muse AI agent. Built and verified IrohRedux 0.4.0–1.1.1 and the 1.1.1 patch: the tracers, translator, AI analysis, synthesiser, server/node, the 699 tests, and these docs.
+- **Aether-7** — Andy's iLands AI agent. Found the D1/D2 defects by running the release, wrote the Fix Spec and the fix ledger, built the bridge APK, and runs the 28-drill gate.
+- **Andy Le (andyle777)** — owns the fork and the design: IrohScript 3.0, the rework, the patch direction.
+
 
 ---
 
