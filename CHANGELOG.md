@@ -54,6 +54,37 @@ The rest of the patch, in plan order:
   line; exit 1 when the two runs disagree. JavaScript only, like
   `--direct` (the script tracers' determinism is by construction);
   it does not combine with `--translate`, `--direct` or `--synthesize`.
+- D1 — template-literal bool no longer emits an illegal Python
+  f-string (`src/translate.js`): a template literal holding a boolean
+  emitted `f"...{("true" if v else "false")}"`, a SyntaxError on any
+  Python below 3.12 (PEP 701 only legalised nested quotes in 3.12)
+  while the package claims Python >= 3.9. The bool branch now routes
+  through a `__iroh_jsbool(v)` helper, the same pattern as
+  `__iroh_jsnum`, and the emitted header defines it
+  (`def __iroh_jsbool(v): return "true" if v else "false"`). Three
+  tests in `tests/translate.test.js`: the value test (run the emitted
+  Python, assert stdout `b=true` / `b=false`, including the combined
+  `v=1.5 b=true` case), the compat test (a textual scan — no `"`
+  inside any `{...}` replacement field of an `f"..."` string — because
+  `ast.parse(..., feature_version=(3, 9))` accepts the buggy output
+  on a 3.12 interpreter and only Python 3.12.3 is installed here),
+  and the concat / `String(bool)` cases. Broader finding, NOT fixed
+  here and flagged, not hidden: any string literal inside a
+  template-literal interpolation breaks the same way on < 3.12
+  (`` `x=${"a"}` `` emits `f"x={"a"}"`) — the f-string emitter's
+  quoting generally, not just bools.
+- D2 — the C++ tracer no longer prints GCC's static initialiser as a
+  real call (`cpp/iroh_trace_rt.cpp`): `classify_mangled` missed the
+  `_GLOBAL__` prefix, so the top frame of every GCC 12 trace was the
+  compiler's `_GLOBAL__sub_I_main`. The fix is one rule at the top of
+  `classify_mangled`: `if (strncmp(mangled, "_GLOBAL__", 9) == 0)
+  return 1;` (with a comment noting it cannot catch the
+  anonymous-namespace symbol `_ZN12_GLOBAL__N_110anon_helperEi`,
+  which starts with `_Z`). Three unit rows in `cpp/test_filter.cpp`
+  plus one end-to-end row in `tests/native.test.js` (a program with
+  a `static Greeter g;` — the constructor IS user code and is traced;
+  no event name starts `_GLOBAL__`). Old-build proof: with the
+  runtime reverted the end-to-end test fails; with the fix, 22/22.
 
 Testing infrastructure, also new in this patch:
 
