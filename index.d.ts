@@ -590,6 +590,12 @@ export interface TranslateOptions {
    * { functions: { add: { params: ["int", "int"], returns: "int" } } }.
    */
   types?: TranslateTypeHints;
+  /**
+   * Run the emitted Python under python3 and record the result in
+   * report.verify (1.0.1 patch, Fix Spec 3.7). Default true for the
+   * Python leg; pass false to skip the execution check.
+   */
+  verify?: boolean;
 }
 
 export interface TranslateReport {
@@ -609,6 +615,21 @@ export interface TranslateReport {
   /** What could not be translated: { construct, message }. */
   unsupported: Array<{ construct: string; message: string }>;
   notes: string[];
+  /**
+   * Whether the emitted program was executed to check it runs
+   * (1.0.1 patch, Fix Spec 3.7). Only the Python leg is executed;
+   * other legs record attempted: false. ran: null means not
+   * attempted — never read it as success. When ran is false,
+   * stderr carries the interpreter's output verbatim.
+   */
+  verify?: {
+    attempted: boolean;
+    ran: boolean | null;
+    interpreter?: string;
+    exit?: number | null;
+    stderr?: string;
+    reason?: string;
+  };
 }
 
 export interface TranslateResult {
