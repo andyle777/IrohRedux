@@ -232,7 +232,7 @@ Newest first. Hashes live on the release page, not in this file.
   live wire, and the redo audit pass (five fresh bugs fixed,
   ES2026 probe fix folded in). 649 tests.
 - **1.0.1 (20 Nov 2026) — the solid base.** The audit-and-patch
-  pass over 0.4.0–1.0.0: every known limitation re-read and
+  pass: every known limitation re-read and
   re-probed, the real bugs fixed. 348 tests.
 
 ## Compatibility table
