@@ -157,14 +157,19 @@ test("every finding cites its evidence", () => {
   assert.equal(analysis.summary.events, analysis.scores.overhead.events);
 });
 
-test("coverage states fired/total and the value matches the ratio", () => {
+test("coverage states fired/reachable/total and the value matches the ratio", () => {
   let analysis = analyzeCode("let x = 1; x;");
   let c = analysis.scores.coverage;
-  assert.equal(c.fired + c.missingCategories.length, c.total);
+  // The denominator is the reachable set (30 for JavaScript), and
+  // missingCategories are the reachable ones that did not fire.
+  assert.equal(c.fired + c.missingCategories.length, c.reachable);
   assert.equal(c.fired, c.firedCategories.length);
-  assert.equal(c.value, Math.round((c.fired / c.total) * 10000) / 10000);
+  assert.equal(c.reachable, 30);
+  assert.equal(c.total, 30);
+  assert.equal(c.value, Math.round((c.fired / c.reachable) * 10000) / 10000);
   assert.ok(c.firedCategories.includes("VAR"));
   assert.match(c.note, /unfiltered trace/);
+  assert.match(c.note, /of 30 reachable for a javascript trace/);
 });
 
 test("fidelity counts blind spots from the source and never hides them", () => {
@@ -350,4 +355,59 @@ test("analyze() reports no unclosed frames for a completed generator or a plain 
   assert.equal(Iroh.analyze(done.events).summary.unclosedFrames, null);
   let plain = Iroh.trace("function f(x) { return x * 2; } f(21);");
   assert.equal(Iroh.analyze(plain.events).summary.unclosedFrames, null);
+});
+
+// F4 (1.1.1): coverage denominators are per-tracer reachable sets.
+// A C++ trace firing CALL and FUNCTION is 2 of 2 reachable, not 2
+// of 30 — the other 28 categories are unreachable for that tracer
+// by design, not missed. The reachable sets are read from each
+// tracer's own emit sites; the tests below pin them by analysing
+// hand-built event lists (no subprocess needed).
+test("coverage denominators are per-tracer reachable sets", () => {
+  let ev = (category) => ({ type: "event", event: "FUNCTION_CALL", category: category, trigger: "before", hash: 1, indent: 0 });
+  // C++: CALL + FUNCTION only.
+  let cpp = Iroh.analyze([ev("CALL"), ev("FUNCTION")], { language: "cpp" });
+  assert.equal(cpp.scores.coverage.fired, 2);
+  assert.equal(cpp.scores.coverage.reachable, 2);
+  assert.equal(cpp.scores.coverage.total, 30);
+  assert.equal(cpp.scores.coverage.value, 1);
+  assert.deepEqual(cpp.scores.coverage.missingCategories, []);
+  assert.match(cpp.scores.coverage.note, /2 of 2 reachable for a cpp trace \(30 exist in the model\)/);
+  // Python: six reachable; a trace firing only CALL and FUNCTION is
+  // 2 of 6, and the missing ones are named.
+  let py = Iroh.analyze([ev("CALL"), ev("FUNCTION")], { language: "python" });
+  assert.equal(py.scores.coverage.fired, 2);
+  assert.equal(py.scores.coverage.reachable, 6);
+  assert.equal(py.scores.coverage.total, 30);
+  assert.equal(py.scores.coverage.value, Math.round((2 / 6) * 10000) / 10000);
+  assert.deepEqual(py.scores.coverage.missingCategories, ["ASSIGN", "CATCH", "IF", "LOOP"]);
+  // IrohScript: four reachable.
+  let iroh = Iroh.analyze([ev("CALL")], { language: "irohscript" });
+  assert.equal(iroh.scores.coverage.reachable, 4);
+  assert.equal(iroh.scores.coverage.value, 0.25);
+  // BASIC: five reachable.
+  let basic = Iroh.analyze([ev("CALL"), ev("LOOP")], { language: "basic" });
+  assert.equal(basic.scores.coverage.reachable, 5);
+  assert.equal(basic.scores.coverage.value, 0.4);
+  // JavaScript (and an unknown language) defaults to all 30.
+  let js = Iroh.analyze([ev("CALL")], { language: "javascript" });
+  assert.equal(js.scores.coverage.reachable, 30);
+  let unknown = Iroh.analyze([ev("CALL")], { language: "klingon" });
+  assert.equal(unknown.scores.coverage.reachable, 30);
+});
+
+test("coverage never defaults a missing reachable to total", () => {
+  // A coverage object from an older build has no `reachable` field.
+  // A consumer must not compute coverage as fired/total by assuming
+  // reachable === total — that would read a non-JS trace as JS. The
+  // rule is enforced here by construction: analyze() always sets
+  // `reachable`, and the note always names the denominator, so a
+  // reader never has to guess. This test pins the shape.
+  let ev = (category) => ({ type: "event", event: "FUNCTION_CALL", category: category, trigger: "before", hash: 1, indent: 0 });
+  let cpp = Iroh.analyze([ev("CALL"), ev("FUNCTION")], { language: "cpp" });
+  let c = cpp.scores.coverage;
+  assert.equal(typeof c.reachable, "number");
+  assert.notEqual(c.reachable, c.total);
+  assert.equal(c.value, c.fired / c.reachable);
+  assert.notEqual(c.value, c.fired / c.total);
 });
