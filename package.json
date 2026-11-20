@@ -55,7 +55,10 @@
     "test:python": "python3 -m unittest discover -s python/tests -v",
     "test:cpp": "make -C cpp test",
     "test:types": "tsc --noEmit --strict --module esnext --moduleResolution bundler --target es2022 tests/types.ts",
-    "codegen:irohscript": "npm run build && node scripts/compile-irohscript-core.mjs && npm run build"
+    "codegen:irohscript": "npm run build && node scripts/compile-irohscript-core.mjs && npm run build",
+    "check:matrix": "tools/check-translate-matrix.sh",
+    "check:api-txt": "node scripts/check-api-txt.mjs",
+    "build:ai-bundle": "node scripts/build-ai-bundle.mjs"
   },
   "devDependencies": {
     "rollup": "^0.47.2",
