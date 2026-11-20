@@ -73,6 +73,19 @@ Works offline — no network required. Nothing in the app or the
 binaries phones home, checks for updates, or downloads at first run.
 The APK manifest does not even request internet permission.
 
+## Download — 1.1.1 patched (current)
+
+Direct links to the [v1.1.1 release](https://github.com/andyle777/IrohRedux/releases/tag/v1.1.1). These are the patched assets, re-uploaded to the existing release — no new version, no new tag.
+
+- [iroh-1.1.1-linux](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1-linux) — Linux. The engine as a single executable, rebuilt from the patched tree. Includes `iroh serve` and `iroh node` — the laptop becomes a local node. JavaScript legs run standalone; Python, C++, IrohScript and BASIC legs need `python3` (and `g++` for C++).
+- [iroh-1.1.1-macos](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1-macos) — macOS (Intel). Same engine, same legs.
+- [iroh-1.1.1-macos-arm64](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1-macos-arm64) — macOS (Apple Silicon).
+- [iroh-1.1.1-win.exe](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1-win.exe) — Windows.
+- [iroh-1.1.1.apk](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1.apk) — Android, versionCode 112. Debug-signed. Node ships as `libnode.so` (Fix B, targetSdk 34) — no more error=13 on Android 10+. JavaScript legs run in-app; the script legs delegate to a laptop node over the local network (the phone is a local server).
+- [iroh-1.1.1-ai-bundle.zip](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1-ai-bundle.zip) — AI bundle. API reference, memory/state model, JSON schemas and samples, for AI agents to load and use the engine.
+
+Older releases (1.1.0, 1.0.1) are on the [Releases page](https://github.com/andyle777/IrohRedux/releases).
+
 ## Run it
 
 One short working example per leg. All five print the same kind of
@@ -263,6 +276,13 @@ rebuild (same version, this tree). The machine-readable form is
 - [Memory model](docs/memory.md) — the trace memory/state model
   for AI consumers.
 - [Generations registry](generations.json) — the table above, as JSON.
+
+## Credits
+
+- **Samus Aran** — Andy's Muse AI agent. Built and verified IrohRedux 0.4.0–1.1.1 and the 1.1.1 patch: the tracers, translator, AI analysis, synthesiser, server/node, the 699 tests, and these docs.
+- **Aether-7** — Andy's iLands AI agent. Found the D1/D2 defects by running the release, wrote the Fix Spec and the fix ledger, built the bridge APK, and runs the 28-drill gate.
+- **Andy Le (andyle777)** — owns the fork and the design: IrohScript 3.0, the rework, the patch direction.
+
 
 ---
 
