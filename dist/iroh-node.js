@@ -524,22 +524,6 @@ function uBranchHash() {
   return ubidx++;
 }
 
-// Reset the patch counters at the start of a patch run (Stage.patch).
-// They are module-level counters, so without this the hashes, temp
-// variable names and $$ANON_ names in one trace depend on how many
-// traces this process has already run — the same program traced twice
-// in one process got different event hashes, and analyze() embeds
-// those hashes in its findings, so its output was not byte-stable
-// across calls in one process. Patching is synchronous, so no two
-// patch runs can interleave and collide; every counter is consumed
-// only inside one patch run (hashes, temp vars, anonymous-function
-// names, frame and patcher uids), so resetting per run is safe.
-function resetPatchCounters() {
-  utvidx = 1;
-  uidx = 1;
-  ubidx = 1;
-}
-
 function parse$1(input, options) {
   // Same default as helpers.parse: Acorn 8 requires ecmaVersion.
   // "latest" + allowHashBang: see helpers.parse.
@@ -640,7 +624,6 @@ var _utils = Object.freeze({
 	reserveTempVarId: reserveTempVarId,
 	uid: uid,
 	uBranchHash: uBranchHash,
-	resetPatchCounters: resetPatchCounters,
 	parse: parse$1,
 	generate: generate$1,
 	safeValue: safeValue,
@@ -5291,22 +5274,6 @@ function DEBUG_FUNCTION_CALL(hash, ctx, object, call, args) {
     root = object;
     proto = null;
   }
-  // A callee that is not a function (e.g. a method the runtime does
-  // not have yet, like Math.sumPrecise on Node 24) must fail exactly
-  // like untraced code: `TypeError: <callee> is not a function`.
-  // Reading root.name first would mask it with an Iroh-internal
-  // "Cannot read properties of undefined (reading 'name')" (or, for a
-  // non-function value like 1, "before.call.apply is not a function").
-  // No CALL event fires: like an optional call that never happens, a
-  // call that cannot happen is not an event. The callee source text
-  // comes from the original input, so the message matches the engine's.
-  if (typeof root !== "function") {
-    let calleeSource = null;
-    if (node && node.callee && typeof node.callee.start === "number" && typeof node.callee.end === "number" && typeof this.input === "string") {
-      calleeSource = this.input.slice(node.callee.start, node.callee.end);
-    }
-    throw new TypeError((calleeSource || "callee") + " is not a function");
-  }
   name = root.name;
 
   // external functions are traced as sloppy
@@ -5523,24 +5490,6 @@ function DEBUG_VAR_INIT(hash, name, value) {
 
 // #NEW
 function DEBUG_OP_NEW(hash, ctor, args) {
-  // A constructor that is not a function (e.g. `new null()`,
-  // `new 5()`) must fail exactly like untraced code: `TypeError:
-  // <callee> is not a constructor`. Reading ctor.name first would
-  // mask it with an Iroh-internal "Cannot read properties of null
-  // (reading 'name')" (or, for a non-function value like 5,
-  // "event.ctor is not a constructor"). No OP_NEW event fires: like
-  // a call that cannot happen, a construction that cannot happen is
-  // not an event. The callee source text comes from the original
-  // input, so the message matches the engine's. (Same family as the
-  // DEBUG_FUNCTION_CALL fix in the ES2026 probe.)
-  if (typeof ctor !== "function") {
-    let node = this.nodes[hash] ? this.nodes[hash].node : null;
-    let ctorSource = null;
-    if (node && node.callee && typeof node.callee.start === "number" && typeof node.callee.end === "number" && typeof this.input === "string") {
-      ctorSource = this.input.slice(node.callee.start, node.callee.end);
-    }
-    throw new TypeError((ctorSource || "ctor") + " is not a constructor");
-  }
 
   // API
   let event = this.createEvent(INSTR.OP_NEW);
@@ -6302,11 +6251,6 @@ Stage.prototype.getFrameByHashFrom = function(frm, hash) {
 };
 
 Stage.prototype.patch = function(input) {
-  // Fresh counters per patch run: the hash, temp-var and anonymous-
-  // function counters are module-level, so without this the same
-  // program patched twice in one process gets different hashes and
-  // different generated names (see resetPatchCounters in utils.js).
-  resetPatchCounters();
   let patcher = new Patcher(this);
   // Parse at the newest language level Acorn supports ("latest": ES2025
   // RegExp modifiers, `using` declarations, import attributes) plus
@@ -10326,7 +10270,7 @@ function nodeImport$1(specifier) {
 // for Python or C++, and the report says so (staticOnly: true).
 //
 // The report shape is the same every leg:
-//   { ok, from, to, staticOnly, clean, assumptions, unsupported, notes }
+//   { ok, from, to, staticOnly, clean, assumptions, unsupported, notes, verify }
 // `ok` is false when anything was unsupported. Unsupported constructs
 // are reported, never silently mistranslated: the emitted code
 // raises/throws at that point, loudly, and the report names the
@@ -10374,6 +10318,74 @@ function markUnsupported(report, construct, message) {
 
 function recordAssumption(report, what, evidence) {
   report.assumptions.push({ what: what, evidence: evidence });
+}
+
+// 1.1.0 patch (Fix Spec 3.7): verify the emitted Python actually
+// runs. `report.ok` answers "did I produce text"; every user reads
+// it as "will this run". The verify block closes that gap: the
+// emitted program is executed under python3 (fed on stdin as
+// `python3 -`, 10 s cap) and the result is recorded on the report.
+// ran: null is not ran: true — when no interpreter is present the
+// block says attempted: false instead of omitting the field. When
+// ran is false the interpreter's stderr is carried verbatim: the
+// exact SyntaxError line is what lets a reader find the defect.
+// The interpreter probe is cached per process (PATH does not change
+// mid-process); the run itself is not cached — every translation is
+// verified fresh. A translated program that reads stdin sees EOF:
+// `python3 -` consumes stdin as the program itself.
+let _pyVerifyProbe = null; // { cmd, version } | { missing: true, cmd }
+function probePython(cp) {
+  if (_pyVerifyProbe) return _pyVerifyProbe;
+  let cmd = (typeof process !== "undefined" && process && process.env && process.env.IROH_PYTHON) || "python3";
+  try {
+    let p = cp.spawnSync(cmd, ["--version"], { encoding: "utf8", timeout: 10000 });
+    if (p.status === 0) {
+      let v = ((p.stdout || "") + (p.stderr || "")).trim().replace(/^Python /, "");
+      _pyVerifyProbe = { cmd: cmd, version: v };
+      return _pyVerifyProbe;
+    }
+  } catch (e) {
+    // Fall through to missing.
+  }
+  _pyVerifyProbe = { missing: true, cmd: cmd };
+  return _pyVerifyProbe;
+}
+
+function verifyEmittedPython(report, code, options) {
+  if (options.verify === false) {
+    report.verify = { attempted: false, ran: null, reason: "verify disabled (options.verify: false)" };
+    return;
+  }
+  let cp = getChildProcessSync();
+  if (!cp) {
+    report.verify = { attempted: false, ran: null, reason: "no child_process (browser / ESM build without Node)" };
+    return;
+  }
+  let probe = probePython(cp);
+  if (probe.missing) {
+    report.verify = { attempted: false, ran: null, reason: "no " + probe.cmd + " on PATH" };
+    return;
+  }
+  let run;
+  try {
+    run = cp.spawnSync(probe.cmd, ["-"], { input: code, encoding: "utf8", timeout: 10000, maxBuffer: 10 * 1024 * 1024 });
+  } catch (e) {
+    report.verify = { attempted: true, ran: false, interpreter: probe.version, exit: null, stderr: "verify spawn failed: " + (e.message || String(e)) };
+    return;
+  }
+  if (run.error) {
+    if (run.error.code === "ETIMEDOUT") {
+      report.verify = { attempted: true, ran: false, interpreter: probe.version, exit: null, stderr: "verify timed out after 10 s (emitted program did not finish)" };
+    } else {
+      report.verify = { attempted: true, ran: false, interpreter: probe.version, exit: null, stderr: "verify spawn failed: " + (run.error.message || String(run.error)) };
+    }
+    return;
+  }
+  if (run.status === 0) {
+    report.verify = { attempted: true, ran: true, interpreter: probe.version, exit: 0 };
+  } else {
+    report.verify = { attempted: true, ran: false, interpreter: probe.version, exit: run.status, stderr: run.stderr || "" };
+  }
 }
 
 // C++ type of a traced (safeValue-serialized) runtime value.
@@ -10609,7 +10621,7 @@ function makeJSEmitter(target, report, env, hints) {
   let isPy = target === "python";
   let lines = [];
   let indentLevel = 0;
-  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, cstdlib: false, sysexit: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false };
+  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false, jsbool: false };
   let noted = {};
   function noteOnce(key, text) {
     if (!noted[key]) {
@@ -10819,42 +10831,65 @@ function makeJSEmitter(target, report, env, hints) {
 
   function templateLiteral(node) {
     if (isPy) {
-      let parts = ['f"'];
+      // 1.1.0 patch (Fix Spec 3.5 Option 1): concatenation, NOT an
+      // f-string. Property P1 (spec 3.2): on Python before 3.12 a
+      // replacement field cannot contain the delimiter quote, a
+      // backslash, # or an unbalanced brace/colon — and every branch
+      // that pushed a raw expression into {...} violated it in
+      // principle. In 1.1.0 that was four branches, not one: string
+      // literals, ternaries of strings, literal text + a field, and
+      // the bool branch, which emitted an inline ("true" if v else
+      // "false") ternary inside the field (1.1.1 fixed bool only, as
+      // D1). All four emitted SyntaxErrors on 3.9-3.11 while the
+      // report said ok. Concatenation has no delimiter rules: the
+      // expression sits in ordinary parentheses. Literal text is
+      // emitted with JSON.stringify — a real serialiser, not the
+      // hand-rolled regex chain (which missed newlines and other
+      // control characters). One deviation from the spec's sketch:
+      // ints go through str(), not bare — "a" + 5 is a TypeError in
+      // Python, so the sketch's bare push for int would have traded
+      // a SyntaxError for a runtime error.
+      let parts = [];
       for (let ii = 0; ii < node.quasis.length; ++ii) {
         let q = node.quasis[ii];
         let raw = q.value.cooked !== void 0 && q.value.cooked !== null ? q.value.cooked : q.value.raw;
-        parts.push(raw.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/{/g, "{{").replace(/}/g, "}}"));
+        if (raw !== "") parts.push(JSON.stringify(raw));
         if (ii < node.expressions.length) {
-          // f"{x}" uses str(x): "True" for bools (JS prints "true")
-          // and "1e+16" for 1e16 (JS prints "10000000000000000") —
-          // so route bools and doubles explicitly. Arrays join with
-          // commas in JS and print brackets in Python: refuse loudly.
           let e = node.expressions[ii];
           let t = inferType(e, ctx);
-          if (t === "std::string" || t === "int") {
-            parts.push("{" + expr(e, 16) + "}");
+          if (t === "std::string") {
+            parts.push(expr(e, 16));
+          } else if (t === "int") {
+            parts.push("str(" + expr(e, 16) + ")");
           } else if (t === "bool") {
-            parts.push("{(\"true\" if " + expr(e, 16) + " else \"false\")}");
+            // A bool interpolates as "true"/"false" (Python str()
+            // would print "True"). Route through the helper, same
+            // pattern as __iroh_jsnum for doubles.
+            needs.jsbool = true;
+            parts.push("__iroh_jsbool(" + expr(e, 16) + ")");
           } else if (t === "double") {
             needs.jsnum = true;
-            parts.push("{__iroh_jsnum(" + expr(e, 16) + ")}");
+            parts.push("__iroh_jsnum(" + expr(e, 16) + ")");
           } else if (t && t.indexOf("std::vector<") === 0) {
             return unsupportedExpr(
               "template literal interpolation of an array in Python (JS joins with commas; Python str() prints brackets)",
               "TemplateLiteral"
             );
           } else {
+            // Unknown type: str() is JS ToString's closest honest
+            // neighbour (an object prints its repr, not
+            // "[object Object]" — a recorded approximation, not a
+            // syntax landmine).
             recordAssumption(
               report,
-              "template literal interpolation assumed to be a string or number",
-              "No static or trace type for the interpolation; emitted as-is"
+              "template literal interpolation coerced with str()",
+              "No static or trace type for the interpolation"
             );
-            parts.push("{" + expr(e, 16) + "}");
+            parts.push("str(" + expr(e, 16) + ")");
           }
         }
       }
-      parts.push('"');
-      return parts.join("");
+      return "(" + (parts.length ? parts.join(" + ") : '""') + ")";
     }
     // C++: "a" + std::to_string(x) + "b" — string/integral/double
     // interpolations; doubles go through __iroh_jsnum so they print
@@ -11049,21 +11084,6 @@ function makeJSEmitter(target, report, env, hints) {
       let prop = node.callee.computed
         ? null
         : (node.callee.property.name !== void 0 ? node.callee.property.name : node.callee.property.value);
-      // process.exit(code): the program ends. It only ever reaches
-      // this emitter from a BASIC END/STOP (the BASIC leg emits it)
-      // or from user JS calling it directly. Python gets sys.exit
-      // (with an import), C++ gets std::exit (with <cstdlib>) — both
-      // end the program in any context, so code after the call stays
-      // unreachable exactly as in the source. No arg means code 0.
-      if (node.callee.object.type === "Identifier" && node.callee.object.name === "process" && prop === "exit") {
-        let code = node.arguments.length > 0 ? expr(node.arguments[0], 16) : "0";
-        if (isPy) {
-          needs.sysexit = true;
-          return "sys.exit(" + code + ")";
-        }
-        needs.cstdlib = true;
-        return "std::exit(" + code + ")";
-      }
       let obj = expr(node.callee.object, 15);
       if (prop === "push") {
         let args = node.arguments.map(function(a) { return expr(a, 16); }).join(", ");
@@ -11903,7 +11923,6 @@ function makeJSEmitter(target, report, env, hints) {
       let header = [];
       if (needs.math) header.push("import math");
       if (needs.random) header.push("import random");
-      if (needs.sysexit) header.push("import sys");
       if (needs.jsmod) {
         // JS % is the truncated remainder; Python % is floored.
         // int(a / b) truncates toward zero, so this keeps ints int
@@ -11958,6 +11977,15 @@ function makeJSEmitter(target, report, env, hints) {
         header.push("    return (\"-\" if neg else \"\") + out");
         header.push("");
       }
+      if (needs.jsbool) {
+        // 1.1.0 patch: JS bool -> string: "true"/"false". A helper,
+        // not an inline ternary, so the double quotes never sit
+        // inside an f-string replacement field (SyntaxError on
+        // Python < 3.12, PEP 701). Same pattern as __iroh_jsnum.
+        header.push("def __iroh_jsbool(v):");
+        header.push("    return \"true\" if v else \"false\"");
+        header.push("");
+      }
       if (needs.unsupportedHelper) {
         header.push("def _iroh_unsupported(msg):");
         header.push("    raise NotImplementedError(\"IrohRedux: \" + msg)");
@@ -11990,7 +12018,6 @@ function makeJSEmitter(target, report, env, hints) {
     if (needs.cmath) header.push("#include <cmath>");
     if (needs.algorithm) header.push("#include <algorithm>");
     if (needs.stdexcept) header.push("#include <stdexcept>");
-    if (needs.cstdlib) header.push("#include <cstdlib>");
     if (needs.vectorHelper) {
       header.push("");
       header.push("template <typename T>");
@@ -12015,11 +12042,7 @@ function makeJSEmitter(target, report, env, hints) {
       // zeros; -6 < k <= 0 writes "0." with -k zeros; otherwise
       // exponential with a bare exponent ("1e+21", "1e-7").
       header.push("");
-      // __iroh_jsnum uses std::isnan / std::isinf, so it needs
-      // <cmath> — but only if the main header did not already emit it
-      // (a program that both uses Math and prints a Number used to get
-      // the include twice).
-      if (!needs.cmath) header.push("#include <cmath>");
+      header.push("#include <cmath>");
       header.push("#include <cstdio>");
       header.push("#include <sstream>");
       header.push("std::string __iroh_jsnum(double v) {");
@@ -12108,44 +12131,20 @@ function translateFromJS(iroh, code, to, options) {
   // runs natively (the instrumenter does not rewrite it — Iroh.log
   // is only the fixtures' explicit print), so the global
   // console.log is swapped, not just Iroh.log.
-  // process.exit is stubbed too, for the same reason: a translated
-  // BASIC program ends with process.exit(0) (its END), and the
-  // evidence trace runs the program in-process — without the stub,
-  // translating a BASIC program with END killed the host process
-  // silently (exit 0, no output, no error). The stub throws a
-  // sentinel instead; trace() attaches the events gathered before
-  // the END to the thrown error, so the evidence is kept and the
-  // program ending is not mistaken for a failure. (In a browser
-  // there is no process to stub, and a process.exit in the traced
-  // code falls through to the evidence-unavailable path.)
   let events = [];
   let originalLog = iroh.log;
   let originalConsoleLog = typeof console !== "undefined" ? console.log : null;
-  let originalExit = (typeof process !== "undefined" && process && typeof process.exit === "function") ? process.exit : null;
   iroh.log = function() {};
   if (originalConsoleLog) console.log = function() {};
-  if (originalExit) {
-    process.exit = function(code) {
-      let err = new Error("__iroh_end");
-      err.__iroh_end = true;
-      err.__iroh_exit_code = code;
-      throw err;
-    };
-  }
   try {
     events = iroh.trace(code).events;
   } catch (e) {
-    if (e && e.__iroh_end) {
-      events = e.events || [];
-    } else {
-      report.notes.push(
-        "Dynamic trace evidence unavailable (" + (e.message || String(e)) + "); types come from static inference or hints only."
-      );
-    }
+    report.notes.push(
+      "Dynamic trace evidence unavailable (" + (e.message || String(e)) + "); types come from static inference or hints only."
+    );
   } finally {
     iroh.log = originalLog;
     if (originalConsoleLog) console.log = originalConsoleLog;
-    if (originalExit) process.exit = originalExit;
   }
   let env = buildTraceEnv(events);
   let emitter;
@@ -12205,6 +12204,20 @@ function translateFromJS(iroh, code, to, options) {
         "): parameter types for them came from a type hint, or were omitted."
       );
     }
+  }
+  // 1.1.0 patch (Fix Spec 3.7): the verify block. Only the Python
+  // leg is executed here; every other target records that
+  // verification was not attempted, so a missing verify is never
+  // mistaken for a pass (ran: null is not ran: true). A translation
+  // that is not ok emits a loud stub, not runnable code, so it is
+  // not executed either.
+  if (to === "python") {
+    if (report.ok) verifyEmittedPython(report, out.text, options);
+    else {
+      report.verify = { attempted: false, ran: null, reason: "translation incomplete (unsupported constructs); emitted code is a stub, not run" };
+    }
+  } else {
+    report.verify = { attempted: false, ran: null, reason: "verify is only implemented for the Python leg" };
   }
   return { code: out.text, report: report };
 }
@@ -14587,11 +14600,6 @@ function makeIrohJSEmitter(target, report, env, hints) {
       node.callee.object.type === "Identifier" && node.callee.object.name === "console" &&
       node.callee.property.name === "log";
   }
-  function isProcessExit(node) {
-    return node.type === "CallExpression" && node.callee.type === "MemberExpression" && !node.callee.computed &&
-      node.callee.object.type === "Identifier" && node.callee.object.name === "process" &&
-      node.callee.property.name === "exit";
-  }
   // Classic numeric for (the same pattern the Python/C++ emitter
   // uses): for (let i = A; i <op> B; update). Returns null when the
   // loop is not in that shape.
@@ -14786,16 +14794,6 @@ function makeIrohJSEmitter(target, report, env, hints) {
           else if (parts.length === 1) emitLine("PRINT " + parts[0]);
           else emitLine("PRINT " + parts.join(" ; "));
         }
-        return;
-      }
-      if (isProcessExit(e)) {
-        // process.exit(code): the program ends. BASIC has END for
-        // this (the exit code is dropped — BASIC END takes none).
-        // IrohScript has no program-end primitive, so it is a loud
-        // stub, not a silent `process.exit` that would fail later
-        // with an undeclared-name error.
-        if (!isIroh) { emitLine("END"); return; }
-        stubStmt("process.exit (ending the program) has no equivalent in IrohScript — IrohScript has no program-end primitive", "CallExpression");
         return;
       }
       if (!isIroh) {
