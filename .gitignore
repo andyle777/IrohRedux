@@ -96,3 +96,5 @@ cpp/test_filter
 # Python bytecode
 __pycache__/
 *.pyc
+# Local standalone Python interpreters for the translate matrix gate
+.pythons/
