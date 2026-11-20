@@ -19,14 +19,8 @@
 //
 // The temp dir MUST live on the same filesystem as the repo (a
 // sibling of the repo root), because node_modules is hardlinked, not
-// copied — hardlinks cannot cross devices. A symlinked node_modules
-// does NOT work: the browser build's rollup config keys its
-// commonjs namedExports by the relative path
-// "node_modules/acorn/dist/acorn.js", and a symlinked node_modules
-// resolves to the real path (../../.../node_modules/acorn/...),
-// which misses the key and fails the build with "'TokenType' is not
-// exported". A hardlinked node_modules resolves to the same relative
-// path as in the real repo, so the build behaves identically.
+// copied — hardlinks cannot cross devices. This preserves the same
+// dependency files for the isolated build without reinstalling them.
 
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";

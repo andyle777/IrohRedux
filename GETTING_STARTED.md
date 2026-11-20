@@ -596,7 +596,7 @@ fact here disagrees with a prose paragraph above, this section wins
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `3650052798f7d049a1e81ddbbbf416fcc775e9bb05e0d28ee2bd42551511998a`.
+  `6ceaeceb3013eefa8182757389370877266f50b2a3bd4bddf3cec20c0b9784a9`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set.
