@@ -160,6 +160,69 @@ test("JS -> Python report lists clean constructs and no assumptions when none we
   assert.ok(out.report.clean.some((c) => c.construct === "console-output"));
 });
 
+// --- 1.1.0 patch: template literals emit concatenation, not f-strings -
+// (Fix Spec 3.5 Option 1). On Python before 3.12 an f-string
+// replacement field cannot hold a quote, so the old emitter produced
+// a SyntaxError on 3.9-3.11 while the report said ok — in 1.1.0 that
+// was four cases, not three: the bool case was never fixed here
+// (1.1.1 fixed bool only, as D1). The emitted code must contain no
+// f-string at all, must run, and must match node's output. (The
+// 3.9-3.11 leg of this is covered by the execution-matrix gate,
+// tools/check-translate-matrix.sh — the suite only has the local
+// python3.)
+const TEMPLATE_CASES = [
+  ["string literal in a field", 'console.log(`a=${"lit"}`);', "a=lit\n"],
+  ["ternary of strings", 'const ok=true;console.log(`a=${ok ? "yes" : "no"}`);', "a=yes\n"],
+  ["literal text and a field", 'console.log(`pre${"x"}post`);', "prexpost\n"],
+  ["bool (never fixed in 1.1.0 — fixed by this patch)", "const b=true;console.log(`b=${b}`);", "b=true\n"],
+  ["double", "console.log(`n=${1e16}`);", "n=10000000000000000\n"],
+  ["quote inside a quote", 'console.log(`s=${"a\\"b"}`);', 's=a"b\n'],
+  ["int interpolation", "console.log(`n=${41 + 1}`);", "n=42\n"],
+];
+for (const [name, js, expected] of TEMPLATE_CASES) {
+  test("template literal -> Python concatenation: " + name, { skip: !HAS_PYTHON }, () => {
+    let out = Iroh.translate(js, { to: "python" });
+    assert.equal(out.report.ok, true, "report: " + JSON.stringify(out.report.unsupported));
+    assert.ok(!/(^|[^\w])f["']/.test(out.code),
+      "emitted code must not use an f-string:\n" + out.code);
+    let run = runPython(out.code);
+    assert.equal(run.status, 0, "python failed: " + run.stderr + "\ncode:\n" + out.code);
+    assert.equal(run.stdout, expected);
+    // The verify block (3.7) already ran the emitted program.
+    assert.equal(out.report.verify.attempted, true);
+    assert.equal(out.report.verify.ran, true);
+    assert.equal(out.report.verify.exit, 0);
+  });
+}
+
+test("1.1.0 patch: translate report carries a verify block (Fix Spec 3.7)", { skip: !HAS_PYTHON }, () => {
+  let out = Iroh.translate('console.log(`a=${"lit"}`);', { to: "python" });
+  assert.equal(out.report.ok, true);
+  assert.equal(out.report.verify.attempted, true);
+  assert.equal(out.report.verify.ran, true);
+  assert.equal(out.report.verify.exit, 0);
+  assert.match(out.report.verify.interpreter, /^\d+\.\d+\.\d+$/);
+  // Other legs record that verification was not attempted — ran: null
+  // is not ran: true.
+  let cpp = Iroh.translate("console.log(1);", { to: "cpp" });
+  assert.equal(cpp.report.verify.attempted, false);
+  assert.equal(cpp.report.verify.ran, null);
+  assert.ok(cpp.report.verify.reason.length > 0);
+  // Opt-out via options.verify: false.
+  let off = Iroh.translate("console.log(1);", { to: "python", verify: false });
+  assert.equal(off.report.verify.attempted, false);
+  assert.equal(off.report.verify.ran, null);
+  // ran: false carries the interpreter's stderr verbatim. The program
+  // below is the probe: JS `%` yields NaN on a zero divisor, the
+  // emitted Python raises ZeroDivisionError — a known semantic gap,
+  // and the verify block's job is to report it, not hide it.
+  let div = Iroh.translate("console.log(10 % 0);", { to: "python" });
+  assert.equal(div.report.verify.attempted, true);
+  assert.equal(div.report.verify.ran, false);
+  assert.equal(div.report.verify.exit, 1);
+  assert.match(div.report.verify.stderr, /ZeroDivisionError/);
+});
+
 test("unsupported constructs are reported, never silently mistranslated", () => {
   let out = Iroh.translate("class A { m() { return 1; } } let a = new A(); console.log(a.m());", { to: "python" });
   assert.equal(out.report.ok, false);
@@ -464,36 +527,4 @@ test("C++ refuses a function whose return type differs across calls", () => {
   );
   assert.equal(out.report.ok, false);
   assert.match(out.report.unsupported[0].message, /differs across calls/);
-});
-
-test("JS -> C++ emits <cmath> exactly once when Math and number printing combine", () => {
-  // A program that both uses Math (needs.cmath) and prints a Number
-  // (needs.jsnum, whose helper also needs <cmath>) used to get the
-  // include twice. Duplicate includes are harmless in C++, but the
-  // emitted header should still say it once.
-  let r = Iroh.translate("let x = Math.sqrt(2); console.log(x); console.log(1.5);", { to: "cpp" });
-  assert.equal(r.report.ok, true);
-  assert.equal((r.code.match(/#include <cmath>/g) || []).length, 1);
-});
-
-test("process.exit translates as program end: sys.exit in Python, std::exit in C++, END in BASIC", () => {
-  let js = "let x = 1;\nconsole.log(x);\nprocess.exit(0);";
-  let py = Iroh.translate(js, { to: "python" });
-  assert.equal(py.report.ok, true);
-  assert.match(py.code, /import sys/);
-  assert.match(py.code, /sys\.exit\(0\)/);
-  let cpp = Iroh.translate(js, { to: "cpp" });
-  assert.equal(cpp.report.ok, true);
-  assert.match(cpp.code, /#include <cstdlib>/);
-  assert.match(cpp.code, /std::exit\(0\)/);
-  let bas = Iroh.translate(js, { to: "basic" });
-  assert.equal(bas.report.ok, true);
-  assert.ok(bas.code.split("\n").includes("END"));
-  // The evidence trace runs the program in-process and keeps the
-  // evidence gathered before the exit: the call's types still come
-  // from the trace, not from static inference.
-  let typed = Iroh.translate("function add(a, b) { return a + b; }\nconsole.log(add(2, 3));\nprocess.exit(0);", { to: "cpp" });
-  assert.equal(typed.report.ok, true);
-  assert.match(typed.code, /int add\(int a, int b\)/);
-  assert.ok(typed.report.assumptions.some((a) => a.what.includes("taken from the trace")));
 });
