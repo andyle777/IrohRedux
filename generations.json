@@ -1,0 +1,84 @@
+{
+  "format": "iroh.generations.v1",
+  "generations": [
+    {
+      "apkVersionCode": 101,
+      "defects": {
+        "aiBundleApiTextLags": "unchecked",
+        "apkArm64OnlyDebugCert": "present",
+        "apkCannotExecOwnRuntime": "present",
+        "boolFstringBelow312": "present",
+        "delimiterQuoteFstring": "present",
+        "exeBundlesNode18WhileMetadataSaysNewer": "not applicable (metadata says >= 18)",
+        "noBundleHashManifest": "present",
+        "noVerifyField": "present"
+      },
+      "distSha": "1a4ea7c00553c262350997eb6f93c7861f0a415d0e170b3ba68bd47280862602",
+      "released": "2026-11-20",
+      "tests": 348,
+      "version": "1.0.1"
+    },
+    {
+      "apkVersionCode": 110,
+      "defects": {
+        "aiBundleApiTextLags": "present",
+        "apkArm64OnlyDebugCert": "present",
+        "apkCannotExecOwnRuntime": "present",
+        "boolFstringBelow312": "present",
+        "delimiterQuoteFstring": "present",
+        "exeBundlesNode18WhileMetadataSaysNewer": "not applicable (metadata says >= 18)",
+        "noBundleHashManifest": "present",
+        "noVerifyField": "present"
+      },
+      "distSha": "64ee85ebd07ddb6422c53332d256cbb023c61bbc3d8b1a6c0013e96a9e4ef556",
+      "released": "2026-11-20",
+      "tests": 649,
+      "version": "1.1.0"
+    },
+    {
+      "apkVersionCode": 111,
+      "defects": {
+        "aiBundleApiTextLags": "verified",
+        "apkArm64OnlyDebugCert": "present",
+        "apkCannotExecOwnRuntime": "present",
+        "boolFstringBelow312": "fixed",
+        "delimiterQuoteFstring": "present",
+        "exeBundlesNode18WhileMetadataSaysNewer": "verified",
+        "noBundleHashManifest": "present",
+        "noVerifyField": "present"
+      },
+      "distSha": "5eb030dd3a2d60ff0bc354eec8087677e4000a3fbce19e1d842e029fffb6be67",
+      "released": "2026-11-20",
+      "tests": 699,
+      "version": "1.1.1"
+    },
+    {
+      "apkBundledRuntime": "node v26.13.1",
+      "apkVersionCode": 111,
+      "defects": {
+        "aiBundleApiTextLags": "fixed (generated from API.md + flag check)",
+        "apkArm64OnlyDebugCert": "present (unchanged)",
+        "apkCannotExecOwnRuntime": "fixed",
+        "boolFstringBelow312": "fixed",
+        "delimiterQuoteFstring": "fixed",
+        "exeBundlesNode18WhileMetadataSaysNewer": "not applicable (metadata says >= 18); stated honestly (--version + README)",
+        "noBundleHashManifest": "fixed",
+        "noVerifyField": "fixed"
+      },
+      "distSha": "7c8b83675a15efbd0d701be4bf47ae4ea07a4acc1b985c58cc0e35fd360a5dbf",
+      "exeEmbeddedRuntime": "node v18.5.0",
+      "patchNotes": [
+        "Template literals to Python emit concatenation, not f-strings (bool case included \u2014 1.1.0 never had the D1 fix); execution-matrix gate green on Python 3.9/3.10/3.11/3.12.",
+        "Every translate result carries a verify block; only the Python leg is executed.",
+        "APK runs Node from nativeLibraryDir as libnode.so (Fix B), extractNativeLibs=true, targetSdk 34; serve-free MainActivity (no local server in 1.1.0).",
+        "Desktop EXEs rebuilt from the patched engine (pkg 5.8.1, node18 targets).",
+        "AI bundle regenerated from the patched engine, with a per-file hash manifest and txt/memory.md."
+      ],
+      "patched": true,
+      "released": "2026-11-20",
+      "tests": 645,
+      "version": "1.1.0"
+    }
+  ],
+  "note": "One row per shipped generation, plus the 1.1.0 in-place patch (same version, no 1.1.2, no version bump). 'present' means the defect is in that generation as shipped; 'fixed' means fixed in the 1.1.0 patched rebuild. distSha is the SHA-256 of dist/iroh-node.js as shipped in that generation's APK (1.0.1/1.1.0/1.1.1 rows from Aether's Fix Spec, verified against the shipped APKs; the patched row is this tree's dist). APK versionCode is from aapt2 dump badging on the shipped APK; the patched 1.1.0 APK is versionCode 111 (was 110)."
+}
