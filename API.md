@@ -1,5 +1,29 @@
 ### API
 
+# FOR HUMANS
+
+This is the precise reference for every surface IrohRedux exposes.
+If you are new, start with [Getting Started](GETTING_STARTED.md)
+and the [README](README.md) — this file is for looking up exact
+shapes, options, and flags. There are three surfaces:
+
+- **Library** (`Iroh.trace`, `analyze`, `translate`, `direct`,
+  `scan`, `liveAnalyzer`) — import it from Node or ESM; types ship
+  in `index.d.ts`.
+- **CLI** (`node cli/iroh.js`, or the packaged `iroh` binary) —
+  streams JSON lines; see [CLI flags](#cli-flags) for every flag.
+- **Python client** (`python/iroh/`: `run`, `trace_python`,
+  `scan_python`) and **C++ client** (`cpp/iroh.hpp`) — thin
+  clients over the CLI; see [Using Iroh from Python and
+  C++](#using-iroh-from-python-and-c).
+
+The machine-readable facts (JSON shapes, coverage denominators,
+findings cap, the translate report — including its `verify` block)
+are in the
+[FOR AI](#for-ai) section at the end of this file. The generated
+text form of this file is `txt/API.txt` in the AI bundle, and CI
+checks that every flag in `iroh --help` appears in it.
+
 - [Iroh](#iroh)
 - [Iroh.Stage](#irohstage)
 - [Iroh.Stage.RuntimeListener](#irohstageruntimelistener)
@@ -245,8 +269,14 @@ is read.
 
 ``translate(code, options)``: Hybrid translation engine (0.8.0). Returns
 `{ code, report }` where `report` is `{ ok, from, to, staticOnly, clean,
-assumptions, unsupported, notes }`. JavaScript out (`to: "python" |
-"cpp"`) is hybrid: the AST (static) plus trace evidence (dynamic — the
+assumptions, unsupported, notes, verify }`. Template literals to Python
+emit concatenation, not f-strings (1.0.1 patch, Fix Spec 3.5 Option 1),
+so a bool, a string literal, or a ternary of strings parses on
+3.9–3.12. The `verify` block (3.7) records whether the emitted Python
+was executed under python3: `{ attempted, ran, interpreter, exit }`,
+with `stderr` verbatim when `ran` is false; `ran: null` means not
+attempted, never success. Pass `verify: false` to skip the check.
+JavaScript out (`to: "python" | "cpp"`) is hybrid: the AST (static) plus trace evidence (dynamic — the
 program is run through the tracer first, and the events resolve what
 static analysis cannot: runtime types, values, which branches fired).
 The reverse legs (`from: "python" | "cpp"`, `to: "javascript"`) are
@@ -277,6 +307,29 @@ C++ leg works.
 ``eventToJSON(event, trigger)``: Turns a live RuntimeEvent into the plain
 object `trace()` returns. The CLI uses this too, so its JSON lines and
 `trace()` events are the same shape.
+
+#### CLI flags
+
+Every flag in `iroh --help` (run `node cli/iroh.js --help` for the
+exact text). `--file <path>` is the program file (same as the
+positional argument). `--events ALL|CALL,IF,...` selects the event
+categories to stream (default ALL); `--no-result` skips the result
+line. `--module` traces as an ES module (JavaScript only).
+`--analyze` appends an analysis line after the result line.
+`--scan` prints ONE scan line `{ vectors, findings, scores, summary }`
+instead of the event flood; `--include-events` embeds the raw events
+in the scan document (needs `--scan`). `--live` streams live-finding
+lines as findings trip, then a final live-summary line. `--direct`
+runs the script under the runaway-loop guard (throttle by default,
+`--direct=stop` stops the run instead; JavaScript only) and combines
+with `--analyze`, `--scan`, and `--live`. `--lang python|cpp|javascript`
+forces the tracer (default: inferred from the file extension).
+`--translate python|cpp|javascript` translates instead of tracing;
+`--from python|cpp|javascript` is the source language (default: by
+file extension). `--translate` cannot be combined with `--live`,
+`--scan`, `--analyze`, or `--direct`. `--version` prints one line:
+version, dist hash, embedded runtime. `-h` / `--help` prints usage.
+Unknown options exit 2 with usage on stderr.
 
 ``safeValue(value, depth, seen)``: Serializes a runtime value safely —
 depth-capped, circular references marked `"[Circular]"`, functions as
@@ -705,3 +758,64 @@ Iroh.PROGRAM
   Code enter,
   Code exit
 ````
+
+#### FOR AI
+
+Machine-readable facts. Load this section without guessing. If a
+fact here disagrees with a prose paragraph above, this section wins
+— and the disagreement is a bug; file it. The generated text form
+of this file is `txt/API.txt` in the AI bundle; CI checks that
+every flag in `iroh --help` appears in it.
+
+- Engine: IrohRedux 1.0.1 (patched in place, 20 Nov 2026). No
+  1.1.2. No version bump. The engine is unchanged by the patch.
+  `dist/iroh-node.js` SHA-256:
+  `1a4ea7c00553c262350997eb6f93c7861f0a415d0e170b3ba68bd47280862602`.
+- Ask for JSON. Never parse console prose; it is for humans and
+  will change. Event streams are JSON lines, one object per line,
+  with the `language` field always set.
+- Event line:
+  `{"type":"event","event":"FUNCTION_CALL","category":"CALL",
+  "trigger":"before","hash":11,"indent":1,"name":"factorial",
+  "arguments":[3],"external":false}`, followed by a result line
+  `{"type":"result","value":6}` or an error line
+  `{"type":"error","name":...,"message":...}`.
+- `--scan` result: `{vectors, findings, scores, summary}`.
+  `vectors` carries `features {calls, depth, repeat, imbalance,
+  mix, coverage, events}`, `vector[6]`, `names[6]`. `findings` is
+  a list of `{code, severity, message, evidence, neuron}`.
+  `summary` carries `{events, findings, warnings, language,
+  infos, neuron {label, score}, maxCallDepth, distinctRegions,
+  findingsTruncated}`. There is NO `unclosedFrames` field in
+  1.0.1 — do not look for it.
+- `--translate` result (one line):
+  `{type:"translation", from, to, code, report}`. `report`
+  carries `{ok, from, to, staticOnly, clean, assumptions,
+  unsupported, notes, verify}`. Template literals to Python emit
+  concatenation, not f-strings; `verify` records the execution
+  check (`ran: null` is not `ran: true`).
+- `--live` lines: `live-finding` (with `firedAt`) as findings
+  trip, then `live-summary` (batch-equal findings, scores,
+  vectors). `--direct` lines: `directive` as the guard acts, then
+  `direct-summary` (findings, directive audit log, analysis).
+- Coverage is fired / 30 for every language in 1.0.1 — the
+  JavaScript category model, applied to all tracers. There is no
+  `reachable` field. A C++ trace at 2 of 30 is complete at
+  function level, not 28 short; a Python trace fires ASSIGN,
+  CATCH, CALL, FUNCTION, IF, LOOP.
+- Findings cap: findings are capped at 200.
+  `summary.findingsTruncated` is the dropped count. If
+  `findingsTruncated > 0`, the finding list is a prefix, not the
+  whole set — say so when you report it. Any score derived from
+  the list is a score over a prefix.
+- Memory model: a finished trace does NOT release its Stage in
+  1.0.1 — the Stage stays registered in `Iroh.stages` and its
+  listeners keep the trace alive. There is no `Stage.release`
+  and no `releaseTraceRun` in this generation. Full model:
+  `docs/memory.md` in the repo, `txt/memory.md` in the AI bundle.
+- CLI flags (every flag in `iroh --help`): `--events`,
+  `--no-result`, `--file`, `--module`, `--analyze`, `--scan`,
+  `--include-events`, `--live`, `--direct`, `--lang`,
+  `--translate`, `--from`, `--version`, `-h`, `--help`.
+- Works offline — no network required. No artifact phones home,
+  checks for updates, or downloads at first run.
