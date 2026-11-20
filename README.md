@@ -2,12 +2,12 @@
 
 <p align="center">
   <a href="https://github.com/andyle777/IrohRedux/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/version-0.8.0-orange.svg?style=flat-square" alt="Version 0.8.0" />
+  <img src="https://img.shields.io/badge/version-0.9.0-orange.svg?style=flat-square" alt="Version 0.9.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D%2018-339933.svg?style=flat-square" alt="Node >= 18" />
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-249%20passing-brightgreen.svg?style=flat-square" alt="249 tests passing" />
+  <img src="https://img.shields.io/badge/tests-275%20passing-brightgreen.svg?style=flat-square" alt="275 tests passing" />
 </p>
 
 <p align="center">
@@ -348,7 +348,7 @@ buffer their events; for JavaScript they stream as the program runs.
   back to JavaScript — hybrid (AST + trace evidence) out of JavaScript,
   static-only coming back, with an honest report of what translated, what
   needed an assumption, and what could not be translated.
-- **No surprises.** 249 tests (221 Node + 20 Python + 8 C++), `npm test` runs
+- **No surprises.** 275 tests (241 Node + 25 Python + 9 C++), `npm test` runs
   them all, plus a TypeScript type test (`npm run test:types`). Zero runtime
   dependencies in the engine beyond Acorn, astring, and acorn-walk.
 
@@ -365,7 +365,7 @@ git clone https://github.com/andyle777/IrohRedux.git
 cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
-npm test            # 249 tests: 221 Node + 20 Python + 8 C++
+npm test            # 275 tests: 241 Node + 25 Python + 9 C++
 ```
 
 The Python client installs with `pip install -e python/`; the C++ client is
@@ -383,4 +383,5 @@ a single header — just `#include "iroh.hpp"`.
 0.3.0 (2018), fixed and extended. The core idea is his; the 0.4.0 fixes, the
 0.5.0 CLI and polyglot clients, the 0.5.1 polish, the 0.6.0 syntax and
 modern SDK, and the 0.7.0 modules, top-level await, and decorators, and
-the 0.8.0 analysis layer and translation engine are the fork's.*
+the 0.8.0 analysis layer and translation engine, the 0.9.0 native
+Python/C++ tracers, vector refracting, scan mode, and live wire are the fork's.*
