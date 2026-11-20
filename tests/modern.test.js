@@ -7,6 +7,7 @@
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { skipIfMissing } = require("./capabilities");
 const Iroh = require("../dist/iroh-node.js");
 
 function run(code) {
@@ -29,11 +30,13 @@ test("RegExp v flag traces", () => {
   assert.equal(run("const r = /[\\p{Letter}]/v; r.test('a');"), true);
 });
 
-test("RegExp modifiers trace", () => {
+test("RegExp modifiers trace", (t) => {
+  skipIfMissing(t, "regexpModifiers");
   assert.equal(run("const r = /(?i:a)b/; r.test('Ab');"), true);
 });
 
-test("using declarations trace, and disposal runs", () => {
+test("using declarations trace, and disposal runs", (t) => {
+  skipIfMissing(t, "usingDeclarations");
   assert.equal(
     run("{ using x = { [Symbol.dispose]() { globalThis.__m1 = true; } }; 1; } globalThis.__m1;"),
     true
@@ -44,7 +47,8 @@ test("using declarations trace, and disposal runs", () => {
   );
 });
 
-test("using declarations fire VAR events", () => {
+test("using declarations fire VAR events", (t) => {
+  skipIfMissing(t, "usingDeclarations");
   let stage = new Iroh.Stage("{ using x = { [Symbol.dispose]() {} }; 1; }");
   let names = [];
   stage.addListener(Iroh.VAR).on("before", (e) => names.push(e.name));
@@ -52,14 +56,17 @@ test("using declarations fire VAR events", () => {
   assert.ok(names.includes("x"));
 });
 
-test("await using traces", async () => {
+test("await using traces", async (t) => {
+  skipIfMissing(t, "awaitUsing");
   let result = await runAsync(
     "async function f() { await using x = { [Symbol.asyncDispose]() { return Promise.resolve(); } }; return 9; } f();"
   );
   assert.equal(result, 9);
 });
 
-test("runtime features that needed no syntax change still trace", () => {
+test("runtime features that needed no syntax change still trace", (t) => {
+  skipIfMissing(t, "promiseTry");
+  skipIfMissing(t, "regexpEscape");
   // Object.groupBy returns a null-prototype object, so compare through
   // JSON rather than deepEqual (which checks prototypes in strict mode).
   assert.deepEqual(
@@ -84,7 +91,8 @@ test("bare blocks return their completion value", () => {
   assert.equal(run("{ { 2; } }"), 2);
 });
 
-test("Stage constructor honours parser options", () => {
+test("Stage constructor honours parser options", (t) => {
+  skipIfMissing(t, "usingDeclarations");
   // The constructor used to take `opt` and silently drop it.
   let code = "function f() { using x = { [Symbol.dispose]() {} }; return 1; } f();";
   assert.throws(() => new Iroh.Stage(code, { ecmaVersion: 2022 }), { name: "SyntaxError" });
@@ -109,7 +117,8 @@ test("new on a non-constructor throws exactly like untraced code (OP_NEW parity)
   }
 });
 
-test("ES2026: the three features Node 24 already has trace correctly", async () => {
+test("ES2026: the three features Node 24 already has trace correctly", async (t) => {
+  skipIfMissing(t, "errorIsError");
   // Array.fromAsync (Node 22+): async iterable -> array.
   assert.deepEqual(
     await runAsync("async function* gen() { yield 1; yield 2; yield 3; } Array.fromAsync(gen());"),
