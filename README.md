@@ -276,9 +276,9 @@ fact here disagrees with a prose paragraph above, this section wins
 - Engine: IrohRedux 1.1.0 (patched in place, 20 Nov 2026).
   No 1.1.2. No version bump.
 - `dist/iroh-node.js` SHA-256:
-  `7c8b83675a15efbd0d701be4bf47ae4ea07a4acc1b985c58cc0e35fd360a5dbf`
+  `0b13cb174f03025f3657990fd06eb83e2e361e5f57f159df3e215b42e1f5f131`
 - `iroh --version` prints `iroh 1.1.0 (engine dist iroh-node.js
-  7c8b83675a15, runtime node v18.5.0)` inside a packaged binary
+  0b13cb174f03, runtime node v18.5.0)` inside a packaged binary
   (runtime is the embedded Node; on npm it is the local node).
 - 1.1.0 has no `iroh doctor` (that is 1.1.1 work). `--version`
   is the self-report this generation gets.

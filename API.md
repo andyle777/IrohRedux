@@ -500,7 +500,7 @@ the generated text form of this file). Flags take a value with
 - `--file <path>` — the program file (same as the positional
   argument).
 - `--version` — one line: version, dist hash, embedded runtime
-  (`iroh 1.1.0 (engine dist iroh-node.js 7c8b83675a15, runtime
+  (`iroh 1.1.0 (engine dist iroh-node.js 0b13cb174f03, runtime
   node v18.5.0)` inside a packaged binary).
 - `-h` / `--help` — usage.
 
@@ -920,7 +920,7 @@ every flag in `iroh --help` appears in it.
 
 - Engine: IrohRedux 1.1.0 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `7c8b83675a15efbd0d701be4bf47ae4ea07a4acc1b985c58cc0e35fd360a5dbf`.
+  `0b13cb174f03025f3657990fd06eb83e2e361e5f57f159df3e215b42e1f5f131`.
   1.1.0 has no `iroh doctor`; `--version` is its self-report.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,

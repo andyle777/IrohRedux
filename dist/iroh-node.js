@@ -6,7 +6,7 @@ var acornWalk = require('acorn-walk');
  * @param {Class} cls
  * @param {Array} prot
  */
-var extend = function(cls, prot) {
+function extend(cls, prot) {
   for (let key in prot) {
     if (prot[key] instanceof Function) {
       if (cls.prototype[key] instanceof Function) {
@@ -14,8 +14,7 @@ var extend = function(cls, prot) {
       }
       cls.prototype[key] = prot[key];
     }
-  }
-};
+  }}
 
 var version = "1.1.0";
 
@@ -27,12 +26,6 @@ const DEBUG_KEY = `$`;
 
 // temp variable start with this
 const TEMP_VAR_BASE = `Iroh$$x`;
-
-// log all errors, logs also internal errors
-
-
-// clean or minimal debug command related output
-const CLEAN_DEBUG_INJECTION = false;
 
 // detect environment
 const IS_NODE = (
@@ -237,6 +230,7 @@ let CATEGORY = {};
 //
 // Written ES2015-only (no async/await, no for...of): this file is
 // bundled into the browser build by buble.
+
 const atToken = new acorn.TokenType("@", { startsExpr: true });
 
 // NOTE: Acorn's `tokTypes` is NOT imported. Rollup cannot see it as a
@@ -511,29 +505,39 @@ function reserveTempVarId() {
     `${TEMP_VAR_BASE}${utvidx++}`
   );
 }
-
 // general unique index
 let uidx = 1;
 function uid() {
   return uidx++;
 }
-
 // unique branch index
 let ubidx = 1;
 function uBranchHash() {
   return ubidx++;
 }
-
+// Reset the patch counters at the start of a patch run (Stage.patch).
+// They are module-level counters, so without this the hashes, temp
+// variable names and $$ANON_ names in one trace depend on how many
+// traces this process has already run — the same program traced twice
+// in one process got different event hashes, and analyze() embeds
+// those hashes in its findings, so its output was not byte-stable
+// across calls in one process. Patching is synchronous, so no two
+// patch runs can interleave and collide; every counter is consumed
+// only inside one patch run (hashes, temp vars, anonymous-function
+// names, frame and patcher uids), so resetting per run is safe.
+function resetPatchCounters() {
+  utvidx = 1;
+  uidx = 1;
+  ubidx = 1;
+}
 function parse$1(input, options) {
   // Same default as helpers.parse: Acorn 8 requires ecmaVersion.
   // "latest" + allowHashBang: see helpers.parse.
   return parseWithDecorators(input, Object.assign({ ecmaVersion: "latest", allowHashBang: true }, options));
 }
-
 function generate$1() {
   return astring.generate.apply(null, arguments);
 }
-
 // --- Event projection (shared by Iroh.trace() and the CLI) ---------------
 
 // Event fields that are safe to copy onto a plain event object. Everything
@@ -593,7 +597,6 @@ function safeValue(value, depth, seen) {
   }
   return out;
 }
-
 // Turn one RuntimeEvent into a plain, JSON-safe object:
 // { type: "event", event: "FUNCTION_CALL", category: "CALL",
 //   trigger: "before", hash, indent, ...event fields }.
@@ -619,26 +622,25 @@ function eventToJSON(event, trigger) {
   return line;
 }
 
-
-var _utils = Object.freeze({
-	reserveTempVarId: reserveTempVarId,
-	uid: uid,
-	uBranchHash: uBranchHash,
-	parse: parse$1,
-	generate: generate$1,
-	safeValue: safeValue,
-	eventToJSON: eventToJSON
+var _utils = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  eventToJSON: eventToJSON,
+  generate: generate$1,
+  parse: parse$1,
+  reserveTempVarId: reserveTempVarId,
+  resetPatchCounters: resetPatchCounters,
+  safeValue: safeValue,
+  uBranchHash: uBranchHash,
+  uid: uid
 });
 
 function instructionToString(n) {
   for (let key in INSTR) {
     let value = INSTR[key];
     if (value === n) return key;
-  }
-  console.warn(`Unexpected instruction value ${n}`);
+  }  console.warn(`Unexpected instruction value ${n}`);
   return "";
 }
-
 function injectPatchIntoNode(node, patch, end) {
   let body = null;
   let type = node.type;
@@ -653,18 +655,15 @@ function injectPatchIntoNode(node, patch, end) {
   console.assert(body instanceof Array);
   // force patches to be magic
   patch.magic = true;
-  if (end) body.push(patch);
-  else body.unshift(patch);
+  body.unshift(patch);
 }
-
 function resolveCallee(node) {
-  let type = node.type;
+  node.type;
   if (node.type === "MemberExpression") {
     return node.object;
   }
   return node;
 }
-
 function isFunctionNode(type) {
   return (
     type === "FunctionExpression" ||
@@ -672,9 +671,6 @@ function isFunctionNode(type) {
     type === "ArrowFunctionExpression"
   );
 }
-
-
-
 function isStatement(type) {
   return (
     type === "BlockStatement" ||
@@ -697,7 +693,6 @@ function isStatement(type) {
     type === "WithStatement"
   );
 }
-
 function isLoopStatement(type) {
   return (
     type === "ForStatement" ||
@@ -707,105 +702,83 @@ function isLoopStatement(type) {
     type === "DoWhileStatement"
   );
 }
-
 function isSwitchStatement(type) {
   return (
     type === "SwitchStatement"
   );
 }
-
 function isTryStatement(type) {
   return (
     type === "TryStatement"
   );
 }
-
 function isLabeledStatement(type) {
   return (
     type === "LabeledStatement"
   );
 }
-
-
-
-
-
-
-
 function isLoopFrameType(type) {
   return (
     type === INSTR.LOOP_ENTER
   );
 }
-
 function isSwitchFrameType(type) {
   return (
     type === INSTR.SWITCH_ENTER
   );
 }
-
 function isSwitchCaseFrameType(type) {
   return (
     type === INSTR.CASE_ENTER
   );
 }
-
 function isFunctionFrameType(type) {
   return (
     type === INSTR.FUNCTION_CALL
   );
 }
-
 function isMethodFrameType(type) {
   return (
     type === INSTR.METHOD_ENTER
   );
 }
-
 function isReturnableFrameType(type) {
   return (
     isMethodFrameType(type) ||
     isFunctionFrameType(type)
   );
 }
-
 function isBreakableFrameType(type) {
   return (
     isLoopFrameType(type) ||
     isSwitchFrameType(type)
   );
 }
-
 function isContinuableFrameType(type) {
   return (
     isLoopFrameType(type)
   );
 }
-
 function isTryStatementFrameType(type) {
   return (
     type === INSTR.TRY_ENTER
   );
 }
-
 function isCatchClauseFrameType(type) {
   return (
     type === INSTR.CATCH_ENTER
   );
 }
-
 function isFinalClauseFrameType(type) {
   return (
     type === INSTR.FINAL_ENTER
   );
 }
-
 function isInstantiationFrameType(type) {
   return (
     type === INSTR.OP_NEW
   );
 }
-
 function isValidFrameInstruction(frame) {
   console.assert(typeof frame.cleanType === "string");
   let type = frame.cleanType;
@@ -813,14 +786,11 @@ function isValidFrameInstruction(frame) {
     INSTR[type] >= 0
   );
 }
-
 function operatorToString(op) {
   for (let key in OP) {
     if (OP[key] === op) return key;
-  }
-  return "undefined";
+  }  return "undefined";
 }
-
 function processLabels(node) {
   let labels = [];
   // we can have multiple labels in js
@@ -833,34 +803,25 @@ function processLabels(node) {
       break;
     }
     node = node.body;
-  }
-  return node;
+  }  return node;
 }
-
-
-
 function getCallee(callee, call) {
   if (call === null) {
     return callee.name;
   }
   return call;
 }
-
-
-
 function cloneNode(node) {
   let clone = JSON.parse(JSON.stringify(node));
   return clone;
 }
-
 function deepMagicPatch(node) {
   // magic patch the whole ast
   acornWalk.full(node, function(child) {
     child.magic = true;
   });
 }
-
-function parse$2(input, options) {
+function parse(input, options) {
   // Acorn 8 requires ecmaVersion; default it so every internal
   // parseExpression/parseExpressionStatement call parses modern syntax
   // instead of warning and falling back to ES2020. "latest" tracks the
@@ -870,25 +831,21 @@ function parse$2(input, options) {
   // options.
   return parseWithDecorators(input, Object.assign({ ecmaVersion: "latest", allowHashBang: true }, options));
 }
-
-function generate$2() {
+function generate() {
   return astring.generate.apply(null, arguments);
 }
-
 function parseExpression(input) {
-  let node = parse$2(input);
+  let node = parse(input);
   let result = node.body[0].expression;
   deepMagicPatch(result);
   return result;
 }
-
 function parseExpressionStatement(input) {
-  let node = parse$2(input);
+  let node = parse(input);
   let result = node.body[0];
   deepMagicPatch(result);
   return result;
 }
-
 function getCategoryFromInstruction(type) {
   type = type | 0;
   switch (type) {
@@ -974,10 +931,8 @@ function getCategoryFromInstruction(type) {
       return CATEGORY.METHOD | 0;
     case INSTR.SUPER:
       return CATEGORY.SUPER | 0;
-  }
-  return -1;
+  }  return -1;
 }
-
 function forceLoopBodyBlocked(node) {
   if (node.body.type !== "BlockStatement") {
     node.body = {
@@ -1026,8 +981,7 @@ class Frame {
     while (true) {
       if (frame.isGlobal()) break;
       frame = frame.parent;
-    }
-    return frame;
+    }    return frame;
   }
   getDepth() {
     let depth = 0;
@@ -1036,8 +990,7 @@ class Frame {
       if (frame.isGlobal()) break;
       frame = frame.parent;
       depth++;
-    }
-    return depth;
+    }    return depth;
   }
   equals(frame) {
     return (
@@ -1065,16 +1018,14 @@ class Scope {
     while (true) {
       if (ctx.isReturnable) break;
       ctx = ctx.parent;
-    }
-    return ctx;
+    }    return ctx;
   }
   getLoopContext() {
     let ctx = this;
     while (true) {
       if (ctx.isLoop) break;
       ctx = ctx.parent;
-    }
-    return ctx;
+    }    return ctx;
   }
 }
 
@@ -1227,8 +1178,7 @@ STAGE1.BlockStatement = function(node, patcher) {
       body.splice(ii + 1, 0, override);
       ii++;
     }
-  }
-};
+  }};
 
 STAGE1.MethodDefinition = function(node, patcher) {
   patcher.pushScope(node);
@@ -1403,8 +1353,7 @@ STAGE1.CallExpression = function(node, patcher) {
   for (let key in call) {
     if (!call.hasOwnProperty(key)) continue;
     node[key] = call[key];
-  }
-};
+  }};
 
 STAGE1.ReturnStatement = function(node, patcher) {
   if (node.magic) return;
@@ -1476,8 +1425,7 @@ STAGE1.BreakStatement = function(node, patcher) {
   for (let key in expr) {
     if (!expr.hasOwnProperty(key)) continue;
     node[key] = expr[key];
-  }
-  node.magic = true;
+  }  node.magic = true;
 };
 
 STAGE1.ContinueStatement = function(node, patcher) {
@@ -1519,8 +1467,7 @@ STAGE1.ContinueStatement = function(node, patcher) {
   for (let key in expr) {
     if (!expr.hasOwnProperty(key)) continue;
     node[key] = expr[key];
-  }
-  node.magic = true;
+  }  node.magic = true;
 };
 
 STAGE1.VariableDeclaration = function(node, patcher) {
@@ -1537,8 +1484,7 @@ STAGE1.VariableDeclaration = function(node, patcher) {
   // walk
   for (let ii = 0; ii < decls.length; ++ii) {
     patcher.walk(decls[ii], patcher, patcher.stage);
-  }
-  // patch
+  }  // patch
   for (let ii = 0; ii < decls.length; ++ii) {
     let decl = decls[ii];
     let declClone = clone.declarations[ii];
@@ -1584,8 +1530,7 @@ STAGE1.VariableDeclaration = function(node, patcher) {
       ]
     };
     if (init !== null) decl.init.arguments.push(init);
-  }
-};
+  }};
 
 STAGE1.NewExpression = function(node, patcher) {
   if (node.magic) return;
@@ -1661,8 +1606,7 @@ STAGE1.ObjectExpression = function(node, patcher) {
   for (let key in call) {
     if (!call.hasOwnProperty(key)) continue;
     node[key] = call[key];
-  }
-};
+  }};
 
 STAGE1.MemberExpression = function(node, patcher) {
   if (node.magic) {
@@ -1714,8 +1658,7 @@ STAGE1.MemberExpression = function(node, patcher) {
   for (let key in call) {
     if (!call.hasOwnProperty(key)) continue;
     node[key] = call[key];
-  }
-};
+  }};
 
 STAGE1.AssignmentExpression = function(node, patcher) {
   if (node.magic) {
@@ -1831,8 +1774,7 @@ STAGE1.AssignmentExpression = function(node, patcher) {
   for (let key in call) {
     if (!call.hasOwnProperty(key)) continue;
     node[key] = call[key];
-  }
-};
+  }};
 
 STAGE1.UpdateExpression = function(node, patcher) {
   if (node.magic) {
@@ -1850,32 +1792,28 @@ STAGE1.UpdateExpression = function(node, patcher) {
   };
   let arg = node.argument;
   let operator = node.operator;
-  // #object assignment
-  let object = null;
-  let property = null;
   // skip the last property and manually
   // access it inside the debug function
   if (arg.type === "MemberExpression") {
     if (arg.property.type === "Identifier") {
       if (arg.computed) {
-        property = arg.property;
+        arg.property;
       } else {
-        property = {
+        ({
           magic: true,
           type: "Literal",
           value: arg.property.name
-        };
+        });
       }
     } else {
-      property = arg.property;
+      arg.property;
     }
-    object = arg.object;
+    arg.object;
   }
   // identifier based assignment
   // fixed up below by turning into assign expr again
   else if (arg.type === "Identifier") {
-    object = arg;
-    property = parseExpression(null);
+    parseExpression(null);
   }
   let call = {
     magic: true,
@@ -1895,8 +1833,7 @@ STAGE1.UpdateExpression = function(node, patcher) {
   for (let key in call) {
     if (!call.hasOwnProperty(key)) continue;
     node[key] = call[key];
-  }
-};
+  }};
 
 STAGE1.ArrayExpression = function(node, patcher) {
   if (node.magic) return;
@@ -1925,8 +1862,7 @@ STAGE1.ArrayExpression = function(node, patcher) {
   for (let key in call) {
     if (!call.hasOwnProperty(key)) continue;
     node[key] = call[key];
-  }
-};
+  }};
 
 STAGE1.Literal = function(node, patcher) {
   if (node.magic) return;
@@ -1954,8 +1890,7 @@ STAGE1.Literal = function(node, patcher) {
   for (let key in call) {
     if (!call.hasOwnProperty(key)) continue;
     node[key] = call[key];
-  }
-};
+  }};
 
 STAGE1.ForStatement = function(node, patcher) {
   if (!node.hasOwnProperty("labels")) node.labels = [];
@@ -2010,7 +1945,7 @@ STAGE2.IfStatement = function(node, patcher) {
   }
   node.magic = true;
 
-  let test = cloneNode(node.test);
+  cloneNode(node.test);
   // branch hash
   let elseHash = uBranchHash();
   let isElse = (
@@ -2196,8 +2131,7 @@ STAGE3.BlockStatement = function(node, patcher) {
         if (child.finalizer) STAGE3.FinalClause(child.finalizer, patcher);
       }
     }
-  }
-};
+  }};
 
 STAGE3.CatchClause = function(node, patcher) {
   if (node.magic) return;
@@ -2335,7 +2269,7 @@ STAGE4.SwitchCase = function(node, patcher) {
   }
 
   // default or case
-  let type = (
+  (
     test !== null ? test : parseExpression("null")
   );
 
@@ -2642,7 +2576,7 @@ STAGE7.BlockStatement = function(node, patcher) {
       child.type === "BlockStatement"
     );
     let isLoopStmt = isLoopStatement(child.type);
-    let isSwitchStmt = isSwitchStatement(child.type);
+    isSwitchStatement(child.type);
     let isHashBranch = (
       isLoopStmt ||
       isLazyBlock
@@ -2775,8 +2709,7 @@ STAGE7.BlockStatement = function(node, patcher) {
       body.splice(ii + 1, 0, end);
       ii++;
     }
-  }
-};
+  }};
 
 STAGE7.Program = STAGE1.Program;
 STAGE7.MethodDefinition = STAGE1.MethodDefinition;
@@ -3048,7 +2981,6 @@ class Patcher {
     this.instance = instance;
   }
 }
-
 Patcher.prototype.walk = function(ast, state, visitors) {
   return acornWalk.recursive(ast, state, visitors, acornWalk.base);
 };
@@ -3139,6 +3071,7 @@ Patcher.prototype.applyPatches = function(ast) {
 //
 // Written ES2015-only (no async/await, no for...of, no ?. or ??):
 // this file is bundled into the browser build by buble.
+
 // Mark a constructed node (and, for convenience, return it) as
 // scaffolding: the patch stages walk it but emit no events for it.
 // The decorator expressions and the field's original initial value
@@ -3268,7 +3201,6 @@ function accessObject(kind, isStatic, isPrivate, className, keyName, holder, key
     }
     return access;
   }
-  let target = isStatic ? ident(className) : ident("o");
   if (kind === "method" || kind === "getter") {
     if (isStatic) {
       prop("has", fn([], lit(true)));
@@ -3383,7 +3315,7 @@ function nestedApplies(patcher, decorators, valueNode, makeContext) {
   let value = valueNode;
   for (let ii = decorators.length - 1; ii >= 0; --ii) {
     let dec = decorators[ii];
-    let hash = nextHash(patcher);
+    let hash = nextHash();
     patcher.nodes[hash] = { hash: hash, node: cloneNode(dec) };
     value = applyCall(patcher, hash, dec.expression, value, makeContext(dec));
   }
@@ -4026,14 +3958,14 @@ function desugarDecorators(ast, patcher) {
         })));
         for (let di = el.decorators.length - 1; di >= 0; --di) {
           let dec = el.decorators[di];
-          let hash = nextHash(patcher);
+          let hash = nextHash();
           patcher.nodes[hash] = { hash: hash, node: cloneNode(dec) };
           let resTemp = temp();
           applyStmts.push(stmt(magic({
             type: "AssignmentExpression",
             operator: "=",
             left: ident(resTemp),
-            right: applyCall(patcher, hash, dec.expression, ident(valueTemp), makeContext(dec)),
+            right: applyCall(patcher, hash, dec.expression, ident(valueTemp), makeContext()),
           })));
           // Merge: a decorator returning undefined keeps the
           // pair; a returned {get}/{set} replaces only the
@@ -4559,7 +4491,7 @@ function applyFieldDecorators(patcher, decorators, makeContext, temp) {
   let value = parseExpression("undefined");
   for (let ii = decorators.length - 1; ii >= 0; --ii) {
     let dec = decorators[ii];
-    let hash = nextHash(patcher);
+    let hash = nextHash();
     patcher.nodes[hash] = { hash: hash, node: cloneNode(dec) };
     let ctx = makeContext(dec);
     if (ii === decorators.length - 1) {
@@ -4594,7 +4526,7 @@ function applyFieldDecorators(patcher, decorators, makeContext, temp) {
 // traced); the initializer invocation reuses DEBUG_FUNCTION_CALL
 // with call="call", so it fires a FUNCTION_CALL event named "call".
 function fieldInitValue(patcher, initTemp, value) {
-  let hash = nextHash(patcher);
+  let hash = nextHash();
   patcher.nodes[hash] = { hash: hash, node: { type: "Decorator", expression: null } };
   let callInit = linkCall(patcher, "DEBUG_FUNCTION_CALL", [
     parseExpression(String(hash)),
@@ -4905,7 +4837,6 @@ class RuntimeListenerEvent {
     this.callback = callback;
   }
 }
-
 class RuntimeListener {
   constructor(category) {
     this.category = category;
@@ -4927,8 +4858,7 @@ class RuntimeListener {
     let triggers = this.triggers[trigger];
     for (let ii = 0; ii < triggers.length; ++ii) {
       triggers[ii].callback(event);
-    }
-  }
+    }  }
 }
 
 function evalUnaryExpression(op, ctx, a) {
@@ -4943,10 +4873,7 @@ function evalUnaryExpression(op, ctx, a) {
     case OP["delete"]: return a;
     default:
       throw new Error(`Invalid operator ${op}`);
-    break;
-  }
-}
-
+  }}
 function evalBinaryExpression(op, a, b) {
   switch (op) {
     case OP["+"]:          return a + b;
@@ -4973,10 +4900,7 @@ function evalBinaryExpression(op, a, b) {
     case OP["instanceof"]: return a instanceof b;
     default:
       throw new Error(`Invalid operator ${op}`);
-    break;
-  }
-}
-
+  }}
 function evalObjectAssignmentExpression(op, obj, prop, value) {
   switch (op) {
     case OP["="]:   return obj[prop] =    value;
@@ -5008,9 +4932,7 @@ function evalObjectAssignmentExpression(op, obj, prop, value) {
       return obj[prop] = value;
     default:
       throw new Error(`Invalid operator ${op}`);
-    break;
-  }
-}
+  }}
 
 // #IF
 function DEBUG_IF_TEST(hash, value) {
@@ -5022,8 +4944,7 @@ function DEBUG_IF_TEST(hash, value) {
   event.trigger("test");
   // API END
   return event.value;
-}
-function DEBUG_IF_ENTER(hash, value) {
+}function DEBUG_IF_ENTER(hash, value) {
   //console.log(indentString(this.indent) + "if");
   // FRAME
   let frame = this.pushFrame(INSTR.IF_ENTER, hash);
@@ -5037,8 +4958,7 @@ function DEBUG_IF_ENTER(hash, value) {
   event.trigger("enter");
   // API END
   this.indent += INDENT_FACTOR;
-}
-function DEBUG_IF_LEAVE(hash) {
+}function DEBUG_IF_LEAVE(hash) {
   this.indent -= INDENT_FACTOR;
   // API
   let event = this.createEvent(INSTR.IF_LEAVE);
@@ -5051,7 +4971,6 @@ function DEBUG_IF_LEAVE(hash) {
   this.popFrame();
   // FRAME END
 }
-
 // #ELSE
 function DEBUG_ELSE_ENTER(hash) {
   // API
@@ -5066,8 +4985,7 @@ function DEBUG_ELSE_ENTER(hash) {
   frame.values = [hash];
   // FRAME END
   this.indent += INDENT_FACTOR;
-}
-function DEBUG_ELSE_LEAVE(hash) {
+}function DEBUG_ELSE_LEAVE(hash) {
   this.indent -= INDENT_FACTOR;
   // API
   let event = this.createEvent(INSTR.ELSE_LEAVE);
@@ -5080,7 +4998,6 @@ function DEBUG_ELSE_LEAVE(hash) {
   this.popFrame();
   // FRAME END
 }
-
 // #LOOPS
 function DEBUG_LOOP_TEST(hash, value, kind) {
   // API
@@ -5092,8 +5009,7 @@ function DEBUG_LOOP_TEST(hash, value, kind) {
   event.trigger("test");
   // API END
   return event.value;
-}
-function DEBUG_LOOP_ENTER(hash, id, kind) {
+}function DEBUG_LOOP_ENTER(hash, id, kind) {
   // API
   let event = this.createEvent(INSTR.LOOP_ENTER);
   event.hash = hash;
@@ -5107,8 +5023,7 @@ function DEBUG_LOOP_ENTER(hash, id, kind) {
   frame.values = [hash, 1];
   // FRAME END
   this.indent += INDENT_FACTOR;
-}
-function DEBUG_LOOP_LEAVE(hash, entered, kind) {
+}function DEBUG_LOOP_LEAVE(hash, entered, kind) {
   // loop never entered, so dont leave it
   if (entered === 0) return;
   this.indent -= INDENT_FACTOR;
@@ -5124,7 +5039,6 @@ function DEBUG_LOOP_LEAVE(hash, entered, kind) {
   this.popFrame();
   // FRAME END
 }
-
 // #FLOW
 function DEBUG_BREAK(hash, label, ctx) {
   // API
@@ -5141,8 +5055,7 @@ function DEBUG_BREAK(hash, label, ctx) {
   this.leaveFrameUntil(expect);
   // FRAME END
   return event.value;
-}
-function DEBUG_CONTINUE(hash, label, ctx) {
+}function DEBUG_CONTINUE(hash, label, ctx) {
   // API
   let event = this.createEvent(INSTR.CONTINUE);
   event.hash = hash;
@@ -5158,7 +5071,6 @@ function DEBUG_CONTINUE(hash, label, ctx) {
   // FRAME END
   return event.value;
 }
-
 // # SWITCH
 function DEBUG_SWITCH_TEST(hash, value) {
   // API
@@ -5169,8 +5081,7 @@ function DEBUG_SWITCH_TEST(hash, value) {
   event.trigger("test");
   // API END
   return event.value;
-}
-function DEBUG_SWITCH_ENTER(hash) {
+}function DEBUG_SWITCH_ENTER(hash) {
   // API
   let event = this.createEvent(INSTR.SWITCH_ENTER);
   event.hash = hash;
@@ -5183,8 +5094,7 @@ function DEBUG_SWITCH_ENTER(hash) {
   frame.values = [hash];
   // FRAME END
   this.indent += INDENT_FACTOR;
-}
-function DEBUG_SWITCH_LEAVE(hash) {
+}function DEBUG_SWITCH_LEAVE(hash) {
   this.indent -= INDENT_FACTOR;
   // API
   let event = this.createEvent(INSTR.SWITCH_LEAVE);
@@ -5197,7 +5107,6 @@ function DEBUG_SWITCH_LEAVE(hash) {
   this.popFrame();
   // FRAME END
 }
-
 // #CASE
 function DEBUG_CASE_TEST(hash, value) {
   // API
@@ -5208,8 +5117,7 @@ function DEBUG_CASE_TEST(hash, value) {
   event.trigger("test");
   // API END
   return event.value;
-}
-function DEBUG_CASE_ENTER(hash, value, isDefault) {
+}function DEBUG_CASE_ENTER(hash, value, isDefault) {
   // API
   let event = this.createEvent(INSTR.CASE_ENTER);
   event.hash = hash;
@@ -5225,8 +5133,7 @@ function DEBUG_CASE_ENTER(hash, value, isDefault) {
   this.frame.isSwitchDefault = isDefault;
   // FRAME END
   this.indent += INDENT_FACTOR;
-}
-function DEBUG_CASE_LEAVE(hash) {
+}function DEBUG_CASE_LEAVE(hash) {
   this.indent -= INDENT_FACTOR;
   let isDefault = this.resolveCaseFrame(this.frame).isSwitchDefault;
   // API
@@ -5241,7 +5148,6 @@ function DEBUG_CASE_LEAVE(hash) {
   this.popFrame();
   // FRAME END
 }
-
 // #CALL
 function DEBUG_FUNCTION_CALL(hash, ctx, object, call, args) {
   // Optional call (`?.()`): if the object is nullish, or the method
@@ -5273,6 +5179,21 @@ function DEBUG_FUNCTION_CALL(hash, ctx, object, call, args) {
   } else {
     root = object;
     proto = null;
+  }  // A callee that is not a function (e.g. a method the runtime does
+  // not have yet, like Math.sumPrecise on Node 24) must fail exactly
+  // like untraced code: `TypeError: <callee> is not a function`.
+  // Reading root.name first would mask it with an Iroh-internal
+  // "Cannot read properties of undefined (reading 'name')" (or, for a
+  // non-function value like 1, "before.call.apply is not a function").
+  // No CALL event fires: like an optional call that never happens, a
+  // call that cannot happen is not an event. The callee source text
+  // comes from the original input, so the message matches the engine's.
+  if (typeof root !== "function") {
+    let calleeSource = null;
+    if (node && node.callee && typeof node.callee.start === "number" && typeof node.callee.end === "number" && typeof this.input === "string") {
+      calleeSource = this.input.slice(node.callee.start, node.callee.end);
+    }
+    throw new TypeError((calleeSource || "callee") + " is not a function");
   }
   name = root.name;
 
@@ -5346,7 +5267,6 @@ function DEBUG_FUNCTION_CALL(hash, ctx, object, call, args) {
 
   return after.return;
 }
-
 // #FUNCTION
 function DEBUG_FUNCTION_ENTER(hash, ctx, scope, args) {
   this.previousScope = this.currentScope;
@@ -5372,8 +5292,7 @@ function DEBUG_FUNCTION_ENTER(hash, ctx, scope, args) {
     //console.log(indentString(this.indent) + "call", name, "#sloppy", "(", args, ")");
     this.indent += INDENT_FACTOR;
   }
-}
-function DEBUG_FUNCTION_LEAVE(hash, ctx) {
+}function DEBUG_FUNCTION_LEAVE(hash, ctx) {
   this.currentScope = this.previousScope;
   let isSloppy = (this.$$frameHash <= 0) || this.nodes[this.$$frameHash].node.isSloppy;
 
@@ -5390,8 +5309,7 @@ function DEBUG_FUNCTION_LEAVE(hash, ctx) {
     this.indent -= INDENT_FACTOR;
     //console.log(indentString(this.indent) + "call", name, "end #sloppy", "->", [void 0]);
   }
-}
-function DEBUG_FUNCTION_RETURN(hash, name, value) {
+}function DEBUG_FUNCTION_RETURN(hash, name, value) {
 
   let isSloppy = (this.$$frameHash <= 0) || this.nodes[this.$$frameHash].node.isSloppy;
 
@@ -5417,7 +5335,6 @@ function DEBUG_FUNCTION_RETURN(hash, name, value) {
   }
   return event.return;
 }
-
 // # AWAIT
 function DEBUG_AWAIT(hash, value) {
   // An async function suspends at `await` and its continuation resumes
@@ -5458,7 +5375,6 @@ function DEBUG_AWAIT(hash, value) {
     function (e) { restore(void 0); throw e; }
   );
 }
-
 // # DECLS
 function DEBUG_VAR_DECLARE(hash, name) {
   //console.log(indentString(this.indent) + "▶️ Declare " + name);
@@ -5472,8 +5388,7 @@ function DEBUG_VAR_DECLARE(hash, name) {
   // API END
 
   return name;
-}
-function DEBUG_VAR_INIT(hash, name, value) {
+}function DEBUG_VAR_INIT(hash, name, value) {
   //console.log(indentString(this.indent) + "⏩ Initialise " + name + "::" + value);
 
   // API
@@ -5487,9 +5402,26 @@ function DEBUG_VAR_INIT(hash, name, value) {
 
   return event.value;
 }
-
 // #NEW
 function DEBUG_OP_NEW(hash, ctor, args) {
+  // A constructor that is not a function (e.g. `new null()`,
+  // `new 5()`) must fail exactly like untraced code: `TypeError:
+  // <callee> is not a constructor`. Reading ctor.name first would
+  // mask it with an Iroh-internal "Cannot read properties of null
+  // (reading 'name')" (or, for a non-function value like 5,
+  // "event.ctor is not a constructor"). No OP_NEW event fires: like
+  // a call that cannot happen, a construction that cannot happen is
+  // not an event. The callee source text comes from the original
+  // input, so the message matches the engine's. (Same family as the
+  // DEBUG_FUNCTION_CALL fix in the ES2026 probe.)
+  if (typeof ctor !== "function") {
+    let node = this.nodes[hash] ? this.nodes[hash].node : null;
+    let ctorSource = null;
+    if (node && node.callee && typeof node.callee.start === "number" && typeof node.callee.end === "number" && typeof this.input === "string") {
+      ctorSource = this.input.slice(node.callee.start, node.callee.end);
+    }
+    throw new TypeError((ctorSource || "ctor") + " is not a constructor");
+  }
 
   // API
   let event = this.createEvent(INSTR.OP_NEW);
@@ -5511,8 +5443,7 @@ function DEBUG_OP_NEW(hash, ctor, args) {
   // FRAME END
 
   return new event.ctor(...event.arguments);
-}
-function DEBUG_OP_NEW_END(hash, self, ret) {
+}function DEBUG_OP_NEW_END(hash, self, ret) {
   self.indent -= INDENT_FACTOR;
 
   // FRAME
@@ -5531,18 +5462,15 @@ function DEBUG_OP_NEW_END(hash, self, ret) {
 
   return event.return;
 }
-
 // #SUPER
 function DEBUG_SUPER(cls, args) {
   // API TODO
   return args;
-}
-// method enter not available before super
+}// method enter not available before super
 // super_fix is injected after super
 function DEBUG_SUPER_FIX(ctx) {
   // API TODO
 }
-
 // # CLASS METHOD
 function DEBUG_METHOD_ENTER(hash, cls, isConstructor, args) {
   // API TODO
@@ -5552,13 +5480,11 @@ function DEBUG_METHOD_ENTER(hash, cls, isConstructor, args) {
   this.indent += INDENT_FACTOR;
   let frame = this.pushFrame(INSTR.METHOD_ENTER, hash);
   frame.values = [hash, cls, isConstructor, args];
-}
-function DEBUG_METHOD_LEAVE(hash, cls, isConstructor) {
+}function DEBUG_METHOD_LEAVE(hash, cls, isConstructor) {
   // API TODO
   this.indent -= INDENT_FACTOR;
   this.popFrame();
 }
-
 // #TRY
 function DEBUG_TRY_ENTER(hash) {
   //console.log(indentString(this.indent) + "try");
@@ -5575,8 +5501,7 @@ function DEBUG_TRY_ENTER(hash) {
   let frame = this.pushFrame(INSTR.TRY_ENTER, hash);
   frame.values = [hash];
   // FRAME END
-}
-function DEBUG_TRY_LEAVE(hash) {
+}function DEBUG_TRY_LEAVE(hash) {
 
   // FRAME
   // fix up missing left frames until try_leave
@@ -5599,7 +5524,6 @@ function DEBUG_TRY_LEAVE(hash) {
 
   //console.log(indentString(this.indent) + "try end");
 }
-
 // #CATCH
 function DEBUG_CATCH_ENTER(hash) {
 
@@ -5615,8 +5539,7 @@ function DEBUG_CATCH_ENTER(hash) {
   let frame = this.pushFrame(INSTR.CATCH_ENTER, hash);
   frame.values = [hash];
   // FRAME END
-}
-function DEBUG_CATCH_LEAVE(hash) {
+}function DEBUG_CATCH_LEAVE(hash) {
   this.indent -= INDENT_FACTOR;
 
   // API
@@ -5629,7 +5552,6 @@ function DEBUG_CATCH_LEAVE(hash) {
   this.popFrame();
   // FRAME END
 }
-
 // #FINALLY
 function DEBUG_FINAL_ENTER(hash) {
 
@@ -5645,8 +5567,7 @@ function DEBUG_FINAL_ENTER(hash) {
   let frame = this.pushFrame(INSTR.FINAL_ENTER, hash);
   frame.values = [hash];
   // FRAME END
-}
-function DEBUG_FINAL_LEAVE(hash) {
+}function DEBUG_FINAL_LEAVE(hash) {
   this.indent -= INDENT_FACTOR;
 
   // API
@@ -5659,7 +5580,6 @@ function DEBUG_FINAL_LEAVE(hash) {
   this.popFrame();
   // FRAME END
 }
-
 // #ALLOC
 function DEBUG_ALLOC(hash, value) {
   //console.log(indentString(this.indent) + "#Allocated", value);
@@ -5674,7 +5594,6 @@ function DEBUG_ALLOC(hash, value) {
 
   return event.value;
 }
-
 // #MEMBER
 function DEBUG_MEMBER_EXPR(hash, object, property) {
   //console.log(indentString(this.indent), object, "[" + property + "]");
@@ -5690,16 +5609,13 @@ function DEBUG_MEMBER_EXPR(hash, object, property) {
 
   return event.object;
 }
-
 // fix for lazy blocks
 function DEBUG_BLOCK_ENTER(hash) {
   let frame = this.pushFrame(INSTR.BLOCK_ENTER, hash);
   frame.values = [hash];
-}
-function DEBUG_BLOCK_LEAVE(hash) {
+}function DEBUG_BLOCK_LEAVE(hash) {
   this.popFrame();
 }
-
 // #THIS
 function DEBUG_THIS(hash, ctx) {
   // API
@@ -5711,7 +5627,6 @@ function DEBUG_THIS(hash, ctx) {
   // API END
   return event.context;
 }
-
 // #LITERAL
 function DEBUG_LITERAL(hash, value) {
   // API
@@ -5723,7 +5638,6 @@ function DEBUG_LITERAL(hash, value) {
   // API END
   return event.value;
 }
-
 // #EXPRESSIONS
 function DEBUG_ASSIGN(hash, op, obj, prop, value) {
   let result = null;
@@ -5747,7 +5661,6 @@ function DEBUG_ASSIGN(hash, op, obj, prop, value) {
   // API END
   return event.result;
 }
-
 function DEBUG_TERNARY(hash, test, truthy, falsy) {
   let result = null;
   // API: add before, after
@@ -5765,7 +5678,6 @@ function DEBUG_TERNARY(hash, test, truthy, falsy) {
   // API END
   return event.result;
 }
-
 function DEBUG_LOGICAL(hash, op, a, b) {
   let result = null;
   // API: add before, after
@@ -5779,8 +5691,7 @@ function DEBUG_LOGICAL(hash, op, a, b) {
     case OP["??"]:
       result = (a !== null && a !== void 0) ? a : b();
     break;
-  }
-  // API
+  }  // API
   let event = this.createEvent(INSTR.LOGICAL);
   event.op = operatorToString(op);
   event.hash = hash;
@@ -5792,7 +5703,6 @@ function DEBUG_LOGICAL(hash, op, a, b) {
   // API END
   return event.result;
 }
-
 function DEBUG_BINARY(hash, op, a, b) {
   let result = evalBinaryExpression(op, a, b);
   // API
@@ -5807,7 +5717,6 @@ function DEBUG_BINARY(hash, op, a, b) {
   // API END
   return event.result;
 }
-
 function DEBUG_UNARY(hash, op, ctx, critical, value) {
   let result = null;
   // typeof argument is not defined
@@ -5828,7 +5737,6 @@ function DEBUG_UNARY(hash, op, ctx, critical, value) {
   //console.log(indentString(this.indent) + operatorToString(op), value, "->", result, critical);
   return event.result;
 }
-
 function DEBUG_UPDATE(hash, op, value, prefix) {
   let result = value;
   // API
@@ -5842,7 +5750,6 @@ function DEBUG_UPDATE(hash, op, value, prefix) {
   // API END
   return event.result;
 }
-
 // deprecated
 /*
 export function DEBUG_LITERAL = function(value) {
@@ -5863,8 +5770,7 @@ function DEBUG_PROGRAM_ENTER(hash) {
   event.trigger("enter");
   // API END
   this.indent += INDENT_FACTOR;
-}
-function DEBUG_PROGRAM_LEAVE(hash, ret) {
+}function DEBUG_PROGRAM_LEAVE(hash, ret) {
   this.indent -= INDENT_FACTOR;
   //console.log(indentString(this.indent) + "Program end ->", ret);
   // API
@@ -5875,63 +5781,62 @@ function DEBUG_PROGRAM_LEAVE(hash, ret) {
   event.trigger("leave");
   // API END
   return event.return;
-}
-function DEBUG_PROGRAM_FRAME_VALUE(value) {
+}function DEBUG_PROGRAM_FRAME_VALUE(value) {
   //console.log(value);
 }
 
-
-var _debug = Object.freeze({
-	DEBUG_IF_TEST: DEBUG_IF_TEST,
-	DEBUG_IF_ENTER: DEBUG_IF_ENTER,
-	DEBUG_IF_LEAVE: DEBUG_IF_LEAVE,
-	DEBUG_ELSE_ENTER: DEBUG_ELSE_ENTER,
-	DEBUG_ELSE_LEAVE: DEBUG_ELSE_LEAVE,
-	DEBUG_LOOP_TEST: DEBUG_LOOP_TEST,
-	DEBUG_LOOP_ENTER: DEBUG_LOOP_ENTER,
-	DEBUG_LOOP_LEAVE: DEBUG_LOOP_LEAVE,
-	DEBUG_BREAK: DEBUG_BREAK,
-	DEBUG_CONTINUE: DEBUG_CONTINUE,
-	DEBUG_SWITCH_TEST: DEBUG_SWITCH_TEST,
-	DEBUG_SWITCH_ENTER: DEBUG_SWITCH_ENTER,
-	DEBUG_SWITCH_LEAVE: DEBUG_SWITCH_LEAVE,
-	DEBUG_CASE_TEST: DEBUG_CASE_TEST,
-	DEBUG_CASE_ENTER: DEBUG_CASE_ENTER,
-	DEBUG_CASE_LEAVE: DEBUG_CASE_LEAVE,
-	DEBUG_FUNCTION_CALL: DEBUG_FUNCTION_CALL,
-	DEBUG_FUNCTION_ENTER: DEBUG_FUNCTION_ENTER,
-	DEBUG_FUNCTION_LEAVE: DEBUG_FUNCTION_LEAVE,
-	DEBUG_FUNCTION_RETURN: DEBUG_FUNCTION_RETURN,
-	DEBUG_AWAIT: DEBUG_AWAIT,
-	DEBUG_VAR_DECLARE: DEBUG_VAR_DECLARE,
-	DEBUG_VAR_INIT: DEBUG_VAR_INIT,
-	DEBUG_OP_NEW: DEBUG_OP_NEW,
-	DEBUG_OP_NEW_END: DEBUG_OP_NEW_END,
-	DEBUG_SUPER: DEBUG_SUPER,
-	DEBUG_SUPER_FIX: DEBUG_SUPER_FIX,
-	DEBUG_METHOD_ENTER: DEBUG_METHOD_ENTER,
-	DEBUG_METHOD_LEAVE: DEBUG_METHOD_LEAVE,
-	DEBUG_TRY_ENTER: DEBUG_TRY_ENTER,
-	DEBUG_TRY_LEAVE: DEBUG_TRY_LEAVE,
-	DEBUG_CATCH_ENTER: DEBUG_CATCH_ENTER,
-	DEBUG_CATCH_LEAVE: DEBUG_CATCH_LEAVE,
-	DEBUG_FINAL_ENTER: DEBUG_FINAL_ENTER,
-	DEBUG_FINAL_LEAVE: DEBUG_FINAL_LEAVE,
-	DEBUG_ALLOC: DEBUG_ALLOC,
-	DEBUG_MEMBER_EXPR: DEBUG_MEMBER_EXPR,
-	DEBUG_BLOCK_ENTER: DEBUG_BLOCK_ENTER,
-	DEBUG_BLOCK_LEAVE: DEBUG_BLOCK_LEAVE,
-	DEBUG_THIS: DEBUG_THIS,
-	DEBUG_LITERAL: DEBUG_LITERAL,
-	DEBUG_ASSIGN: DEBUG_ASSIGN,
-	DEBUG_TERNARY: DEBUG_TERNARY,
-	DEBUG_LOGICAL: DEBUG_LOGICAL,
-	DEBUG_BINARY: DEBUG_BINARY,
-	DEBUG_UNARY: DEBUG_UNARY,
-	DEBUG_UPDATE: DEBUG_UPDATE,
-	DEBUG_PROGRAM_ENTER: DEBUG_PROGRAM_ENTER,
-	DEBUG_PROGRAM_LEAVE: DEBUG_PROGRAM_LEAVE,
-	DEBUG_PROGRAM_FRAME_VALUE: DEBUG_PROGRAM_FRAME_VALUE
+var _debug = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  DEBUG_ALLOC: DEBUG_ALLOC,
+  DEBUG_ASSIGN: DEBUG_ASSIGN,
+  DEBUG_AWAIT: DEBUG_AWAIT,
+  DEBUG_BINARY: DEBUG_BINARY,
+  DEBUG_BLOCK_ENTER: DEBUG_BLOCK_ENTER,
+  DEBUG_BLOCK_LEAVE: DEBUG_BLOCK_LEAVE,
+  DEBUG_BREAK: DEBUG_BREAK,
+  DEBUG_CASE_ENTER: DEBUG_CASE_ENTER,
+  DEBUG_CASE_LEAVE: DEBUG_CASE_LEAVE,
+  DEBUG_CASE_TEST: DEBUG_CASE_TEST,
+  DEBUG_CATCH_ENTER: DEBUG_CATCH_ENTER,
+  DEBUG_CATCH_LEAVE: DEBUG_CATCH_LEAVE,
+  DEBUG_CONTINUE: DEBUG_CONTINUE,
+  DEBUG_ELSE_ENTER: DEBUG_ELSE_ENTER,
+  DEBUG_ELSE_LEAVE: DEBUG_ELSE_LEAVE,
+  DEBUG_FINAL_ENTER: DEBUG_FINAL_ENTER,
+  DEBUG_FINAL_LEAVE: DEBUG_FINAL_LEAVE,
+  DEBUG_FUNCTION_CALL: DEBUG_FUNCTION_CALL,
+  DEBUG_FUNCTION_ENTER: DEBUG_FUNCTION_ENTER,
+  DEBUG_FUNCTION_LEAVE: DEBUG_FUNCTION_LEAVE,
+  DEBUG_FUNCTION_RETURN: DEBUG_FUNCTION_RETURN,
+  DEBUG_IF_ENTER: DEBUG_IF_ENTER,
+  DEBUG_IF_LEAVE: DEBUG_IF_LEAVE,
+  DEBUG_IF_TEST: DEBUG_IF_TEST,
+  DEBUG_LITERAL: DEBUG_LITERAL,
+  DEBUG_LOGICAL: DEBUG_LOGICAL,
+  DEBUG_LOOP_ENTER: DEBUG_LOOP_ENTER,
+  DEBUG_LOOP_LEAVE: DEBUG_LOOP_LEAVE,
+  DEBUG_LOOP_TEST: DEBUG_LOOP_TEST,
+  DEBUG_MEMBER_EXPR: DEBUG_MEMBER_EXPR,
+  DEBUG_METHOD_ENTER: DEBUG_METHOD_ENTER,
+  DEBUG_METHOD_LEAVE: DEBUG_METHOD_LEAVE,
+  DEBUG_OP_NEW: DEBUG_OP_NEW,
+  DEBUG_OP_NEW_END: DEBUG_OP_NEW_END,
+  DEBUG_PROGRAM_ENTER: DEBUG_PROGRAM_ENTER,
+  DEBUG_PROGRAM_FRAME_VALUE: DEBUG_PROGRAM_FRAME_VALUE,
+  DEBUG_PROGRAM_LEAVE: DEBUG_PROGRAM_LEAVE,
+  DEBUG_SUPER: DEBUG_SUPER,
+  DEBUG_SUPER_FIX: DEBUG_SUPER_FIX,
+  DEBUG_SWITCH_ENTER: DEBUG_SWITCH_ENTER,
+  DEBUG_SWITCH_LEAVE: DEBUG_SWITCH_LEAVE,
+  DEBUG_SWITCH_TEST: DEBUG_SWITCH_TEST,
+  DEBUG_TERNARY: DEBUG_TERNARY,
+  DEBUG_THIS: DEBUG_THIS,
+  DEBUG_TRY_ENTER: DEBUG_TRY_ENTER,
+  DEBUG_TRY_LEAVE: DEBUG_TRY_LEAVE,
+  DEBUG_UNARY: DEBUG_UNARY,
+  DEBUG_UPDATE: DEBUG_UPDATE,
+  DEBUG_VAR_DECLARE: DEBUG_VAR_DECLARE,
+  DEBUG_VAR_INIT: DEBUG_VAR_INIT
 });
 
 class Stage {
@@ -5961,7 +5866,6 @@ class Stage {
     this.script = this.patch(input);
   }
 }
-
 extend(Stage, _debug);
 
 Stage.prototype.reset = function() {
@@ -5969,21 +5873,19 @@ Stage.prototype.reset = function() {
 };
 
 Stage.prototype.triggerListeners = function(event, trigger) {
-  let type = event.type;
+  event.type;
   let category = event.category;
   // invalid listener
   if (!this.listeners.hasOwnProperty(category)) {
     console.error(`Unexpected trigger category ${category}`);
     return;
-  }
-  let listeners = this.listeners[category];
+  }  let listeners = this.listeners[category];
   // no listeners are attached
   if (listeners.length <= 0) return;
   for (let ii = 0; ii < listeners.length; ++ii) {
     let listener = listeners[ii];
     listener.trigger(event, trigger);
-  }
-};
+  }};
 
 Stage.prototype.createEvent = function(type) {
   let event = new RuntimeEvent(type, this);
@@ -6005,8 +5907,7 @@ Stage.prototype.generateListeners = function() {
   for (let key in CATEGORY) {
     let bit = CATEGORY[key];
     this.listeners[bit] = [];
-  }
-};
+  }};
 
 Stage.prototype.generateLinks = function() {
   let ihdx = 0;
@@ -6019,19 +5920,13 @@ Stage.prototype.generateLinks = function() {
       fn: this[name.substr(1, name.length)],
       key
     };
-    if (CLEAN_DEBUG_INJECTION) {
-      this[name] = this.links[name].fn;
-    } else {
+    {
       this[key] = this.links[name].fn;
     }
-  }
-};
+  }};
 
 Stage.prototype.getLink = function(name) {
   name = "$" + name;
-  if (CLEAN_DEBUG_INJECTION) {
-    return `${this.key}.${name}`;
-  }
   let key = this.links[name].key;
   return `${this.key}.${key}`;
 };
@@ -6064,10 +5959,7 @@ Stage.prototype.getInverseInstruction = function(frame) {
     case INSTR.BLOCK_ENTER:    return links.$DEBUG_BLOCK_LEAVE.fn;
     default:
       throw new Error(`Unexpected frame type ${frame.cleanType}`);
-    break;
-  }
-  return null;
-};
+  }};
 
 Stage.prototype.manuallyLeaveFrame = function(frame) {
   console.assert(isValidFrameInstruction(frame));
@@ -6081,15 +5973,13 @@ Stage.prototype.leaveFrameUntil = function(target) {
   while (true) {
     if (this.frame.equals(target)) break;
     this.manuallyLeaveFrame(this.frame);
-  }
-};
+  }};
 
 Stage.prototype.leaveFrameUntilHash = function(hash) {
   while (true) {
     if (this.frame.hash === hash) break;
     this.manuallyLeaveFrame(this.frame);
-  }
-};
+  }};
 
 Stage.prototype.pushFrame = function(type, hash) {
   let parent = this.frame;
@@ -6130,8 +6020,7 @@ Stage.prototype.resolveBreakFrame = function(frm, label) {
     }
     if (frame.isGlobal()) break;
     frame = frame.parent;
-  }
-  console.assert(
+  }  console.assert(
     isBreakableFrameType(frame.type)
   );
   return frame;
@@ -6146,8 +6035,7 @@ Stage.prototype.resolveReturnFrame = function(frm) {
     if (frame.isReturnable) break;
     if (frame.isGlobal()) break;
     frame = frame.parent;
-  }
-  if (
+  }  if (
     !isReturnableFrameType(frame.type) &&
     !isInstantiationFrameType(frame.type)
   ) {
@@ -6165,8 +6053,7 @@ Stage.prototype.resolveCaseFrame = function(frm) {
     if (frame.isSwitchCase) break;
     if (frame.isGlobal()) break;
     frame = frame.parent;
-  }
-  console.assert(
+  }  console.assert(
     frame.type === INSTR.CASE_ENTER
   );
   return frame;
@@ -6178,8 +6065,7 @@ Stage.prototype.resolveTryFrame = function(frm, silent) {
     if (frame.isTryStatement) break;
     if (frame.isGlobal()) break;
     frame = frame.parent;
-  }
-  if (silent) return (frame.type === INSTR.TRY_ENTER ? frame : null);
+  }  if (silent) return (frame.type === INSTR.TRY_ENTER ? frame : null);
   console.assert(
     frame.type === INSTR.TRY_ENTER
   );
@@ -6192,8 +6078,7 @@ Stage.prototype.resolveCatchClauseFrame = function(frm, silent) {
     if (frame.isCatchClause) break;
     if (frame.isGlobal()) break;
     frame = frame.parent;
-  }
-  if (silent) return (frame.type === INSTR.CATCH_ENTER ? frame : null);
+  }  if (silent) return (frame.type === INSTR.CATCH_ENTER ? frame : null);
   console.assert(
     frame.type === INSTR.CATCH_ENTER
   );
@@ -6206,8 +6091,7 @@ Stage.prototype.resolveFinalClauseFrame = function(frm, silent) {
     if (frame.isFinalClause) break;
     if (frame.isGlobal()) break;
     frame = frame.parent;
-  }
-  if (silent) return (frame.type === INSTR.FINAL_ENTER ? frame : null);
+  }  if (silent) return (frame.type === INSTR.FINAL_ENTER ? frame : null);
   console.assert(
     frame.type === INSTR.FINAL_ENTER
   );
@@ -6219,8 +6103,7 @@ Stage.prototype.resolveProgramFrame = function(frm) {
   while (true) {
     if (frame.isGlobal()) break;
     frame = frame.parent;
-  }
-  console.assert(
+  }  console.assert(
     frame.type === INSTR.PROGRAM
   );
   return frame;
@@ -6236,8 +6119,7 @@ Stage.prototype.resolveLeftFrames = function(frm) {
     // frame is super sloppy (possibly async), break out of everything
     if (frame.isGlobal()) break;
     frame = frame.parent;
-  }
-  return frame;
+  }  return frame;
 };
 
 Stage.prototype.getFrameByHashFrom = function(frm, hash) {
@@ -6246,11 +6128,15 @@ Stage.prototype.getFrameByHashFrom = function(frm, hash) {
     if (frame.hash === hash) break;
     if (frame.isGlobal()) return null;
     frame = frame.parent;
-  }
-  return frame;
+  }  return frame;
 };
 
 Stage.prototype.patch = function(input) {
+  // Fresh counters per patch run: the hash, temp-var and anonymous-
+  // function counters are module-level, so without this the same
+  // program patched twice in one process gets different hashes and
+  // different generated names (see resetPatchCounters in utils.js).
+  resetPatchCounters();
   let patcher = new Patcher(this);
   // Parse at the newest language level Acorn supports ("latest": ES2025
   // RegExp modifiers, `using` declarations, import attributes) plus
@@ -6264,7 +6150,7 @@ Stage.prototype.patch = function(input) {
   // (traceAsync() runs it through an async wrapper); without it Acorn
   // rejects the await at parse time, before the runner can help.
   let opt = this.options || {};
-  let ast = parse$2(input, {
+  let ast = parse(input, {
     locations: true,
     ecmaVersion: opt.ecmaVersion || "latest",
     allowHashBang: opt.allowHashBang !== false,
@@ -6283,7 +6169,7 @@ Stage.prototype.patch = function(input) {
   // link walk things to stage
   this.nodes = patcher.nodes;
   this.symbols = patcher.symbols;
-  return generate$2(ast, {
+  return generate(ast, {
     format: {
       indent: {
         style: "  "
@@ -6323,13 +6209,10 @@ function setup() {
     console.log.apply(console, arguments);
   };
 }
-
 function generateCategoryBits() {
   for (let key in CATEGORY) {
     this[key] = CATEGORY[key] | 0;
-  }
-}
-
+  }}
 const TRACE_TRIGGERS = ["before", "after", "enter", "leave", "fire", "test", "return"];
 
 function resolveTraceCategories(iroh, events) {
@@ -6379,7 +6262,7 @@ function createTraceRun(iroh, code, options) {
       let stageOptions = options.stageOptions || {};
       if (!stageOptions.allowAwaitOutsideFunction) {
         try {
-          parse$2(code, {
+          parse(code, {
             locations: true,
             ecmaVersion: stageOptions.ecmaVersion || "latest",
             allowHashBang: stageOptions.allowHashBang !== false,
@@ -6541,7 +6424,6 @@ function trace(code, options) {
   }
   return { events: run.events, result: result };
 }
-
 // Attach the events that fired before an error to the error itself, so
 // the trace of a failed program is not lost. Only objects can carry a
 // property — a program may throw a string, a number, or null, and in
@@ -6617,7 +6499,6 @@ function traceAsync(code, options) {
   }
   return Promise.resolve(out);
 }
-
 // Whether this is Node.js. `process.versions.node` is the check — the
 // cfg.js IS_NODE flag (module/require) is false in the ESM dist, so it
 // cannot be used here. In a browser `process` is undefined.
@@ -6636,7 +6517,7 @@ function isNodeRuntime() {
 // buble). Used to lazily load node: builtins only when traceModule()
 // runs — a static `node:fs` import would break the browser (iife)
 // rollup build, which cannot resolve it.
-function nodeImport(specifier) {
+function nodeImport$1(specifier) {
   return new Function("s", "return import(s);")(specifier);
 }
 
@@ -6674,10 +6555,10 @@ function importTracedModule(iroh, run, options) {
     () => "globalThis.__irohStages["
   );
   return Promise.all([
-    nodeImport("node:fs"),
-    nodeImport("node:os"),
-    nodeImport("node:path"),
-    nodeImport("node:url"),
+    nodeImport$1("node:fs"),
+    nodeImport$1("node:os"),
+    nodeImport$1("node:path"),
+    nodeImport$1("node:url"),
   ]).then(function(mods) {
     let fs = mods[0];
     let os = mods[1];
@@ -6727,7 +6608,7 @@ function importTracedModule(iroh, run, options) {
       }
     }
     let fileUrl = url.pathToFileURL(file).href;
-    return nodeImport(fileUrl).then(
+    return nodeImport$1(fileUrl).then(
       function(namespace) {
         cleanup();
         return { events: run.events, result: namespace };
@@ -6782,7 +6663,6 @@ function traceModule(code, options) {
   }
   return importTracedModule(iroh, run, options);
 }
-
 function greet() {
   if (
     IS_BROWSER &&
@@ -6793,15 +6673,15 @@ function greet() {
   }
 }
 
-
-var _setup = Object.freeze({
-	setup: setup,
-	generateCategoryBits: generateCategoryBits,
-	trace: trace,
-	runInternals: runInternals,
-	traceAsync: traceAsync,
-	traceModule: traceModule,
-	greet: greet
+var _setup = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  generateCategoryBits: generateCategoryBits,
+  greet: greet,
+  runInternals: runInternals,
+  setup: setup,
+  trace: trace,
+  traceAsync: traceAsync,
+  traceModule: traceModule
 });
 
 // GENERATED — do not edit by hand. Source: irohscript/core/perceptron.iroh
@@ -6809,7 +6689,6 @@ var _setup = Object.freeze({
 // (IrohScript -> JavaScript, src/irohscript-codegen.js; division/modulo are Python-style.)
 function Features() { return { calls: 0, depth: 0, repeat: 0, imbalance: 0, mix: 0 }; }
 function Weights() { return { w0: 0, w1: 0, w2: 0, w3: 0, w4: 0, bias: 0 }; }
-
 function PredictScore(f, w) {
   return w.bias + w.w0 * f.calls + w.w1 * f.depth + w.w2 * f.repeat + w.w3 * f.imbalance + w.w4 * f.mix;
 }
@@ -6999,14 +6878,14 @@ function classifyWindow(events) {
   return { label: result.label, score: result.score, features: features };
 }
 
-
-var _neurons = Object.freeze({
-	FEATURE_NAMES: FEATURE_NAMES,
-	DEFAULT_WEIGHTS: DEFAULT_WEIGHTS,
-	DEFAULT_BIAS: DEFAULT_BIAS,
-	extractFeatures: extractFeatures,
-	createPerceptron: createPerceptron,
-	classifyWindow: classifyWindow
+var _neurons = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  DEFAULT_BIAS: DEFAULT_BIAS,
+  DEFAULT_WEIGHTS: DEFAULT_WEIGHTS,
+  FEATURE_NAMES: FEATURE_NAMES,
+  classifyWindow: classifyWindow,
+  createPerceptron: createPerceptron,
+  extractFeatures: extractFeatures
 });
 
 // AI analysis layer for IrohRedux 0.8.0 — deterministic rules over a
@@ -7046,6 +6925,7 @@ var _neurons = Object.freeze({
 //   overhead — events per statement (when source is given) and
 //     events per region (always). `value` is the per-statement ratio
 //     when available, else per-region, and `denominator` says which.
+
 
 const ANALYZE_DEFAULTS = {
   hotLoopThreshold: 100,
@@ -7279,12 +7159,10 @@ function analyze(events, options) {
   let bestLength = 0;
   for (let n = 2; n <= 4; ++n) {
     let counts = {};
-    let firstSeen = {};
     for (let ii = 0; ii + n <= callNames.length; ++ii) {
       let seq = callNames.slice(ii, ii + n).join("\n");
       if (counts[seq] === void 0) {
         counts[seq] = 0;
-        firstSeen[seq] = ii;
       }
       counts[seq] += 1;
     }
@@ -7517,13 +7395,13 @@ function analyzeModule(code, options) {
   });
 }
 
-
-var _analyze = Object.freeze({
-	ANALYZE_DEFAULTS: ANALYZE_DEFAULTS,
-	analyze: analyze,
-	analyzeTrace: analyzeTrace,
-	analyzeTraceAsync: analyzeTraceAsync,
-	analyzeModule: analyzeModule
+var _analyze = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  ANALYZE_DEFAULTS: ANALYZE_DEFAULTS,
+  analyze: analyze,
+  analyzeModule: analyzeModule,
+  analyzeTrace: analyzeTrace,
+  analyzeTraceAsync: analyzeTraceAsync
 });
 
 // Vector refracting for IrohRedux 0.9.0 — a trace bent into a small,
@@ -7549,6 +7427,7 @@ var _analyze = Object.freeze({
 // ordered array of the six normalized [0, 1] features, in `names`
 // order. The vector never carries the raw event count — an unnormalized
 // count would dominate every distance.
+
 
 const VECTOR_FEATURE_NAMES = FEATURE_NAMES.concat(["coverage"]);
 
@@ -7652,13 +7531,13 @@ function compareVectors(a, b) {
   };
 }
 
-
-var _vectors = Object.freeze({
-	VECTOR_FEATURE_NAMES: VECTOR_FEATURE_NAMES,
-	toVector: toVector,
-	cosineSimilarity: cosineSimilarity,
-	euclideanDistance: euclideanDistance,
-	compareVectors: compareVectors
+var _vectors = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  VECTOR_FEATURE_NAMES: VECTOR_FEATURE_NAMES,
+  compareVectors: compareVectors,
+  cosineSimilarity: cosineSimilarity,
+  euclideanDistance: euclideanDistance,
+  toVector: toVector
 });
 
 // AI-friendly scan mode for IrohRedux 0.9.0 — trace -> analyze ->
@@ -7699,6 +7578,7 @@ var _vectors = Object.freeze({
 // maxFindings (default 200), includeEvents (default false — when
 // true the raw events ride along in the document under `events`, for
 // callers that explicitly want the flood).
+
 
 const SCAN_DEFAULTS = {
   maxFindings: 200,
@@ -7812,13 +7692,13 @@ function scanModule(code, options) {
   });
 }
 
-
-var _scan = Object.freeze({
-	SCAN_DEFAULTS: SCAN_DEFAULTS,
-	scan: scan,
-	scanTrace: scanTrace,
-	scanTraceAsync: scanTraceAsync,
-	scanModule: scanModule
+var _scan = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  SCAN_DEFAULTS: SCAN_DEFAULTS,
+  scan: scan,
+  scanModule: scanModule,
+  scanTrace: scanTrace,
+  scanTraceAsync: scanTraceAsync
 });
 
 // Live wire AI analysis mode for IrohRedux 0.9.0 — analysis that runs
@@ -7861,6 +7741,7 @@ var _scan = Object.freeze({
 // same order — no randomness, no wall-clock, no iteration over
 // unordered state (per-hash state is only read at finish(), from the
 // batch analysis, whose order is deterministic).
+
 
 // Notes attached to the findings that can only be decided at stream end.
 const STREAM_END_NOTES = {
@@ -8130,9 +8011,9 @@ function liveAnalyzer(options) {
   };
 }
 
-
-var _live = Object.freeze({
-	liveAnalyzer: liveAnalyzer
+var _live = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  liveAnalyzer: liveAnalyzer
 });
 
 // Live code engine + AI director for IrohRedux 1.0.0 — the original
@@ -8217,6 +8098,7 @@ var _live = Object.freeze({
 // directModule(). Python/C++ traces cannot be directed —
 // their events arrive buffered after the run, so there is nothing
 // live to direct; the CLI --direct flag is JavaScript-only.
+
 
 // The sentinel thrown to stop a run. It is one object, compared by
 // identity — a program that throws its own value can never be mistaken
@@ -8426,11 +8308,10 @@ function directInternal(iroh, code, director, options, mode) {
       language: options.language || "javascript",
     })
   );
-  let onEvent = options.onEvent;
+  options.onEvent;
   let onDirective = options.onDirective;
   let pending = []; // issued set/skip entries not yet applied
   let log = []; // the audit log: every directive, with its outcome
-  let stopped = false;
   let stopReason = null;
   let stopPending = false; // a stop was issued; re-thrown at every event until it lands
   let stopEntry = null;
@@ -8642,7 +8523,6 @@ function directInternal(iroh, code, director, options, mode) {
       let d = validateDirective(list[ii]);
       let entry = recordDirective(d, issuedAtEvent);
       if (d.type === "stop") {
-        stopped = true;
         stopReason = d.reason;
         stopPending = true;
         stopEntry = entry;
@@ -8952,12 +8832,12 @@ function runawayGuard(options) {
   };
 }
 
-
-var _direct = Object.freeze({
-	direct: direct,
-	directAsync: directAsync,
-	directModule: directModule,
-	runawayGuard: runawayGuard
+var _direct = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  direct: direct,
+  directAsync: directAsync,
+  directModule: directModule,
+  runawayGuard: runawayGuard
 });
 
 // Input synthesiser for IrohRedux — generate concrete inputs that
@@ -9016,6 +8896,7 @@ var _direct = Object.freeze({
 // and the default has one arm (reached). Coverage is arms covered /
 // arms total, with the site count alongside — every number carries
 // its denominator.
+
 
 const SYNTHESIZE_DEFAULTS = {
   maxRuns: 50,
@@ -10138,10 +10019,10 @@ function synthesize(code, options) {
   };
 }
 
-
-var _synth = Object.freeze({
-	SYNTHESIZE_DEFAULTS: SYNTHESIZE_DEFAULTS,
-	synthesize: synthesize
+var _synth = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  SYNTHESIZE_DEFAULTS: SYNTHESIZE_DEFAULTS,
+  synthesize: synthesize
 });
 
 // Shared Python bridge for the IrohScript bootstrap (the Level 0
@@ -10251,7 +10132,7 @@ function getChildProcessSync() {
 
 // Dynamic import() without writing `import()` literally in src/:
 // buble cannot parse import() syntax (same pattern as setup.js).
-function nodeImport$1(specifier) {
+function nodeImport(specifier) {
   return new Function("s", "return import(s);")(specifier);
 }
 
@@ -10293,6 +10174,7 @@ function nodeImport$1(specifier) {
 // in the browser / ESM builds translate() throws a clear error and
 // translateAsync() is the way in (it loads child_process by dynamic
 // import).
+
 
 // ------------------------------------------------------------------
 // Report + shared helpers
@@ -10779,7 +10661,7 @@ function makeJSEmitter(target, report, env, hints) {
   // where JS prints "10000000000000000").
   function pyStringOf(node) {
     let t = inferType(node, ctx);
-    let s = expr(node, 16);
+    let s = expr(node);
     if (t === "std::string") return s;
     if (t === "int") return "str(" + s + ")";
     if (t === "bool") return '("true" if ' + s + ' else "false")';
@@ -10808,7 +10690,7 @@ function makeJSEmitter(target, report, env, hints) {
   // literals) are wrapped in std::string(...).
   function cppStringOf(node) {
     let t = inferType(node, ctx);
-    let s = expr(node, 16);
+    let s = expr(node);
     if (t === "std::string") {
       if (node.type === "Literal" && typeof node.value === "string") return "std::string(" + s + ")";
       return s;
@@ -10858,18 +10740,18 @@ function makeJSEmitter(target, report, env, hints) {
           let e = node.expressions[ii];
           let t = inferType(e, ctx);
           if (t === "std::string") {
-            parts.push(expr(e, 16));
+            parts.push(expr(e));
           } else if (t === "int") {
-            parts.push("str(" + expr(e, 16) + ")");
+            parts.push("str(" + expr(e) + ")");
           } else if (t === "bool") {
             // A bool interpolates as "true"/"false" (Python str()
             // would print "True"). Route through the helper, same
             // pattern as __iroh_jsnum for doubles.
             needs.jsbool = true;
-            parts.push("__iroh_jsbool(" + expr(e, 16) + ")");
+            parts.push("__iroh_jsbool(" + expr(e) + ")");
           } else if (t === "double") {
             needs.jsnum = true;
-            parts.push("__iroh_jsnum(" + expr(e, 16) + ")");
+            parts.push("__iroh_jsnum(" + expr(e) + ")");
           } else if (t && t.indexOf("std::vector<") === 0) {
             return unsupportedExpr(
               "template literal interpolation of an array in Python (JS joins with commas; Python str() prints brackets)",
@@ -10885,7 +10767,7 @@ function makeJSEmitter(target, report, env, hints) {
               "template literal interpolation coerced with str()",
               "No static or trace type for the interpolation"
             );
-            parts.push("str(" + expr(e, 16) + ")");
+            parts.push("str(" + expr(e) + ")");
           }
         }
       }
@@ -10902,12 +10784,12 @@ function makeJSEmitter(target, report, env, hints) {
       if (ii < node.expressions.length) {
         let e = node.expressions[ii];
         let t = inferType(e, ctx);
-        if (t === "std::string") parts.push(expr(e, 16));
-        else if (t === "int") parts.push("std::to_string(" + expr(e, 16) + ")");
-        else if (t === "bool") parts.push("((" + expr(e, 16) + ') ? "true" : "false")');
+        if (t === "std::string") parts.push(expr(e));
+        else if (t === "int") parts.push("std::to_string(" + expr(e) + ")");
+        else if (t === "bool") parts.push("((" + expr(e) + ') ? "true" : "false")');
         else if (t === "double") {
           needs.jsnum = true;
-          parts.push("__iroh_jsnum(" + expr(e, 16) + ")");
+          parts.push("__iroh_jsnum(" + expr(e) + ")");
         } else {
           return unsupportedExpr(
             "template literal interpolation of non-string, non-integer, non-double value in C++",
@@ -10921,7 +10803,7 @@ function makeJSEmitter(target, report, env, hints) {
   }
 
   function memberExpr(node) {
-    let obj = expr(node.object, 15);
+    let obj = expr(node.object);
     if (!node.computed) {
       let prop = node.property.name !== void 0 ? node.property.name : node.property.value;
       if (prop === "length") {
@@ -10930,7 +10812,7 @@ function makeJSEmitter(target, report, env, hints) {
       }
       return obj + "." + prop;
     }
-    return obj + "[" + expr(node.property, 16) + "]";
+    return obj + "[" + expr(node.property) + "]";
   }
 
   function callExpr(node) {
@@ -10955,14 +10837,14 @@ function makeJSEmitter(target, report, env, hints) {
           } else if (a.type === "Literal" && typeof a.value === "boolean") {
             args.push(a.value ? '"true"' : '"false"');
           } else if (inferType(a, ctx) === "bool") {
-            args.push('("true" if ' + expr(a, 16) + ' else "false")');
+            args.push('("true" if ' + expr(a) + ' else "false")');
           } else if (inferType(a, ctx) === "double") {
             // print() uses str(), which formats 1e16 as "1e+16"
             // where JS prints "10000000000000000".
             needs.jsnum = true;
-            args.push("__iroh_jsnum(" + expr(a, 16) + ")");
+            args.push("__iroh_jsnum(" + expr(a) + ")");
           } else {
-            args.push(expr(a, 16));
+            args.push(expr(a));
           }
         }
         return "print(" + args.join(", ") + ")";
@@ -10984,7 +10866,7 @@ function makeJSEmitter(target, report, env, hints) {
       if (!mathFns[prop]) {
         return unsupportedExpr("Math." + prop + " is not in the v1 scope", "CallExpression");
       }
-      let args = node.arguments.map(function(a) { return expr(a, 16); }).join(", ");
+      let args = node.arguments.map(function(a) { return expr(a); }).join(", ");
       if (isPy) {
         // Python's math module has no max/min/round/abs — those are
         // builtins. Math.pow becomes `**` (math.pow returns a float,
@@ -10997,7 +10879,7 @@ function makeJSEmitter(target, report, env, hints) {
           if (node.arguments.length !== 2) {
             return unsupportedExpr("Math.pow with " + node.arguments.length + " argument(s) (v1 supports exactly 2)", "CallExpression");
           }
-          return "(" + node.arguments.map(function(a) { return expr(a, 16); }).join(" ** ") + ")";
+          return "(" + node.arguments.map(function(a) { return expr(a); }).join(" ** ") + ")";
         }
         if (prop === "round") {
           if (node.arguments.length !== 1) {
@@ -11020,12 +10902,12 @@ function makeJSEmitter(target, report, env, hints) {
     if (node.callee.type === "Identifier") {
       let name = node.callee.name;
       if (name === "parseInt") {
-        if (isPy) return "int(" + expr(node.arguments[0], 16) + ")";
-        return "std::stoi(" + expr(node.arguments[0], 16) + ")";
+        if (isPy) return "int(" + expr(node.arguments[0]) + ")";
+        return "std::stoi(" + expr(node.arguments[0]) + ")";
       }
       if (name === "parseFloat") {
-        if (isPy) return "float(" + expr(node.arguments[0], 16) + ")";
-        return "std::stod(" + expr(node.arguments[0], 16) + ")";
+        if (isPy) return "float(" + expr(node.arguments[0]) + ")";
+        return "std::stod(" + expr(node.arguments[0]) + ")";
       }
       if (name === "String") {
         if (isPy) {
@@ -11033,11 +10915,11 @@ function makeJSEmitter(target, report, env, hints) {
           if (at === "double") {
             // str() formats 1e16 as "1e+16"; JS prints "10000000000000000".
             needs.jsnum = true;
-            return "__iroh_jsnum(" + expr(node.arguments[0], 16) + ")";
+            return "__iroh_jsnum(" + expr(node.arguments[0]) + ")";
           }
           if (at === "bool") {
             // str(True) is "True"; JS String(true) is "true".
-            return '("true" if ' + expr(node.arguments[0], 16) + ' else "false")';
+            return '("true" if ' + expr(node.arguments[0]) + ' else "false")';
           }
           if (at && at.indexOf("std::vector<") === 0) {
             return unsupportedExpr(
@@ -11045,7 +10927,7 @@ function makeJSEmitter(target, report, env, hints) {
               "CallExpression"
             );
           }
-          return "str(" + expr(node.arguments[0], 16) + ")";
+          return "str(" + expr(node.arguments[0]) + ")";
         }
         // std::to_string prints doubles with 6 decimals ("1.500000"),
         // unlike JS String(1.5) ("1.5") — route doubles through the
@@ -11054,19 +10936,19 @@ function makeJSEmitter(target, report, env, hints) {
         // std::to_string.
         if (inferType(node.arguments[0], ctx) === "double") {
           needs.jsnum = true;
-          return "__iroh_jsnum(" + expr(node.arguments[0], 16) + ")";
+          return "__iroh_jsnum(" + expr(node.arguments[0]) + ")";
         }
         if (inferType(node.arguments[0], ctx) === "bool") {
-          return "std::string(((" + expr(node.arguments[0], 16) + ') ? "true" : "false"))';
+          return "std::string(((" + expr(node.arguments[0]) + ') ? "true" : "false"))';
         }
-        return "std::to_string(" + expr(node.arguments[0], 16) + ")";
+        return "std::to_string(" + expr(node.arguments[0]) + ")";
       }
       if (name === "Number") {
-        if (isPy) return "float(" + expr(node.arguments[0], 16) + ")";
-        return "std::stod(" + expr(node.arguments[0], 16) + ")";
+        if (isPy) return "float(" + expr(node.arguments[0]) + ")";
+        return "std::stod(" + expr(node.arguments[0]) + ")";
       }
       if (name === "Boolean") {
-        if (isPy) return "bool(" + expr(node.arguments[0], 16) + ")";
+        if (isPy) return "bool(" + expr(node.arguments[0]) + ")";
         return unsupportedExpr("Boolean() has no direct C++ equivalent in v1", "CallExpression");
       }
       let args = [];
@@ -11075,7 +10957,7 @@ function makeJSEmitter(target, report, env, hints) {
         if (a.type === "SpreadElement") {
           return unsupportedExpr("spread arguments", "CallExpression");
         }
-        args.push(expr(a, 16));
+        args.push(expr(a));
       }
       return name + "(" + args.join(", ") + ")";
     }
@@ -11084,9 +10966,9 @@ function makeJSEmitter(target, report, env, hints) {
       let prop = node.callee.computed
         ? null
         : (node.callee.property.name !== void 0 ? node.callee.property.name : node.callee.property.value);
-      let obj = expr(node.callee.object, 15);
+      let obj = expr(node.callee.object);
       if (prop === "push") {
-        let args = node.arguments.map(function(a) { return expr(a, 16); }).join(", ");
+        let args = node.arguments.map(function(a) { return expr(a); }).join(", ");
         if (isPy) return obj + ".append(" + args + ")";
         return obj + ".push_back(" + args + ")";
       }
@@ -11110,10 +10992,10 @@ function makeJSEmitter(target, report, env, hints) {
     }
     if (op === "**") {
       if (isPy) {
-        return paren(expr(node.left, 13), node.left, 13) + " ** " + paren(expr(node.right, 13), node.right, 13);
+        return paren(expr(node.left), node.left, 13) + " ** " + paren(expr(node.right), node.right, 13);
       }
       needs.cmath = true;
-      return "std::pow(" + expr(node.left, 16) + ", " + expr(node.right, 16) + ")";
+      return "std::pow(" + expr(node.left) + ", " + expr(node.right) + ")";
     }
     if (op === "%") {
       if (isPy) {
@@ -11123,7 +11005,7 @@ function makeJSEmitter(target, report, env, hints) {
         // "-2" — so use the truncating identity through a helper,
         // which keeps ints int and floats float.
         needs.jsmod = true;
-        return "__iroh_jsmod(" + expr(node.left, 16) + ", " + expr(node.right, 16) + ")";
+        return "__iroh_jsmod(" + expr(node.left) + ", " + expr(node.right) + ")";
       }
       // C++ % is truncated like JS, but only for integers — % on
       // doubles does not compile. Route double operands through
@@ -11132,7 +11014,7 @@ function makeJSEmitter(target, report, env, hints) {
       let rt = inferType(node.right, ctx);
       if (lt === "double" || rt === "double") {
         needs.cmath = true;
-        return "std::fmod(" + expr(node.left, 16) + ", " + expr(node.right, 16) + ")";
+        return "std::fmod(" + expr(node.left) + ", " + expr(node.right) + ")";
       }
     }
     let outOp = op;
@@ -11168,14 +11050,13 @@ function makeJSEmitter(target, report, env, hints) {
       }
     }
     return (
-      paren(expr(node.left, myPrec), node.left, myPrec) +
+      paren(expr(node.left), node.left, myPrec) +
       " " + outOp + " " +
-      paren(expr(node.right, myPrec), node.right, myPrec)
+      paren(expr(node.right), node.right, myPrec)
     );
   }
 
   function expr(node, parentPrec) {
-    parentPrec = parentPrec === void 0 ? 0 : parentPrec;
     if (!node || typeof node.type !== "string") {
       return unsupportedExpr("missing expression", "Expression");
     }
@@ -11206,7 +11087,7 @@ function makeJSEmitter(target, report, env, hints) {
           } else if (el.type === "SpreadElement") {
             return unsupportedExpr("spread in array literal", "ArrayExpression");
           } else {
-            parts.push(expr(el, 16));
+            parts.push(expr(el));
           }
         }
         if (isPy) return "[" + parts.join(", ") + "]";
@@ -11225,13 +11106,13 @@ function makeJSEmitter(target, report, env, hints) {
         return callExpr(node);
       case "BinaryExpression":
       case "LogicalExpression":
-        return binaryExpr(node, parentPrec);
+        return binaryExpr(node);
       case "UnaryExpression": {
         if (node.operator === "typeof" || node.operator === "void" || node.operator === "delete") {
           return unsupportedExpr("unary operator " + node.operator + " is not in the v1 scope", "UnaryExpression");
         }
         let op = node.operator === "!" && isPy ? "not " : node.operator;
-        let arg = expr(node.argument, 14);
+        let arg = expr(node.argument);
         if (precedence(node.argument) < 14) arg = "(" + arg + ")";
         return op + arg;
       }
@@ -11242,7 +11123,7 @@ function makeJSEmitter(target, report, env, hints) {
             "UpdateExpression"
           );
         }
-        let arg = expr(node.argument, 16);
+        let arg = expr(node.argument);
         return node.prefix ? node.operator + arg : arg + node.operator;
       }
       case "AssignmentExpression": {
@@ -11256,18 +11137,15 @@ function makeJSEmitter(target, report, env, hints) {
         if (op === "||=" || op === "&&=" || op === "??=") {
           return unsupportedExpr("logical assignment " + op + " has no C++ equivalent", "AssignmentExpression");
         }
-        if (op === "<<=" || op === ">>=" || op === "&=" || op === "|=" || op === "^=") {
-          // Exists in both languages.
-        }
-        let left = expr(node.left, 1);
-        let right = expr(node.right, 1);
+        let left = expr(node.left);
+        let right = expr(node.right);
         return left + " " + op + " " + right;
       }
       case "ConditionalExpression": {
         if (isPy) {
-          return expr(node.consequent, 2) + " if " + expr(node.test, 2) + " else " + expr(node.alternate, 2);
+          return expr(node.consequent) + " if " + expr(node.test) + " else " + expr(node.alternate);
         }
-        return expr(node.test, 2) + " ? " + expr(node.consequent, 2) + " : " + expr(node.alternate, 2);
+        return expr(node.test) + " ? " + expr(node.consequent) + " : " + expr(node.alternate);
       }
       case "TemplateLiteral":
         return templateLiteral(node);
@@ -11275,7 +11153,7 @@ function makeJSEmitter(target, report, env, hints) {
         if (isPy) {
           return unsupportedExpr("comma (sequence) expressions have no Python equivalent", "SequenceExpression");
         }
-        let parts = node.expressions.map(function(e) { return expr(e, 16); });
+        let parts = node.expressions.map(function(e) { return expr(e); });
         return "(" + parts.join(", ") + ")";
       }
       case "ArrowFunctionExpression":
@@ -11303,7 +11181,7 @@ function makeJSEmitter(target, report, env, hints) {
       if (p.type === "Identifier") {
         out.push(p.name);
       } else if (p.type === "AssignmentPattern") {
-        out.push(p.left.name + " = " + expr(p.right, 16));
+        out.push(p.left.name + " = " + expr(p.right));
       } else if (p.type === "RestElement") {
         out.push(unsupportedExpr("rest parameters are not in the v1 scope", "RestElement"));
       } else {
@@ -11325,7 +11203,7 @@ function makeJSEmitter(target, report, env, hints) {
     for (let ii = 0; ii < fnNode.params.length; ++ii) {
       let p = fnNode.params[ii];
       let pname = p.type === "Identifier" ? p.name : (p.left && p.left.name) || "?";
-      let def = p.type === "AssignmentPattern" ? " = " + expr(p.right, 16) : "";
+      let def = p.type === "AssignmentPattern" ? " = " + expr(p.right) : "";
       let t = null;
       if (traceFn && traceFn.params && traceFn.params[ii]) {
         t = traceFn.params[ii];
@@ -11528,7 +11406,6 @@ function makeJSEmitter(target, report, env, hints) {
           // Arrow function assigned to a variable: emit as a function.
           if (d.init && d.init.type === "ArrowFunctionExpression") {
             let fnNode = {
-              type: "FunctionDeclaration",
               id: d.id,
               params: d.init.params,
               body: d.init.body.type === "BlockStatement"
@@ -11539,7 +11416,7 @@ function makeJSEmitter(target, report, env, hints) {
             continue;
           }
           if (isPy) {
-            emitLine(d.id.name + " = " + (d.init ? expr(d.init, 16) : "None"));
+            emitLine(d.id.name + " = " + (d.init ? expr(d.init) : "None"));
           } else if (!d.init) {
             let t = ctx.vars[d.id.name] || null;
             if (!t) {
@@ -11569,7 +11446,7 @@ function makeJSEmitter(target, report, env, hints) {
             } else {
               let parts = [];
               for (let jj = 0; jj < d.init.elements.length; ++jj) {
-                parts.push(expr(d.init.elements[jj], 16));
+                parts.push(expr(d.init.elements[jj]));
               }
               emitLine("std::vector<" + elemType + "> " + d.id.name + " = {" + parts.join(", ") + "};");
             }
@@ -11587,7 +11464,7 @@ function makeJSEmitter(target, report, env, hints) {
             } else {
               kind = node.kind === "const" ? "const auto " : "auto ";
             }
-            emitLine(kind + d.id.name + " = " + expr(d.init, 16) + ";");
+            emitLine(kind + d.id.name + " = " + expr(d.init) + ";");
           }
         }
         return;
@@ -11597,8 +11474,8 @@ function makeJSEmitter(target, report, env, hints) {
         return;
       }
       case "ReturnStatement": {
-        if (isPy) emitLine(node.argument ? "return " + expr(node.argument, 16) : "return");
-        else emitLine(node.argument ? "return " + expr(node.argument, 16) + ";" : "return;");
+        if (isPy) emitLine(node.argument ? "return " + expr(node.argument) : "return");
+        else emitLine(node.argument ? "return " + expr(node.argument) + ";" : "return;");
         return;
       }
       case "ExpressionStatement": {
@@ -11628,18 +11505,18 @@ function makeJSEmitter(target, report, env, hints) {
             let piece;
             if (a.type === "Literal" && a.value === null) piece = '"null"';
             else if (a.type === "Literal" && typeof a.value === "boolean") piece = a.value ? '"true"' : '"false"';
-            else if (inferType(a, ctx) === "bool") piece = "((" + expr(a, 16) + ') ? "true" : "false")';
+            else if (inferType(a, ctx) === "bool") piece = "((" + expr(a) + ') ? "true" : "false")';
             else if (inferType(a, ctx) === "double") {
               // std::cout defaults to 6 significant digits ("0.3"
               // for 0.1 + 0.2); JS prints "0.30000000000000004".
               needs.jsnum = true;
-              piece = "__iroh_jsnum(" + expr(a, 16) + ")";
+              piece = "__iroh_jsnum(" + expr(a) + ")";
             }
             else if (a.type === "ArrayExpression" || (inferType(a, ctx) || "").indexOf("std::vector<") === 0) {
               needs.vectorHelper = true;
               piece = null;
-              emitLine("__iroh_print_vec(" + expr(a, 16) + ");");
-            } else piece = expr(a, 16);
+              emitLine("__iroh_print_vec(" + expr(a) + ");");
+            } else piece = expr(a);
             if (piece !== null && piece !== void 0) {
               emitLine("std::cout << " + piece + ";");
             }
@@ -11650,55 +11527,55 @@ function makeJSEmitter(target, report, env, hints) {
         }
         let e = node.expression;
         if (isPy && e.type === "UpdateExpression") {
-          emitLine(expr(e.argument, 16) + (e.operator === "++" ? " += 1" : " -= 1"));
+          emitLine(expr(e.argument) + (e.operator === "++" ? " += 1" : " -= 1"));
           return;
         }
         if (isPy) {
-          let s = expr(e, 16);
+          let s = expr(e);
           // console.log in Python is a single print() expression.
           emitLine(s);
         } else {
-          emitLine(expr(e, 16) + ";");
+          emitLine(expr(e) + ";");
         }
         return;
       }
       case "IfStatement": {
         counts.conditionals += 1;
         if (isPy) {
-          emitLine("if " + expr(node.test, 16) + ":");
-          emitBody(node.consequent.type === "BlockStatement" ? node.consequent : { type: "BlockStatement", body: [node.consequent] });
+          emitLine("if " + expr(node.test) + ":");
+          emitBody(node.consequent.type === "BlockStatement" ? node.consequent : { body: [node.consequent] });
           let alt = node.alternate;
           while (alt) {
             if (alt.type === "IfStatement") {
-              emitLine("elif " + expr(alt.test, 16) + ":");
-              emitBody(alt.consequent.type === "BlockStatement" ? alt.consequent : { type: "BlockStatement", body: [alt.consequent] });
+              emitLine("elif " + expr(alt.test) + ":");
+              emitBody(alt.consequent.type === "BlockStatement" ? alt.consequent : { body: [alt.consequent] });
               alt = alt.alternate;
             } else {
               emitLine("else:");
-              emitBody(alt.type === "BlockStatement" ? alt : { type: "BlockStatement", body: [alt] });
+              emitBody(alt.type === "BlockStatement" ? alt : { body: [alt] });
               alt = null;
             }
           }
         } else {
-          emitLine("if (" + expr(node.test, 16) + ") {");
-          emitBody(node.consequent.type === "BlockStatement" ? node.consequent : { type: "BlockStatement", body: [node.consequent] });
+          emitLine("if (" + expr(node.test) + ") {");
+          emitBody(node.consequent.type === "BlockStatement" ? node.consequent : { body: [node.consequent] });
           emitLine("}");
           let alt = node.alternate;
           if (alt) {
             if (alt.type === "IfStatement") {
               // else-if: emit as `} else if (...) {` — simplest is to
               // re-enter with the alternate as an if, on the else line.
-              lines[lines.length - 1] = indentStr() + "} else if (" + expr(alt.test, 16) + ") {";
-              emitBody(alt.consequent.type === "BlockStatement" ? alt.consequent : { type: "BlockStatement", body: [alt.consequent] });
+              lines[lines.length - 1] = indentStr() + "} else if (" + expr(alt.test) + ") {";
+              emitBody(alt.consequent.type === "BlockStatement" ? alt.consequent : { body: [alt.consequent] });
               emitLine("}");
               if (alt.alternate) {
                 lines[lines.length - 1] = indentStr() + "} else {";
-                emitBody(alt.alternate.type === "BlockStatement" ? alt.alternate : { type: "BlockStatement", body: [alt.alternate] });
+                emitBody(alt.alternate.type === "BlockStatement" ? alt.alternate : { body: [alt.alternate] });
                 emitLine("}");
               }
             } else {
               lines[lines.length - 1] = indentStr() + "} else {";
-              emitBody(alt.type === "BlockStatement" ? alt : { type: "BlockStatement", body: [alt] });
+              emitBody(alt.type === "BlockStatement" ? alt : { body: [alt] });
               emitLine("}");
             }
           }
@@ -11713,15 +11590,15 @@ function makeJSEmitter(target, report, env, hints) {
             unsupportedStmt("for loop is not a simple numeric loop (v1 supports for (let i = A; i <op> B; i++/i--/i+=k))", "ForStatement");
             return;
           }
-          let start = expr(pat.start, 16);
-          let end = expr(pat.end, 16);
+          let start = expr(pat.start);
+          let end = expr(pat.end);
           let rangeArgs = start + ", " + end;
           if (pat.op === "<=") rangeArgs = start + ", " + end + " + 1";
           else if (pat.op === ">=") rangeArgs = start + ", " + end + " - 1";
           if (pat.step !== 1 && pat.step !== -1) rangeArgs += ", " + pat.step;
           else if (pat.op === ">" || pat.op === ">=") rangeArgs += ", -1";
           emitLine("for " + pat.name + " in range(" + rangeArgs + "):");
-          emitBody(node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] });
+          emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
         } else {
           let init = "";
           if (node.init) {
@@ -11735,11 +11612,11 @@ function makeJSEmitter(target, report, env, hints) {
                 unsupportedStmt("for loop with an uninitialised init variable", "ForStatement");
                 return;
               }
-              init = "auto " + d.id.name + " = " + expr(d.init, 16);
-            } else init = expr(node.init, 16);
+              init = "auto " + d.id.name + " = " + expr(d.init);
+            } else init = expr(node.init);
           }
-          emitLine("for (" + init + "; " + (node.test ? expr(node.test, 16) : "") + "; " + (node.update ? expr(node.update, 16) : "") + ") {");
-          emitBody(node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] });
+          emitLine("for (" + init + "; " + (node.test ? expr(node.test) : "") + "; " + (node.update ? expr(node.update) : "") + ") {");
+          emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
           emitLine("}");
         }
         return;
@@ -11748,11 +11625,11 @@ function makeJSEmitter(target, report, env, hints) {
         counts.loops += 1;
         let target = node.left.declarations ? node.left.declarations[0].id.name : (node.left.name || "?");
         if (isPy) {
-          emitLine("for " + target + " in " + expr(node.right, 16) + ":");
-          emitBody(node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] });
+          emitLine("for " + target + " in " + expr(node.right) + ":");
+          emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
         } else {
-          emitLine("for (auto " + target + " : " + expr(node.right, 16) + ") {");
-          emitBody(node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] });
+          emitLine("for (auto " + target + " : " + expr(node.right) + ") {");
+          emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
           emitLine("}");
         }
         return;
@@ -11763,11 +11640,11 @@ function makeJSEmitter(target, report, env, hints) {
       case "WhileStatement": {
         counts.loops += 1;
         if (isPy) {
-          emitLine("while " + expr(node.test, 16) + ":");
-          emitBody(node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] });
+          emitLine("while " + expr(node.test) + ":");
+          emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
         } else {
-          emitLine("while (" + expr(node.test, 16) + ") {");
-          emitBody(node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] });
+          emitLine("while (" + expr(node.test) + ") {");
+          emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
           emitLine("}");
         }
         return;
@@ -11777,16 +11654,16 @@ function makeJSEmitter(target, report, env, hints) {
         if (isPy) {
           emitLine("while True:");
           indentLevel += 1;
-          let body = node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] };
+          let body = node.body.type === "BlockStatement" ? node.body : { body: [node.body] };
           for (let ii = 0; ii < body.body.length; ++ii) stmt(body.body[ii]);
-          emitLine("if not (" + expr(node.test, 16) + "):");
+          emitLine("if not (" + expr(node.test) + "):");
           indentLevel += 1;
           emitLine("break");
           indentLevel -= 2;
         } else {
           emitLine("do {");
-          emitBody(node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] });
-          emitLine("} while (" + expr(node.test, 16) + ");");
+          emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
+          emitLine("} while (" + expr(node.test) + ");");
         }
         return;
       }
@@ -11815,7 +11692,7 @@ function makeJSEmitter(target, report, env, hints) {
             if (c.test === null) {
               emitLine("else:");
             } else {
-              emitLine(kw + " " + expr(node.discriminant, 16) + " == " + expr(c.test, 16) + ":");
+              emitLine(kw + " " + expr(node.discriminant) + " == " + expr(c.test) + ":");
             }
             indentLevel += 1;
             for (let jj = 0; jj < c.consequent.length; ++jj) {
@@ -11825,12 +11702,12 @@ function makeJSEmitter(target, report, env, hints) {
             indentLevel -= 1;
           }
         } else {
-          emitLine("switch (" + expr(node.discriminant, 16) + ") {");
+          emitLine("switch (" + expr(node.discriminant) + ") {");
           indentLevel += 1;
           for (let ii = 0; ii < node.cases.length; ++ii) {
             let c = node.cases[ii];
             if (c.test === null) emitLine("default:");
-            else emitLine("case " + expr(c.test, 16) + ":");
+            else emitLine("case " + expr(c.test) + ":");
             indentLevel += 1;
             for (let jj = 0; jj < c.consequent.length; ++jj) stmt(c.consequent[jj]);
             indentLevel -= 1;
@@ -12977,22 +12854,22 @@ function makeCppParser(code) {
     // dropped — types are not carried into JavaScript.
     let t = peek();
     if (t.type !== "ident") return null;
-    let base$$1 = t.value;
-    if (base$$1 === "const" || base$$1 === "static" || base$$1 === "unsigned" || base$$1 === "signed") {
+    let base = t.value;
+    if (base === "const" || base === "static" || base === "unsigned" || base === "signed") {
       next();
       let inner = parseType();
-      if (!inner) throw new CppParseError("expected a type after '" + base$$1 + "'");
+      if (!inner) throw new CppParseError("expected a type after '" + base + "'");
       return inner; // qualifiers are dropped (int is int)
     }
     let result = null;
-    if (base$$1 === "auto" || base$$1 === "void" || base$$1 === "int" || base$$1 === "long" || base$$1 === "short" ||
-        base$$1 === "double" || base$$1 === "float" || base$$1 === "bool" || base$$1 === "char" || base$$1 === "size_t") {
+    if (base === "auto" || base === "void" || base === "int" || base === "long" || base === "short" ||
+        base === "double" || base === "float" || base === "bool" || base === "char" || base === "size_t") {
       next();
-      if (base$$1 === "long" || base$$1 === "short" || base$$1 === "size_t") result = "int";
-      else if (base$$1 === "float") result = "double";
-      else result = base$$1;
-    } else if (base$$1 === "string") { next(); result = "std::string"; }
-    else if (base$$1 === "std") {
+      if (base === "long" || base === "short" || base === "size_t") result = "int";
+      else if (base === "float") result = "double";
+      else result = base;
+    } else if (base === "string") { next(); result = "std::string"; }
+    else if (base === "std") {
       next();
       if (!isPunct("::")) throw new CppParseError("expected '::' after std");
       next();
@@ -13009,7 +12886,7 @@ function makeCppParser(code) {
       } else {
         throw new CppParseError("std::" + name + " is not in the v1 subset");
       }
-    } else if (base$$1 === "vector") {
+    } else if (base === "vector") {
       next();
       if (!isPunct("<")) throw new CppParseError("expected '<' after vector");
       next();
@@ -13241,7 +13118,7 @@ function makeCppParser(code) {
   }
 
   function parseStatement() {
-    let t = peek();
+    peek();
     if (isPunct("{")) return parseBlock();
     if (isPunct(";")) { next(); return { type: "EmptyStatement" }; }
     if (isIdent("if")) {
@@ -13364,7 +13241,7 @@ function makeCppParser(code) {
         next();
         expectPunct("(");
         let param = null;
-        let ctype = parseType();
+        parseType();
         if (isPunct(".")) {
           // catch(...) — matches anything.
           next(); expectPunct("."); expectPunct(".");
@@ -13657,18 +13534,18 @@ function makeCppJSEmitter(report) {
       }
       case "IfStatement": {
         emitLine("if (" + expr(node.test) + ") {");
-        emitBody(node.consequent.type === "BlockStatement" ? node.consequent : { type: "BlockStatement", body: [node.consequent] });
+        emitBody(node.consequent.type === "BlockStatement" ? node.consequent : { body: [node.consequent] });
         emitLine("}");
         let alt = node.alternate;
         while (alt) {
           if (alt.type === "IfStatement") {
             lines[lines.length - 1] = indentStr() + "} else if (" + expr(alt.test) + ") {";
-            emitBody(alt.consequent.type === "BlockStatement" ? alt.consequent : { type: "BlockStatement", body: [alt.consequent] });
+            emitBody(alt.consequent.type === "BlockStatement" ? alt.consequent : { body: [alt.consequent] });
             emitLine("}");
             alt = alt.alternate;
           } else {
             lines[lines.length - 1] = indentStr() + "} else {";
-            emitBody(alt.type === "BlockStatement" ? alt : { type: "BlockStatement", body: [alt] });
+            emitBody(alt.type === "BlockStatement" ? alt : { body: [alt] });
             emitLine("}");
             alt = null;
           }
@@ -13687,7 +13564,7 @@ function makeCppJSEmitter(report) {
           }
         }
         emitLine("for (" + init + "; " + (node.test ? expr(node.test) : "") + "; " + (node.update ? expr(node.update) : "") + ") {");
-        emitBody(node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] });
+        emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
         emitLine("}");
         return;
       }
@@ -13698,18 +13575,18 @@ function makeCppJSEmitter(report) {
         noteOnce("forscope", "C++ range-for variables are loop-scoped; the translation declares them before the loop to match C++ scope (JS for-of would scope them to the loop).");
         emitLine(prefix + name + ";");
         emitLine("for (" + name + " of " + expr(node.right) + ") {");
-        emitBody(node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] });
+        emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
         emitLine("}");
         return;
       }
       case "WhileStatement":
         emitLine("while (" + expr(node.test) + ") {");
-        emitBody(node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] });
+        emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
         emitLine("}");
         return;
       case "DoWhileStatement":
         emitLine("do {");
-        emitBody(node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] });
+        emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
         emitLine("} while (" + expr(node.test) + ");");
         return;
       case "SwitchStatement": {
@@ -13866,7 +13743,7 @@ const BASIC_AST_HELPER = [
 
 // Default value for an IrohScript type (for LET with no initializer
 // and for STRUCT field defaults). null means "a constructor call".
-function irohTypeDefault(typeName) {
+function irohTypeDefault$1(typeName) {
   if (typeName === "Int" || typeName === "Float") return "0";
   if (typeName === "String") return '""';
   if (typeName === "Bool") return "false";
@@ -13943,7 +13820,7 @@ function makeIrohAstJSEmitter(report) {
       let kw = node.node === "Const" ? "const " : "let ";
       if (node.value === null || node.value === void 0) {
         if (node.type) {
-          let dflt = irohTypeDefault(node.type);
+          let dflt = irohTypeDefault$1(node.type);
           if (dflt !== null) { emitLine(kw + node.name + " = " + dflt + ";"); return; }
           emitLine(kw + node.name + " = " + node.type + "();");
           return;
@@ -14007,7 +13884,7 @@ function makeIrohAstJSEmitter(report) {
     }
     if (node.node === "StructDef") {
       let fields = node.fields.map(function(f) {
-        let dflt = irohTypeDefault(f.type);
+        let dflt = irohTypeDefault$1(f.type);
         return f.name + ": " + (dflt !== null ? dflt : f.type + "()");
       }).join(", ");
       emitLine("function " + node.name + "() { return { " + fields + " }; }");
@@ -15185,7 +15062,7 @@ function translateAsync(code, options) {
     // build too (no sync require there). The first leg runs with it;
     // the rest is synchronous (the second hop traces JavaScript,
     // which needs no child process).
-    return nodeImport$1("node:child_process").then(
+    return nodeImport("node:child_process").then(
       function(cp) {
         let first = null;
         if (from === "python") first = translateFromPython(code, cp);
@@ -15216,10 +15093,10 @@ function translateAsync(code, options) {
   }
 }
 
-
-var _translate = Object.freeze({
-	translate: translate,
-	translateAsync: translateAsync
+var _translate = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  translate: translate,
+  translateAsync: translateAsync
 });
 
 // IrohScript -> JavaScript code generator: the compiler backend for
@@ -15255,6 +15132,7 @@ var _translate = Object.freeze({
 // throws a clear error pointing at the async entry, which works in
 // ESM Node via dynamic import (same split as the translator).
 
+
 function compileError(detail) {
   return new Error("Iroh.compileIrohscript: " + detail);
 }
@@ -15263,7 +15141,7 @@ function compileError(detail) {
 // and for STRUCT field defaults). Same table as the translator's:
 // Int/Float -> 0, String -> "", Bool -> false, Vector -> [], a struct
 // type -> a call to its factory function.
-function irohTypeDefault$1(typeName) {
+function irohTypeDefault(typeName) {
   if (typeName === "Int" || typeName === "Float") return "0";
   if (typeName === "String") return '""';
   if (typeName === "Bool") return "false";
@@ -15327,7 +15205,7 @@ function makeCodegenEmitter() {
       let kw = node.node === "Const" ? "const " : "let ";
       if (node.value === null || node.value === void 0) {
         if (node.type) {
-          let dflt = irohTypeDefault$1(node.type);
+          let dflt = irohTypeDefault(node.type);
           if (dflt !== null) { emitLine(kw + node.name + " = " + dflt + ";"); return; }
           emitLine(kw + node.name + " = " + node.type + "();");
           return;
@@ -15369,7 +15247,7 @@ function makeCodegenEmitter() {
     }
     if (node.node === "StructDef") {
       let fields = node.fields.map(function(f) {
-        let dflt = irohTypeDefault$1(f.type);
+        let dflt = irohTypeDefault(f.type);
         return f.name + ": " + (dflt !== null ? dflt : f.type + "()");
       }).join(", ");
       emitLine("export function " + node.name + "() { return { " + fields + " }; }");
@@ -15440,7 +15318,7 @@ function compileIrohscript(source, options) {
 // The async version: loads child_process by dynamic import so it
 // works in the ESM build too (no sync require there).
 function compileIrohscriptAsync(source, options) {
-  return nodeImport$1("node:child_process").then(
+  return nodeImport("node:child_process").then(
     function(cp) {
       return compileWithChildProcess(source, options, cp);
     },
@@ -15467,10 +15345,10 @@ function compileWithChildProcess(source, options, cp) {
   return emitter.run(ast);
 }
 
-
-var _codegen = Object.freeze({
-	compileIrohscript: compileIrohscript,
-	compileIrohscriptAsync: compileIrohscriptAsync
+var _codegen = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  compileIrohscript: compileIrohscript,
+  compileIrohscriptAsync: compileIrohscriptAsync
 });
 
 class Iroh {
@@ -15491,7 +15369,6 @@ class Iroh {
     this.greet();
   }
 }
-
 // link methods to main class
 extend(Iroh, _utils);
 extend(Iroh, _setup);
