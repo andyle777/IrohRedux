@@ -33,6 +33,7 @@ test("CLI streams CALL and IF events for factorial and returns 6", () => {
   );
   assert.equal(proc.status, 0);
   let calls = lines.filter((l) => l.type === "event" && l.event === "FUNCTION_CALL");
+  assert.ok(calls.every((call) => call.language === "javascript"));
   assert.deepEqual(calls.map((c) => c.arguments), [[3], [2], [1], [0]]);
   let results = lines.filter((l) => l.type === "event" && l.event === "FUNCTION_CALL_END");
   assert.deepEqual(results.map((r) => r.return), [1, 1, 2, 6]);
@@ -136,6 +137,7 @@ test("CLI --direct honours --analyze, --scan and --live together", () => {
     ["--direct", "--analyze", "--scan", "--live"]
   );
   assert.equal(proc.status, 0);
+  assert.ok(lines.filter((l) => l.type === "event").every((line) => line.language === "javascript"));
   assert.ok(lines.find((l) => l.type === "directive"), "a directive line streamed");
   assert.ok(lines.find((l) => l.type === "live-finding"), "a live-finding line streamed");
   assert.ok(lines.find((l) => l.type === "direct-summary"), "a direct-summary line closed the run");
