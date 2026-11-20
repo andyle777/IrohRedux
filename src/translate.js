@@ -13,7 +13,7 @@
 // for Python or C++, and the report says so (staticOnly: true).
 //
 // The report shape is the same every leg:
-//   { ok, from, to, staticOnly, clean, assumptions, unsupported, notes }
+//   { ok, from, to, staticOnly, clean, assumptions, unsupported, notes, verify }
 // `ok` is false when anything was unsupported. Unsupported constructs
 // are reported, never silently mistranslated: the emitted code
 // raises/throws at that point, loudly, and the report names the
@@ -63,6 +63,74 @@ function markUnsupported(report, construct, message) {
 
 function recordAssumption(report, what, evidence) {
   report.assumptions.push({ what: what, evidence: evidence });
+}
+
+// 1.0.1 patch (Fix Spec 3.7): verify the emitted Python actually
+// runs. `report.ok` answers "did I produce text"; every user reads
+// it as "will this run". The verify block closes that gap: the
+// emitted program is executed under python3 (fed on stdin as
+// `python3 -`, 10 s cap) and the result is recorded on the report.
+// ran: null is not ran: true — when no interpreter is present the
+// block says attempted: false instead of omitting the field. When
+// ran is false the interpreter's stderr is carried verbatim: the
+// exact SyntaxError line is what lets a reader find the defect.
+// The interpreter probe is cached per process (PATH does not change
+// mid-process); the run itself is not cached — every translation is
+// verified fresh. A translated program that reads stdin sees EOF:
+// `python3 -` consumes stdin as the program itself.
+let _pyVerifyProbe = null; // { cmd, version } | { missing: true, cmd }
+function probePython(cp) {
+  if (_pyVerifyProbe) return _pyVerifyProbe;
+  let cmd = (typeof process !== "undefined" && process && process.env && process.env.IROH_PYTHON) || "python3";
+  try {
+    let p = cp.spawnSync(cmd, ["--version"], { encoding: "utf8", timeout: 10000 });
+    if (p.status === 0) {
+      let v = ((p.stdout || "") + (p.stderr || "")).trim().replace(/^Python /, "");
+      _pyVerifyProbe = { cmd: cmd, version: v };
+      return _pyVerifyProbe;
+    }
+  } catch (e) {
+    // Fall through to missing.
+  }
+  _pyVerifyProbe = { missing: true, cmd: cmd };
+  return _pyVerifyProbe;
+}
+
+function verifyEmittedPython(report, code, options) {
+  if (options.verify === false) {
+    report.verify = { attempted: false, ran: null, reason: "verify disabled (options.verify: false)" };
+    return;
+  }
+  let cp = getChildProcessSync();
+  if (!cp) {
+    report.verify = { attempted: false, ran: null, reason: "no child_process (browser / ESM build without Node)" };
+    return;
+  }
+  let probe = probePython(cp);
+  if (probe.missing) {
+    report.verify = { attempted: false, ran: null, reason: "no " + probe.cmd + " on PATH" };
+    return;
+  }
+  let run;
+  try {
+    run = cp.spawnSync(probe.cmd, ["-"], { input: code, encoding: "utf8", timeout: 10000, maxBuffer: 10 * 1024 * 1024 });
+  } catch (e) {
+    report.verify = { attempted: true, ran: false, interpreter: probe.version, exit: null, stderr: "verify spawn failed: " + (e.message || String(e)) };
+    return;
+  }
+  if (run.error) {
+    if (run.error.code === "ETIMEDOUT") {
+      report.verify = { attempted: true, ran: false, interpreter: probe.version, exit: null, stderr: "verify timed out after 10 s (emitted program did not finish)" };
+    } else {
+      report.verify = { attempted: true, ran: false, interpreter: probe.version, exit: null, stderr: "verify spawn failed: " + (run.error.message || String(run.error)) };
+    }
+    return;
+  }
+  if (run.status === 0) {
+    report.verify = { attempted: true, ran: true, interpreter: probe.version, exit: 0 };
+  } else {
+    report.verify = { attempted: true, ran: false, interpreter: probe.version, exit: run.status, stderr: run.stderr || "" };
+  }
 }
 
 // C++ type of a traced (safeValue-serialized) runtime value.
@@ -298,7 +366,7 @@ function makeJSEmitter(target, report, env, hints) {
   let isPy = target === "python";
   let lines = [];
   let indentLevel = 0;
-  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false };
+  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false, jsbool: false };
   let noted = {};
   function noteOnce(key, text) {
     if (!noted[key]) {
@@ -508,42 +576,65 @@ function makeJSEmitter(target, report, env, hints) {
 
   function templateLiteral(node) {
     if (isPy) {
-      let parts = ['f"'];
+      // 1.0.1 patch (Fix Spec 3.5 Option 1): concatenation, NOT an
+      // f-string. Property P1 (spec 3.2): on Python before 3.12 a
+      // replacement field cannot contain the delimiter quote, a
+      // backslash, # or an unbalanced brace/colon — and every branch
+      // that pushed a raw expression into {...} violated it in
+      // principle. In 1.0.1 that was four branches, not one: string
+      // literals, ternaries of strings, literal text + a field, and
+      // the bool branch, which emitted an inline ("true" if v else
+      // "false") ternary inside the field (1.1.1 fixed bool only, as
+      // D1). All four emitted SyntaxErrors on 3.9-3.11 while the
+      // report said ok. Concatenation has no delimiter rules: the
+      // expression sits in ordinary parentheses. Literal text is
+      // emitted with JSON.stringify — a real serialiser, not the
+      // hand-rolled regex chain (which missed newlines and other
+      // control characters). One deviation from the spec's sketch:
+      // ints go through str(), not bare — "a" + 5 is a TypeError in
+      // Python, so the sketch's bare push for int would have traded
+      // a SyntaxError for a runtime error.
+      let parts = [];
       for (let ii = 0; ii < node.quasis.length; ++ii) {
         let q = node.quasis[ii];
         let raw = q.value.cooked !== void 0 && q.value.cooked !== null ? q.value.cooked : q.value.raw;
-        parts.push(raw.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/{/g, "{{").replace(/}/g, "}}"));
+        if (raw !== "") parts.push(JSON.stringify(raw));
         if (ii < node.expressions.length) {
-          // f"{x}" uses str(x): "True" for bools (JS prints "true")
-          // and "1e+16" for 1e16 (JS prints "10000000000000000") —
-          // so route bools and doubles explicitly. Arrays join with
-          // commas in JS and print brackets in Python: refuse loudly.
           let e = node.expressions[ii];
           let t = inferType(e, ctx);
-          if (t === "std::string" || t === "int") {
-            parts.push("{" + expr(e, 16) + "}");
+          if (t === "std::string") {
+            parts.push(expr(e, 16));
+          } else if (t === "int") {
+            parts.push("str(" + expr(e, 16) + ")");
           } else if (t === "bool") {
-            parts.push("{(\"true\" if " + expr(e, 16) + " else \"false\")}");
+            // A bool interpolates as "true"/"false" (Python str()
+            // would print "True"). Route through the helper, same
+            // pattern as __iroh_jsnum for doubles.
+            needs.jsbool = true;
+            parts.push("__iroh_jsbool(" + expr(e, 16) + ")");
           } else if (t === "double") {
             needs.jsnum = true;
-            parts.push("{__iroh_jsnum(" + expr(e, 16) + ")}");
+            parts.push("__iroh_jsnum(" + expr(e, 16) + ")");
           } else if (t && t.indexOf("std::vector<") === 0) {
             return unsupportedExpr(
               "template literal interpolation of an array in Python (JS joins with commas; Python str() prints brackets)",
               "TemplateLiteral"
             );
           } else {
+            // Unknown type: str() is JS ToString's closest honest
+            // neighbour (an object prints its repr, not
+            // "[object Object]" — a recorded approximation, not a
+            // syntax landmine).
             recordAssumption(
               report,
-              "template literal interpolation assumed to be a string or number",
-              "No static or trace type for the interpolation; emitted as-is"
+              "template literal interpolation coerced with str()",
+              "No static or trace type for the interpolation"
             );
-            parts.push("{" + expr(e, 16) + "}");
+            parts.push("str(" + expr(e, 16) + ")");
           }
         }
       }
-      parts.push('"');
-      return parts.join("");
+      return "(" + (parts.length ? parts.join(" + ") : '""') + ")";
     }
     // C++: "a" + std::to_string(x) + "b" — string/integral/double
     // interpolations; doubles go through __iroh_jsnum so they print
@@ -1620,6 +1711,15 @@ function makeJSEmitter(target, report, env, hints) {
         header.push("    return (\"-\" if neg else \"\") + out");
         header.push("");
       }
+      if (needs.jsbool) {
+        // 1.0.1 patch: JS bool -> string: "true"/"false". A helper,
+        // not an inline ternary, so the double quotes never sit
+        // inside an f-string replacement field (SyntaxError on
+        // Python < 3.12, PEP 701). Same pattern as __iroh_jsnum.
+        header.push("def __iroh_jsbool(v):");
+        header.push("    return \"true\" if v else \"false\"");
+        header.push("");
+      }
       if (needs.unsupportedHelper) {
         header.push("def _iroh_unsupported(msg):");
         header.push("    raise NotImplementedError(\"IrohRedux: \" + msg)");
@@ -1826,6 +1926,20 @@ function translateFromJS(iroh, code, to, options) {
       "Function(s) never called in the trace (" + uncalled.join(", ") +
       "): C++ parameter types for them came from a type hint, or the function was reported unsupported."
     );
+  }
+  // 1.0.1 patch (Fix Spec 3.7): the verify block. Only the Python
+  // leg is executed here; every other target records that
+  // verification was not attempted, so a missing verify is never
+  // mistaken for a pass (ran: null is not ran: true). A translation
+  // that is not ok emits a loud stub, not runnable code, so it is
+  // not executed either.
+  if (to === "python") {
+    if (report.ok) verifyEmittedPython(report, out.text, options);
+    else {
+      report.verify = { attempted: false, ran: null, reason: "translation incomplete (unsupported constructs); emitted code is a stub, not run" };
+    }
+  } else {
+    report.verify = { attempted: false, ran: null, reason: "verify is only implemented for the Python leg" };
   }
   return { code: out.text, report: report };
 }
