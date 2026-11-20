@@ -1,5 +1,31 @@
 ### API
 
+# FOR HUMANS
+
+This is the precise reference for every surface IrohRedux exposes.
+If you are new, start with [Getting Started](GETTING_STARTED.md)
+and the [README](README.md) — this file is for looking up exact
+shapes, options, and flags. There are four surfaces:
+
+- **Library** (`Iroh.trace`, `analyze`, `translate`, `direct`,
+  `synthesize`, `scan`, `liveAnalyzer`, `compileIrohscript`) —
+  import it from Node or ESM; types ship in `index.d.ts`.
+- **CLI** (`node cli/iroh.js`, or the packaged `iroh` binary) —
+  streams JSON lines; see [CLI flags](#cli-flags) for every flag.
+- **Python client** (`python/iroh/`: `run`, `trace_python`,
+  `scan_python`) and **C++ client** (`cpp/iroh.hpp`) — thin
+  clients over the CLI; see [Using Iroh from Python, C++,
+  IrohScript and BASIC](#using-iroh-from-python-c-irohscript-and-basic).
+- **Server / node** (`iroh serve`, `iroh node`) — the phone is a
+  local server, a laptop is a local node; see `SERVER.md` and the
+  [CLI flags](#cli-flags) section.
+
+The machine-readable facts (JSON shapes, reachable categories,
+findings cap, translate `verify` block) are in the
+[FOR AI](#for-ai) section at the end of this file. The generated
+text form of this file is `txt/API.txt` in the AI bundle, and CI
+checks that every flag in `iroh --help` appears in it.
+
 - [Iroh](#iroh)
 - [Iroh.Stage](#irohstage)
 - [Iroh.Stage.RuntimeListener](#irohstageruntimelistener)
@@ -293,11 +319,20 @@ literal, and only `===` case literals are solved.
 ``translate(code, options)``: Hybrid translation engine (0.8.0; all five
 languages as sources and targets since the 1.0.1 rework, part 2). Returns
 `{ code, report }` where `report` is `{ ok, from, to, staticOnly, clean,
-assumptions, unsupported, notes }`. JavaScript out (`to: "python" |
+assumptions, unsupported, notes, verify }` — the `verify` block is new
+in the 1.1.1 patch (see below). JavaScript out (`to: "python" |
 "cpp" | "irohscript" | "basic"`) is hybrid: the AST (static) plus trace
 evidence (dynamic — the program is run through the tracer first, and
 the events resolve what static analysis cannot: runtime types, values,
-which branches fired). The reverse legs (`from: "python" | "cpp" |
+which branches fired). Template literals to Python emit concatenation,
+not f-strings (1.1.1 patch): `` `a=${x}` `` becomes `("a=" + str(x))`
+— literal text via `JSON.stringify`, booleans via `__iroh_jsbool`,
+doubles via `__iroh_jsnum`, ints and unknown types via `str()` (a
+recorded assumption), arrays unsupported (a loud stub). The old
+f-string output was a SyntaxError on Python 3.9–3.11 while the report
+said `ok: true`; the concatenation form parses and runs on 3.9–3.12,
+and the execution-matrix gate (`npm run check:matrix`) proves it on
+all four interpreters. The reverse legs (`from: "python" | "cpp" |
 "irohscript" | "basic"`, `to: "javascript"`) are static-only by design
 (`staticOnly: true`) — they translate from source alone. Native Python
 and C++ tracers exist since 0.9.0, but the translation legs do not use
@@ -336,6 +371,23 @@ that leg); in a browser, the Python leg throws a clear error and the
 C++ leg works. The async path now honours `to` for the Python,
 IrohScript and BASIC legs (before the 1.0.1 rework it ignored `to`
 and always returned JavaScript).
+
+``report.verify`` (1.1.1 patch): every translate result carries a
+verify block — `{ attempted, ran, interpreter, exit }`, plus `stderr`
+when `ran` is false (the interpreter's output, verbatim) or `reason`
+when `attempted` is false. Only the Python leg is executed: the
+emitted code is run under `python3` (10 s cap, probe cached,
+`IROH_PYTHON` overrides the interpreter), and `ran` is true only
+when it exited 0. `ran: null` means not attempted — never read it as
+success. The other legs record `attempted: false` with a reason
+(`verify is only implemented for the Python leg`). Pass
+`options.verify: false` to opt out (the block then records
+`attempted: false`, reason `verify disabled by option`). A program
+error in the emitted code surfaces as `ran: false` with the
+interpreter's stderr — for example a JavaScript `%` on a negative
+number translates to Python `%`, which raises `ZeroDivisionError`
+on `10 % 0` where JavaScript returns `NaN`: a real semantic gap
+between the languages, surfaced by the verify block, not hidden.
 
 ``compileIrohscript(source, options)``: The IrohScript compiler
 backend (1.0.1 rework, part 3). Compiles IrohScript source to a
@@ -415,6 +467,85 @@ disagreement (JavaScript only; it does not combine with `--translate`,
 `trace_file(path)` for tracing C++ itself, no Node needed). Both find the
 CLI in the checkout or via `IROH_CLI`. See the README and each client's
 own README for the full API.
+
+#### CLI flags
+
+Every flag in `iroh --help` (run `iroh --help` to see the usage
+text; CI checks that each flag below appears in `txt/API.txt`,
+the generated text form of this file). Flags take a value with
+`=` or a space (`--events CALL,IF` or `--events=CALL,IF`).
+
+- `--events ALL|CALL,IF,...` — event categories to stream
+  (default `ALL`). A comma list, e.g. `--events CALL,IF`.
+- `--no-result` — skip the result line.
+- `--module` — trace as an ES module (JavaScript only;
+  `.mjs` files imply it).
+- `--analyze` — append an analysis line after the result line.
+- `--scan` — print ONE scan line
+  `{ vectors, findings, scores, summary }` instead of the event
+  flood.
+- `--include-events` — embed the raw events in the scan document.
+  Needs `--scan`.
+- `--live` — stream `live-finding` lines as findings trip, then a
+  final `live-summary` line. For Python/C++ the live lines print
+  after the run (the native tracers buffer their events).
+- `--direct[=throttle|stop]` — run under the runaway-loop guard
+  (JavaScript only; throttle by default, `--direct=stop` stops).
+  Combines with `--analyze`, `--scan`, `--live`. Always traces
+  ALL categories.
+- `--synthesize --entry <fn> [--seeds '[[5]]'] [--max-runs 50]` —
+  generate inputs driving each branch of the named entry function
+  (JavaScript only). `--seeds` is a JSON array of argument arrays;
+  `--max-runs` is the run budget (default 50, seeds included).
+- `--max-events N` — cap the recorded events (JavaScript legs
+  only). The run stops with a clear error and the partial events
+  attached once N events have fired.
+- `--verify` — trace the program twice (JavaScript legs only) and
+  diff the events and the result, printing a verify line
+  `{ok, events, firstDiff}`; exit 1 when the two runs disagree.
+  Does not combine with `--translate`, `--direct`, `--synthesize`.
+- `--translate python|cpp|irohscript|basic|javascript` — translate
+  instead of tracing; prints one translation line. Cannot be
+  combined with `--live`, `--scan`, `--analyze`, `--direct`.
+  Exit 1 when anything was unsupported.
+- `--from python|cpp|irohscript|basic|javascript` — source
+  language for `--translate` (default: by file extension —
+  `.py` → python, `.cpp/.cc/.cxx` → cpp, `.iroh` → irohscript,
+  `.bas` → basic).
+- `--lang python|cpp|javascript|irohscript|basic` — force the
+  tracer (default: inferred from the file extension).
+- `--file <path>` — the program file (same as the positional
+  argument).
+- `capabilities [--json]` — one row per language leg and per
+  syntax feature (available, or unavailable with why).
+  `--json` prints the same as one JSON line.
+- `doctor` — the last recorded test run, the live toolchain
+  versions, the dist hash, and the capabilities. Does not run
+  the suite itself — run `npm test` first.
+- `--version` — one line: version, dist hash, embedded runtime
+  (`iroh 1.1.1 (engine dist iroh-node.js 3650052798f7, runtime
+  node v18.5.0)` inside a packaged binary).
+- `serve [--port 8471] [--host 0.0.0.0] [--token T]
+  [--timeout-ms 120000] [--local-legs javascript,...]` — start
+  the local server (see `SERVER.md`): serves `/trace`, `/analyze`,
+  `/scan`, `/translate`, `/capabilities`, `/health` as JSON over
+  the local network (default port 8471, all interfaces). Runs the
+  legs this box can run, delegates the rest to connected nodes.
+  `--local-legs` restricts which legs run locally (the phone
+  passes `javascript`); `--timeout-ms` caps how long a request
+  waits for a delegated job (default 120000 ms).
+- `node --server <host:port> [--token T]` — connect this machine
+  to a server as a worker: registers the legs this box can run,
+  long-polls for jobs, runs each leg with the local CLI, posts
+  the result back. Reconnects with backoff when the server drops;
+  stops cleanly on SIGINT/SIGTERM.
+- `-h` / `--help` — usage.
+
+Conflicting combinations are usage errors (exit 2, checked
+before the file is read): `--translate` with `--live` / `--scan` /
+`--analyze` / `--direct`; `--direct` with a non-ALL `--events`;
+`--include-events` without `--scan`; `--synthesize` with
+`--module` / `--direct` / `--events`.
 
 #### Iroh.Stage:
 
@@ -810,3 +941,78 @@ Iroh.PROGRAM
   Code enter,
   Code exit
 ````
+
+#### FOR AI
+
+Machine-readable facts. Load this section without guessing. If a
+fact here disagrees with a prose paragraph above, this section wins
+— and the disagreement is a bug; file it. The generated text form
+of this file is `txt/API.txt` in the AI bundle; CI checks that
+every flag in `iroh --help` appears in it.
+
+- Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
+  1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
+  `3650052798f7d049a1e81ddbbbf416fcc775e9bb05e0d28ee2bd42551511998a`.
+- Ask for JSON. Never parse console prose; it is for humans and
+  will change. Event streams are JSON lines, one object per line,
+  with the `language` field always set.
+- Event line:
+  `{"type":"event","event":"FUNCTION_CALL","category":"CALL",
+  "trigger":"before","hash":11,"indent":1,"name":"factorial",
+  "arguments":[3],"external":false}`, followed by a result line
+  `{"type":"result","value":6}` or an error line
+  `{"type":"error","name":...,"message":...}`.
+- `--scan` result: `{vectors, findings, scores, summary}`.
+  `vectors` carries `features {calls, depth, repeat, imbalance,
+  mix, coverage, events}`, `vector[6]`, `names[6]`. `findings` is
+  a list of `{code, severity, message, evidence, neuron}`.
+  `summary` carries `{events, unclosedFrames, findings, warnings,
+  language, infos, neuron {label, score}, maxCallDepth,
+  distinctRegions, findingsTruncated}`.
+- `--translate` result (one line):
+  `{type:"translation", from, to, code, report}`. `report`
+  carries `{ok, from, to, staticOnly, clean, assumptions,
+  unsupported, notes, verify}`.
+- Translate `verify` block: `{attempted, ran, interpreter,
+  exit}` plus `stderr` when `ran` is false (the interpreter's
+  output, verbatim) or `reason` when `attempted` is false.
+  `ran: null` means not attempted — never read it as success.
+  Only the Python leg is executed (under `python3`, 10 s cap);
+  other legs record `attempted: false` with a reason.
+- `--live` lines: `live-finding` (with `firedAt`) as findings
+  trip, then `live-summary` (batch-equal findings, scores,
+  vectors). `--direct` lines: `directive` as the guard acts, then
+  `direct-summary` (findings, directive audit log, analysis).
+  `--synthesize` lines: `synth-run` per input tried, then
+  `synth-summary` (coverage, every uncovered branch with its
+  reason).
+- Reachable categories (coverage denominators). Coverage is fired
+  / reachable per tracer. Use `reachable` when present. Missing
+  `reachable` is not 30 and not zero. If you cannot find it,
+  report the score as unnormalised. An unknown language falls back
+  to all 30 (the JavaScript default).
+  - javascript: 30 (all categories).
+  - python: 6 (ASSIGN, CATCH, CALL, FUNCTION, IF, LOOP).
+  - cpp: 2 (CALL, FUNCTION).
+  - irohscript: 4 (ASSIGN, CALL, FUNCTION, IF).
+  - basic: 5 (ASSIGN, CALL, FUNCTION, IF, LOOP).
+- Findings cap: findings are capped at 200.
+  `summary.findingsTruncated` is the dropped count. If
+  `findingsTruncated > 0`, the finding list is a prefix, not the
+  whole set — say so when you report it. Any score derived from
+  the list is a score over a prefix.
+- Memory model: a finished trace releases its Stage
+  (`Stage.release` / `releaseTraceRun`); a 500,013-event trace
+  leaves a 472,976-byte residual heap.
+  `summary.unclosedFrames` is `{count, frames, note}` when a
+  generator frame is still open at the end of a trace, else null.
+  Full model: `docs/memory.md` in the repo, `txt/memory.md` in
+  the AI bundle.
+- Server / node: `iroh serve` (default port 8471, local network
+  only) serves `/trace`, `/analyze`, `/scan`, `/translate`,
+  `/capabilities`, `/health` as JSON. Every result is the engine's
+  own shape plus `ranOn` ("local" or the node id). A leg nobody
+  can run is HTTP 503, never a faked result. Full protocol:
+  `SERVER.md`.
+- Works offline — no network required. No artifact phones home,
+  checks for updates, or downloads at first run.
