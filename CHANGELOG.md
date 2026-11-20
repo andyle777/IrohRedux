@@ -55,7 +55,110 @@ The rest of the patch, in plan order:
   `--direct` (the script tracers' determinism is by construction);
   it does not combine with `--translate`, `--direct` or `--synthesize`.
 
-The suite is now 673 tests (409 Node + 25 Python + 9 C++ + 230
+Testing infrastructure, also new in this patch:
+
+- B1 — property-based tests (`tests/properties.test.js`, fast-check
+  as a devDependency): trace determinism over generated programs,
+  scan/analyze agreement, and a JS -> Python -> JS translate
+  round-trip on generated pure arithmetic functions (skipped when
+  python3 is unavailable). Fixed seeds, small run counts.
+- B2 — grammar-aware fuzz harness (`scripts/fuzz.mjs`): mutates
+  programs from the fixture corpus (literal swaps, comparison and
+  operator flips, line swaps and duplications) and traces each with
+  the `maxEvents` cap as the hang guard, classifying every run as
+  ok / rejected / capped / program-error / crash, with a
+  determinism double-trace per run and an untraced oracle (strict
+  mode, 2s timeout) for suspicious throws. Default 50 runs, exit 1
+  on any crash or mismatch; `tests/fuzz.test.js` pins it into the
+  suite. Found one real engine gap while being built (see below).
+- B4 — minimal CI (`.github/workflows/ci.yml`): one job on
+  ubuntu-latest, Node 24 + Python 3.12, `npm install` (not `npm ci`
+  — the lockfile is not tracked), then the full suite, types,
+  Python and C++ legs.
+- F3 — dist drift gate (`scripts/check-dist-drift.mjs`,
+  `tests/dist-drift.test.js`, `npm run check:dist`): rebuilds
+  dist/ into a temp dir from the current src/ and byte-compares it
+  against the checked-in dist/, failing with the list of differing
+  files; runs in `npm test` and as a CI step. It caught real drift
+  on its first run: after the D1 fix the node bundles were rebuilt
+  but the browser bundle was not, so the checked-in
+  dist/iroh-browser.js still carried the buggy inline ternary —
+  the gate now fails until `npm run dist` is re-run and committed.
+  The temp dir lives beside the repo (same filesystem) with a
+  hardlinked node_modules: a symlinked node_modules breaks the
+  browser build, whose rollup config keys its commonjs namedExports
+  by the relative path "node_modules/acorn/dist/acorn.js".
+- F1 — Node capability skips, engines floor, `iroh capabilities`
+  (`lib/capabilities.js`, `tests/capabilities.js`,
+  `tests/capabilities.test.js`, `cli/iroh.js`): the package claimed
+  Node >= 18 while its own suite needed Node 24 to be green — on
+  Node 22, 8 tests failed (RegExp modifiers, `using` x3, the
+  runtime-features row, the Stage parser-options row, the ES2026
+  row, the trace stageOptions row). Each now probes its feature in
+  a subprocess (`node -e`) and skips with a printed reason naming
+  the feature and the Node version that has it. Measured on this
+  box with a Node 22.23.2 binary: 425 Node tests, 416 pass, 0
+  fail, 9 skipped (the 8 plus one capabilities test whose premise
+  does not hold on 22); on Node 24.22.1: 425 pass, 0 skipped.
+  `engines.node` is now `>= 22`. Node 18 went EOL in April 2025
+  and was never measured on this box, so it is not certified; Node
+  20 is unmeasured and not claimed. `iroh capabilities [--json]`
+  prints one row per language leg (javascript/python/cpp/
+  irohscript/basic, with why) and per syntax feature (available,
+  or unavailable with the Node version that has it).
+- F2 — per-leg suite summary + `iroh doctor`
+  (`tests/suite-summary.js`, `tests/suite-summary.test.js`,
+  `tests/index.js`, `cli/iroh.js`): `npm test` now prints one
+  machine-readable summary line per leg —
+  {"type":"suite-summary","legs":[{"leg":"node","ran":433,
+  "failed":0,"skipped":0,"skips":[]}, ...]} — and writes it to
+  test-results/suite-summary.json. A leg whose toolchain is absent
+  is reported as did-not-run (skips naming the reason), never as a
+  pass. The Node leg is parsed from both reporter formats (the Node
+  24 spec reporter and the Node 22 TAP reporter); the Python legs
+  from unittest output; the C++ leg from the three pass lines in
+  `make test` (the documented 9 groups: 5 client + 3 native tracer
+  + 1 filter). `iroh doctor` prints the recorded summary plus live
+  toolchain versions, the dist hash, and the capabilities. One
+  trap, recorded in the test: the summary-file test must not assert
+  the previous run was failure-free, or one failure becomes
+  permanent (the file records the run that included the test
+  itself).
+- F4 — coverage denominators are per-tracer reachable sets
+  (`src/labels.js`, `src/analyze.js`, `src/vectors.js`,
+  `src/scan.js`, `cli/iroh.js`): `coverage` now carries
+  {fired, reachable, total} and `value` is fired / reachable, not
+  fired / total. The reachable sets are read from each tracer's
+  own emit sites: javascript 30 (the full engine), python 6
+  (ASSIGN, CATCH, CALL, FUNCTION, IF, LOOP), cpp 2 (CALL,
+  FUNCTION — function-level by design), irohscript 4 (ASSIGN,
+  CALL, FUNCTION, IF), basic 5 (ASSIGN, CALL, FUNCTION, IF, LOOP).
+  A C++ trace firing CALL and FUNCTION is now "2 of 2 reachable
+  for a cpp trace (30 exist in the model)" with value 1 and an
+  empty missingCategories, instead of "2 of 30" with 28 misses.
+  `missingCategories` lists the reachable categories that did NOT
+  fire. The CLI's --analyze now passes the language through (it
+  was missing it; --scan already had it). A consumer must never
+  treat a missing `reachable` field as `total` — that would read a
+  non-JS trace as JavaScript; analyze() always sets it, and the
+  note always names the denominator. The vector's coverage feature
+  is fired / reachable too (toVector takes an optional language;
+  scan() passes it), so the scan doc is consistent.
+
+Known gap found by the fuzzer, NOT fixed in this patch: a
+`MEMBER_EXPR` event on the `Iroh` object embeds the live singleton
+— its stage key (which increments per patch) and its assertions
+array (which accumulates across traces) — so two traces of a program
+that touches `Iroh` (e.g. `Iroh.assert`) are not byte-identical.
+Minimal repro: trace
+`var a = !true; Iroh.assert("t", a === false); a;` twice and diff
+event 5. The fuzzer strips `Iroh.assert(...)` calls from its corpus
+and drops any program still referencing `Iroh`, so it measures
+determinism of ordinary programs; the gap is recorded here rather
+than hidden. The `--verify` check has the same blind spot for
+programs that touch `Iroh`.
+
+The suite is now 689 tests (425 Node + 25 Python + 9 C++ + 230
 IrohScript/BASIC Python).
 
 ## 1.1.0 — IrohScript foundation rework + input synthesiser (20 Nov 2026)
