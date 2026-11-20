@@ -7,171 +7,77 @@
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-348%20passing-brightgreen.svg?style=flat-square" alt="348 tests passing" />
+  <img src="https://img.shields.io/badge/tests-349%20passing-brightgreen.svg?style=flat-square" alt="349 tests passing" />
 </p>
 
 <p align="center">
   <b>Watch your code run. Change it while it runs.</b><br/>
-  IrohRedux is a dynamic code analysis tool for JavaScript — record your code flow
-  in realtime, intercept runtime information, and manipulate program behaviour
-  on the fly. And now you don't even have to write JavaScript to use it.
-</p>
-
-<p align="center">
   <a href="//github.com/andyle777/IrohRedux/blob/master/GETTING_STARTED.md">Getting Started</a> ·
   <a href="//github.com/andyle777/IrohRedux/blob/master/API.md">API</a> ·
-  <a href="//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md">Changelog</a>
+  <a href="//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md">Changelog</a> ·
+  <a href="https://github.com/andyle777/IrohRedux/releases">Releases</a>
 </p>
 
 ---
 
-### Why dynamic analysis?
+# FOR HUMANS
 
-Static analysis (Babel, ESLint) reads your code. IrohRedux *runs* it — and tells you
-what actually happened: which functions were called with what, which branches
-were taken, what every variable held, moment by moment. That data only exists
-at runtime, and Iroh Redux hands it to you while the code is still running, so you
-can capture it, visualize it, or **change values mid-flight** and watch the
-program react.
+## What it is
 
-```js
-const stage = new Iroh.Stage(`
-  function factorial(n) {
-    if (n === 0) return 1;
-    return n * factorial(n - 1);
-  };
-  factorial(3);
-`);
-stage.addListener(Iroh.CALL).on("before", e => console.log("call", e.name, e.arguments));
-stage.addListener(Iroh.CALL).on("after", e => console.log("call end ->", e.return));
-eval(stage.script);
+IrohRedux runs your program and tells you what actually happened.
+Which functions were called with what. Which branches were taken.
+What every variable held, moment by moment.
+
+Then it lets you change values mid-flight and watch the program react.
+
+It traces JavaScript, Python and C++ through one engine and one event
+format. It analyzes the trace into findings (hot loops, deep recursion,
+one-sided branches, throwing paths). It translates programs between
+JavaScript, Python and C++. No LLM. No network. Deterministic rules
+over a trace.
+
+The original Iroh 0.3.0 (2018) lives in `original-iroh/`, preserved
+untouched. IrohRedux is the fork that builds on it. The core idea is
+Felix Maier's.
+
+## Install
+
+Download from the
+[Releases page](https://github.com/andyle777/IrohRedux/releases).
+No Node install needed for the binaries.
+
+- **Windows, Linux, macOS:** the EXE for your system. Download, run.
+  The EXE embeds its own Node runtime, version 18.5.0. The npm
+  package asks for Node >= 18, so the binary and the package agree.
+- **Android:** the APK. Install it on your phone. JavaScript legs
+  only — there is no python3 on Android.
+
+Or install from source (needs Node >= 18):
+
+```sh
+git clone https://github.com/andyle777/IrohRedux.git
+cd IrohRedux
+npm install
+npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
+npm test            # 349 tests: 315 Node + 25 Python + 9 C++
 ```
 
-```
-call factorial ( [3] )
-  call factorial ( [2] )
-    call factorial ( [1] )
-      call factorial ( [0] )
-        if
-        if end
-      call factorial end -> [1]
-    call factorial end -> [1]
-  call factorial end -> [2]
-call factorial end -> [6]
-```
+The Python client installs with `pip install -e python/`. The C++
+client is a single header — just `#include "iroh.hpp"`.
 
-### Direct the run (1.0.0)
+Works offline — no network required. Nothing in the app or the
+binaries phones home, checks for updates, or downloads at first run.
+The APK manifest does not even request internet permission.
 
-Tracing tells you what happened. 1.0.0 lets you *do something about it*
-while the program is still running. A director sits on the live wire,
-reads findings as they fire, and calls the shots — set a variable, skip
-a call, stop the run — and the record says what fired, what was
-directed, and what changed.
+## Run it
 
-```js
-const Iroh = require("iroh");
+One short working example per leg. All three print the same kind of
+output: JSON lines, one event per line, then a result line.
 
-// A program that would loop 10,000 times. The guard catches it live.
-let out = Iroh.direct(
-  "let i = 0; let total = 0; while (i < 10000) { total += i; i++; } total;",
-  Iroh.runawayGuard()
-);
-// out.result === 4950 — the loop ran 100 iterations, then the director cut it.
-// out.findings[0].code === "HOT_LOOP" (evidence.iterations === 100).
-// out.directives[0].directive === { type: "set", name: "i", value: 10000 },
-// applied: true, appliedVia: "loop-test".
-```
-
-The loop closes: trace → analyze live → direct → change → trace again.
-Your own director is a callback that receives the findings that just
-fired plus the current snapshot, and returns a directive (or `null`):
-
-```js
-const out = Iroh.direct(code, (ctx) => {
-  if (ctx.findings.some((f) => f.code === "HOT_LOOP")) {
-    return { type: "stop", reason: "loop is too hot" };
-  }
-  return null;
-});
-// Directives: { type: "set", name, value } writes a variable at its next
-// assignment (or flips a loop test when the counter advances by ++);
-// a set may carry scope (a function name, or null for the top level)
-// and may name a member ("obj.prop", one level);
-// { type: "skip", name, value } makes the next call of that name evaluate
-// to the value without running; { type: "stop", reason } ends the run.
-// Async programs and modules have their own entries: directAsync()
-// (top-level await works there) and directModule() (Node.js only).
-```
-
-From the CLI: `node cli/iroh.js program.js --direct` runs the script under
-the guard (throttle by default, `--direct=stop` stops instead), streaming
-`{"type":"directive",...}` lines as the guard acts and closing with a
-`{"type":"direct-summary",...}` — findings, the full directive audit log,
-and the analysis. Direct mode is JavaScript only, but modules and
-top-level await work: `--direct` on a `.mjs` file or a script with
-top-level await directs it (via directModule() / directAsync()).
-`--direct` combines with `--analyze`, `--scan`, and `--live`; the
-analysis and scan lines follow the direct-summary.
-
-### One engine, three languages
-
-The engine is JavaScript, but the `iroh` CLI streams its trace events as
-JSON lines — one event per line — so Python and C++ speak the same protocol
-through thin clients. And since 0.9.0, Python and C++ programs trace
-natively through that same CLI, with the same event shape — so one
-analysis pipeline works on all three languages. No rewrites, no bindings
-to compile, no second engine.
-
-```mermaid
-flowchart LR
-  JS["JavaScript program"] --> Engine["Iroh engine<br/>(Stage + listeners)"]
-  Engine --> CLI["iroh CLI<br/>JSON lines"]
-  CLI --> PY["Python client<br/>python/iroh"]
-  CLI --> CPP["C++ client<br/>cpp/iroh.hpp"]
-  Engine --> LIB["JavaScript<br/>require('iroh')"]
-```
-
-#### JavaScript — the engine itself
-
-```js
-import Iroh from "iroh";
-
-// The quick way: one call, events plus result.
-const { events, result } = Iroh.trace(code, { events: ["CALL", "IF"] });
-// For async programs: await Iroh.traceAsync(code, options).
-// Top-level await works there too: await Iroh.traceAsync("await Promise.resolve(42);").
-
-// Modules: imports, import attributes, import.meta, dynamic import().
-// Result is the live module namespace object.
-const mod = await Iroh.traceModule(`
-  import data from "./data.json" with { type: "json" };
-  export const total = data.n + 1;
-`, { filename: "./app.mjs" }); // filename: relative imports resolve against it
-// mod.result.total === data.n + 1
-
-// Decorators parse and trace — the decorator calls fire CALL events.
-const dec = Iroh.trace(`
-  function log(m, ctx) { return m; }
-  class C { @log greet() { return "hi"; } }
-  new C().greet();
-`);
-```
-// The classic way: a Stage with live listeners.
-const stage = new Iroh.Stage(code);
-stage.addListener(Iroh.CALL).on("before", e => { /* e.name, e.arguments, e.hash, e.indent */ });
-eval(stage.script);
-```
-
-TypeScript types ship in the package (`index.d.ts`) — no `@types` package
-needed. The parser runs at the newest language level Acorn supports, with
-hashbangs, RegExp `v` flags and modifiers, and `using` declarations all
-traced.
-
-#### CLI — trace any program, pipe the events anywhere
+**JavaScript** — trace a program, stream the events:
 
 ```sh
 node cli/iroh.js program.js --events CALL,IF
-cat program.js | node cli/iroh.js            # stdin works too
 ```
 
 ```json
@@ -180,272 +86,290 @@ cat program.js | node cli/iroh.js            # stdin works too
 {"type":"result","value":6}
 ```
 
-`--events ALL` is the default; `--no-result` skips the result line. Parse and
-runtime errors come back as a final `{"type":"error",...}` line with a
-non-zero exit code, and async programs are awaited before the result line.
-Modules trace too: `.mjs` files are detected automatically, or pass
-`--module` — relative imports resolve against the traced file.
+Or take the whole analysis in one document, no event flood:
 
-Python and C++ trace natively through the same command (0.9.0):
-`node cli/iroh.js program.py` or `program.cpp` — `--lang python|cpp`
-forces it, the extension infers it. `--analyze` and `--scan` work for all
-three languages; `--module` and `--direct` stay JavaScript-only. See the 0.9.0 section
-below for what each tracer sees and what it honestly cannot.
-
-#### Python — `from iroh import run` — and trace Python itself (0.9.0)
-
-```python
-from iroh import run
-
-events, result = run("[1, 2, 3].map(v => v * 2);", events=["VAR"])
-# result == [2, 4, 6]
+```sh
+node cli/iroh.js program.js --scan
 ```
 
-Stdlib only, needs Node.js and the CLI — see [`python/`](python/).
-
-The same client traces Python programs natively now:
+**Python** — trace Python itself:
 
 ```python
 from iroh import trace_python, scan_python
 
 events, _ = trace_python("def f(n):\n    return f(n-1) if n else 1\n\nf(3)\n")
-# events: FUNCTION_CALL / FUNCTION_ENTER / FUNCTION_CALL_END / FUNCTION_LEAVE,
-# with names, arguments, return values, file and line numbers
 scan = scan_python("s = 0\nfor i in range(150):\n    s += i\n")
-# scan["findings"][0]["code"] == "HOT_LOOP"
+scan["findings"][0]["code"]  # "HOT_LOOP"
 ```
 
 Or the CLI directly: `node cli/iroh.js program.py --analyze`.
+Needs python3 on PATH. Stdlib only.
 
-#### C++ — one header, no dependencies — and trace C++ itself (0.9.0)
-
-```cpp
-#include "iroh.hpp"
-
-iroh::Client client;
-auto trace = client.run("[1, 2, 3].map(v => v * 2);", {"VAR"});
-// trace.result.as_array() == [2, 4, 6]
-```
-
-Header-only C++17, with a minimal JSON parser built in — see [`cpp/`](cpp/).
-
-The same header traces C++ programs natively now, no Node needed:
-
-```cpp
-#include "iroh.hpp"
-
-iroh::native::Tracer tracer;
-auto t = tracer.trace_code("int add(int a, int b) { return a + b; }\nint main() { return add(2, 3); }\n");
-// t.events: FUNCTION_CALL / FUNCTION_ENTER / ... for main and add(int,int)
-// t.exit_code == 5
-```
-
-Or the CLI: `node cli/iroh.js program.cpp --scan`. v1 is
-function-level only — `-finstrument-functions` gives no loop/branch
-events, so a C++ trace has no `LOOP_TEST`/`IF_TEST`; the scorecard scores
-that honestly (coverage 2 of 30 categories).
-
-### Analyze the trace — and translate the program (0.8.0)
-
-A trace is data. `Iroh.analyze()` turns it into findings and a scorecard
-for the toolkit's own run — deterministic rules, no LLM, no network:
-
-```js
-const { events, result, analysis } = Iroh.analyzeTrace(`
-  let s = 0;
-  for (let i = 0; i < 150; i++) { s += i; }
-  s;
-`);
-// analysis.findings: [{ code: "HOT_LOOP", severity: "warning",
-//   message: "Loop entered 150 times (threshold 100).",
-//   evidence: { hash: 1, kind: "ForStatement", iterations: 150, tests: 151, threshold: 100 },
-//   neuron: { label: "hot", score: 0.0259 } }, ...]
-// analysis.scores.coverage: { fired: 9, total: 30, value: 0.3, ... }
-// analysis.scores.fidelity: { observedRegions, missingRegions,
-//   blindSpotStatements, totalRegions, value, knownBlindSpots }
-// analysis.scores.overhead: { events, statements, regions,
-//   eventsPerStatement, eventsPerRegion, value, denominator: "statements" }
-```
-
-Finding codes: `HOT_LOOP`, `ZERO_ITERATION_LOOP`, `DEEP_RECURSION`,
-`REPEATED_SEQUENCE`, `ONE_SIDED_BRANCH`, `THROWING_PATH` — every finding
-cites its evidence (counts, names, hashes). The neuron is a tiny
-perceptron in pure JS (`Iroh.classifyWindow(events)` returns the label,
-score, and the five feature values, so it is inspectable, not a black
-box). The CLI appends the same analysis with `--analyze`. See
-`API.md` for the full scorecard shape.
-
-The same trace evidence also drives the hybrid translation engine —
-static AST plus the runtime types, values, and branch outcomes the trace
-saw. JavaScript goes to Python or C++; Python and C++ come back to
-JavaScript (static-only by design — the reverse legs translate from
-source alone; native Python/C++ tracers exist since 0.9.0, but the
-translation legs do not use them):
-
-```js
-const { code, report } = Iroh.translate(
-  "function add(a, b) { return a + b; } console.log(add(2, 3));",
-  { to: "python" }
-);
-// code: "def add(a, b):\n    return a + b\n\nprint(add(2, 3))\n"
-// report: { ok: true, from: "javascript", to: "python", staticOnly: false,
-//   clean: [...], assumptions: [...], unsupported: [], notes: [...] }
-```
-
-Unsupported constructs are reported in `report.unsupported`, never
-silently mistranslated — the emitted code raises at that point, loudly.
-The CLI translates too: `node cli/iroh.js program.js --translate python`
-(one `{"type":"translation",...}` line, exit 1 when anything was
-unsupported), and `--from` is inferred from `.py` / `.cpp` files. The
-reverse legs stay static-only by design — native Python/C++ tracers
-exist since 0.9.0, but translation does not use them.
-
-### Trace Python and C++ natively, and scan any trace (0.9.0)
-
-Python traces with `sys.settrace` plus AST instrumentation of loops,
-branches, and `except` handlers, so the same findings fire: a Python
-hot loop analyzes to `HOT_LOOP` (150 iterations, 151 tests), a caught
-exception to `THROWING_PATH`, a deep call stack to `DEEP_RECURSION`.
-C++ traces with `-finstrument-functions` — function-level only in v1,
-names resolved by `dladdr` + `__cxa_demangle` with a `.symtab` fallback
-for local symbols (lambdas, `static` and anonymous-namespace
-functions), unresolved names carried as `null` with the raw address,
-never a faked name. Honest limits:
-Python per-assignment events fire for simple Name targets only
-(tuple targets, attributes and subscripts are blind spots, and the
-event carries the post-assignment value, unlike JS compound
-assignments, which carry the RHS), only the target file is traced,
-comprehensions/`async for`/lambdas are not loop/branch instrumented;
-C++ sees no loop/branch/line events at all, one `.cpp` file, `-O0`
-(inlined functions get no hooks). The full list is in the CHANGELOG.
-
-And the scan mode, for AI consumers: one command, one compact document,
-no event flood:
+**C++** — trace C++ itself:
 
 ```sh
-node cli/iroh.js program.py --scan
 node cli/iroh.js program.cpp --scan
-node cli/iroh.js program.js --scan
 ```
 
-```json
-{"type":"scan","vectors":{"features":{"calls":0,"depth":0,"repeat":0.9868421052631579,"imbalance":0,"mix":1,"coverage":0.0333,"events":152},"vector":[0,0,0.9868421052631579,0,1,0.0333],"names":["calls","depth","repeat","imbalance","mix","coverage"]},"findings":[{"code":"HOT_LOOP","severity":"warning","message":"Loop entered 150 times (threshold 100).","evidence":{"hash":400712668,"kind":"For","iterations":150,"tests":151,"threshold":100},"neuron":{"label":"hot","score":0.0529}}],"scores":{...},"summary":{"events":152,"findings":1,"warnings":1,"infos":0,"maxCallDepth":0,"distinctRegions":1,"language":"python","neuron":{"label":"hot","score":0.0529},"findingsTruncated":0}}
-```
+Needs g++. Function-level only: `-finstrument-functions` gives no
+loop or branch events, so a C++ trace scores 2 of 30 categories
+(CALL and FUNCTION) — that is complete for what the tracer can see,
+not 28 short.
 
-The document is `{ vectors, findings, scores, summary }`: the trace
-refracted into a deterministic feature vector (named features, all in
-[0, 1] — the 0.8.0 neuron features plus coverage), the findings with
-evidence, the scorecard with denominators on every number, and a summary
-with the language, the neuron classification, and `findingsTruncated`
-(findings are capped at 200 by default; the count of dropped ones is
-reported, never hidden). The raw events ride along only with
-`--include-events`. A 20,000-iteration loop (100k+ raw events) scans to
-under 2% of the raw JSON bytes; scanning the same program twice gives
-byte-identical output. These are FEATURE VECTORS, not LLM embeddings —
-no model, no vector DB, no new dependencies. `Iroh.scanTrace(code)`,
-`Iroh.toVector(events)`, and `Iroh.cosineSimilarity(a, b)` /
-`Iroh.euclideanDistance(a, b)` are the library forms; identical traces
-have distance exactly 0. Same schema for JS, Python, and C++.
-
-### Watch it live (0.9.0)
-
-Scan is analyze-after-the-fact. The live wire is analysis WHILE the
-program runs — an AI watches the program and gets findings the moment
-they trip:
+**Translate** a program to another language:
 
 ```sh
-node cli/iroh.js program.js --live
+node cli/iroh.js program.js --translate python
 ```
 
-```json
-{"type":"live-finding","code":"HOT_LOOP","severity":"warning","message":"Loop entered 100 times (threshold 100).","evidence":{"hash":1,"kind":"ForStatement","iterations":100,"tests":100,"threshold":100},"neuron":{"label":"hot","score":0.0251,"features":{...}},"firedAt":505}
-```
-
-The finding fired at event 505 of 763 — the loop had only run 100
-iterations when the AI was told, not 150. Then a final
-`{"type":"live-summary",...}` line carries the batch-equal findings
-(the final tally: 150 iterations), the scorecard, and the vector. The
-library form is `Iroh.liveAnalyzer(options)` with `.feed(event)` and
-`.snapshot()` / `.findings()` / `.finish()`. Two findings need the
-complete trace — `ZERO_ITERATION_LOOP` (a loop could still be entered)
-and `ONE_SIDED_BRANCH` (a later test could take the other arm) — so
-they fire at stream end with a `note` saying so, never a wrong early
-call. The fired findings' codes always equal the batch `analyze()`
-codes on the same complete trace, and the summary IS the batch
-analysis, so live vs batch agreement holds by construction. Same
-events give the same findings in the same order, twice. For Python
-and C++ the live lines print after the run, because the native tracers
-buffer their events; for JavaScript they stream as the program runs.
-
-### What you get
-
-- **Every event, live.** Calls, ifs, loops, assignments, allocations, awaits —
-  with names, values, indentation, and the hash of the exact code location.
-- **Values you can touch.** Listeners can read *and replace* arguments,
-  return values, and variables while the program runs.
-- **Modern JavaScript.** ES2022, arrows, optional chaining, nullish
-  coalescing, private fields, async/await — all traced, all tested.
-- **Three languages, one protocol.** JavaScript, Python, and C++ all consume
-  the same JSON event stream — and since 0.9.0, Python and C++ trace
-  natively (Python via `sys.settrace` + AST, C++ via
-  `-finstrument-functions`, function-level in v1), so one analysis
-  pipeline works on all three.
-- **Analysis, not just events.** Deterministic findings (hot loops, deep
-  recursion, one-sided branches, throwing paths) plus a toolkit scorecard
-  with denominators on every number — and a tiny inspectable perceptron
-  that classifies a trace window hot vs normal.
-- **Scan mode for AI.** `--scan` (or `Iroh.scanTrace()`) turns trace →
-  analyze → vector into ONE compact JSON document `{ vectors, findings,
-  scores, summary }` — bounded, deterministic, same schema in all three
-  languages. Vectors are deterministic feature vectors, not LLM
-  embeddings.
-- **Translation, both ways.** JavaScript to Python and C++, Python and C++
-  back to JavaScript — hybrid (AST + trace evidence) out of JavaScript,
-  static-only coming back, with an honest report of what translated, what
-  needed an assumption, and what could not be translated.
-- **Direct the run.** An AI director reads live findings as they fire and
-  changes the program mid-flight — set a variable, skip a call, stop the
-  run — with a full audit log of what fired, what was directed, and what
-  changed. The built-in runaway-loop guard throttles a hot loop (or stops
-  it); `node cli/iroh.js program.js --direct` runs any script under it.
-- **No surprises.** 348 tests (314 Node + 25 Python + 9 C++), `npm test` runs
-  them all, plus a TypeScript type test (`npm run test:types`). Zero runtime
-  dependencies in the engine beyond Acorn, astring, and acorn-walk.
-
-### Installation
+**Direct** a runaway loop while it runs:
 
 ```sh
-npm install iroh
+node cli/iroh.js program.js --direct
 ```
 
-Or clone and build from source:
+**Check what you are running:**
 
 ```sh
-git clone https://github.com/andyle777/IrohRedux.git
-cd IrohRedux
-npm install
-npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
-npm test            # 348 tests: 314 Node + 25 Python + 9 C++
+node cli/iroh.js --version   # version, dist hash, embedded runtime
 ```
 
-The Python client installs with `pip install -e python/`; the C++ client is
-a single header — just `#include "iroh.hpp"`.
+## What works / what doesn't
 
-### Learn more
+Honest limits, in one place.
 
-- [Getting started](//github.com/andyle777/IrohRedux/blob/master/GETTING_STARTED.md) — worked examples you can run locally.
-- [API](//github.com/andyle777/IrohRedux/blob/master/API.md) — the full listener and event reference, including `Iroh.assert` / `Iroh.log` and the `INSTR` / `CATEGORY` / `OP` label tables.
-- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, 0.7.0, 0.8.0, 0.9.0, 1.0.0, and 1.0.1.
+- **Android:** JavaScript legs only. No python3, no g++ on the
+  phone, so Python and C++ cannot run there. The app says so on
+  its status line. There is no remote-execution service in this
+  release: the Python/C++ legs cannot run on the phone at all, and
+  no laptop can run them for it yet — that is a follow-up, not a
+  feature here.
+- **Windows, Linux, macOS EXEs:** the bundled runtime is Node
+  18.5.0. The npm package requires Node >= 18, so the two agree.
+- **Python and C++ legs:** need python3 (and g++ for C++) on the
+  machine. The JavaScript legs run fully standalone.
+- **APK:** arm64 only, debug-signed (side-load only; a rebuild on
+  another machine forces an uninstall first). The bundled Node
+  is v26.13.1.
+- **Translate:** JavaScript to Python or C++, Python and C++ back
+  to JavaScript — three languages only. Template literals to
+  Python now emit concatenation, not f-strings (this patch, Fix
+  Spec 3.5 Option 1): a bool, a string literal, or a ternary of
+  strings interpolates through `__iroh_jsbool` / `str()` /
+  `__iroh_jsnum`, so the emitted Python parses on 3.9–3.12 — the
+  old emitter produced a SyntaxError on 3.9–3.11 while the report
+  still said `ok: true`. Every translate result now carries a
+  `verify` block (Fix Spec 3.7): the emitted Python is executed
+  under python3 and the result recorded (`ran: null` is not
+  `ran: true`; `stderr` verbatim when it does not run).
+- **Scores:** every coverage number is fired out of 30 — the
+  JavaScript category model, applied to every language. A C++
+  trace at 2 of 30 is complete at function level, not 28 short.
+  There is no per-language reachable denominator in 1.0.1 (that
+  came in 1.1.1). See the FOR AI section below.
+- **Trace memory:** a finished trace keeps its Stage registered
+  in this generation (the release step came in 1.1.1). In a
+  long-lived process that holds many traces, memory grows with
+  the events retained — see `docs/memory.md`.
+
+## Releases
+
+Newest first. Hashes live on the release page, not in this file.
+
+- **1.0.1 (patched, 20 Nov 2026) — this tree.** Same version,
+  patched in place: no 1.1.2, no version bump. The APK runs its
+  Node runtime from the native library directory (the old build
+  could not start on Android 10+: error=13, Permission denied).
+  The desktop EXEs are rebuilt from the 1.0.1 engine.
+  `iroh --version` prints the version, the dist hash, and the
+  runtime actually embedded. The AI bundle is regenerated from
+  the 1.0.1 engine, with a per-file hash manifest and a
+  memory-model note. 357 tests (323 Node + 25 Python + 9 C++).
+  The engine fix is in this patch: the f-string translator defect
+  is fixed (concatenation emitter + verify block) — see
+  "What works / what doesn't".
+- **1.0.1 (20 Nov 2026) — the solid base.** The AI director and
+  live code engine (trace → analyze live → direct → change →
+  trace again), plus the all-generations audit-and-patch pass:
+  every known limitation re-read and re-probed, the real bugs
+  fixed (translator number formatting, director member and scoped
+  sets, directAsync/directModule, decorated computed keys and
+  accessor fields, Python per-assignment events). 348 tests.
+  (1.0.0 was built but never released; that work shipped in 1.0.1.)
+
+## Compatibility table
+
+Dated 20 Nov 2026. "Present" means the defect is in that
+generation as shipped; "patched" means fixed in the 1.0.1 patched
+rebuild (same version, this tree). The machine-readable form is
+`generations.json` in this repo.
+
+| Defect | 1.0.1 | 1.1.0 | 1.1.1 | 1.0.1 patched |
+|---|---|---|---|---|
+| APK cannot execute its own runtime (error=13) | present | present | present | fixed (Fix B) |
+| Bool interpolation emits an unparsable f-string below 3.12 | present | present | fixed | fixed (concatenation emitter) |
+| Any interpolation containing a delimiter quote, backslash, brace or colon | present | present | present | fixed (concatenation emitter) |
+| Success reported when the artifact cannot run (no verify field) | present | present | present | fixed (report.verify) |
+| EXE bundles a Node 18.5.0 runtime while metadata claims >= 22 | not applicable (1.0.1 metadata says >= 18) | unchecked | verified | stated honestly (--version + README) |
+| AI bundle API text does not document the release | unchecked | unchecked | verified | fixed (generated from API.md + CI check) |
+| No manifest of file hashes in the AI bundle | present | present | present | fixed |
+| APK ships arm64 only, debug cert | present | present | present | present (unchanged) |
+
+## Learn more
+
+- [Getting Started](GETTING_STARTED.md) — human steps first, then
+  the machine-readable reference.
+- [API](API.md) — the full API reference, including every CLI flag.
+- [Changelog](CHANGELOG.md) — what changed, per version.
+- [Memory model](docs/memory.md) — the trace memory/state model
+  for AI consumers.
+- [Generations registry](generations.json) — the table above, as JSON.
 
 ---
 
-*IrohRedux is a fork of Felix Maier's [Iroh](https://github.com/maierfelix/Iroh)
-0.3.0 (2018), fixed and extended. The core idea is his; the 0.4.0 fixes, the
-0.5.0 CLI and polyglot clients, the 0.5.1 polish, the 0.6.0 syntax and
-modern SDK, and the 0.7.0 modules, top-level await, and decorators, and
-the 0.8.0 analysis layer and translation engine, the 0.9.0 native
-Python/C++ tracers, vector refracting, scan mode, and live wire, the
-1.0.0 AI director and live code engine, and the 1.0.1 all-generations
-audit-and-patch pass (translator number formatting, director member and
-scoped sets, directAsync/directModule, decorated computed keys and
-accessor fields, Python per-assignment events) are the fork's.*
+# FOR AI
+
+Machine-readable facts. Load this section without guessing. If a
+fact here disagrees with a prose paragraph above, this section wins
+— and the disagreement is a bug; file it.
+
+## Engine identity
+
+- Engine: IrohRedux 1.0.1 (patched in place, 20 Nov 2026).
+  No 1.1.2. No version bump. The engine is unchanged by the patch.
+- `dist/iroh-node.js` SHA-256:
+  `1a4ea7c00553c262350997eb6f93c7861f0a415d0e170b3ba68bd47280862602`
+- `iroh --version` prints `iroh 1.0.1 (engine dist iroh-node.js
+  1a4ea7c00553, runtime node v18.5.0)` inside a packaged binary
+  (runtime is the embedded Node; on npm it is the local node).
+
+## Legs and artifacts
+
+Availability per artifact. "Local" means the toolchain must exist
+on the machine (`python3` on PATH, `g++` on PATH).
+
+| Leg | npm / source | Linux / macOS / Windows EXE | Android APK |
+|---|---|---|---|
+| JavaScript | yes | yes | yes |
+| Python | yes, python3 local | yes, python3 local | no (no python3 on Android) |
+| C++ | yes, g++ local | yes, g++ local | no (no g++ on Android) |
+
+- Three traced languages only. No IrohScript, no BASIC, no
+  input synthesiser, no `capabilities`, no `doctor`, no `serve`,
+  no `node`, no `--max-events` — those are later generations.
+- EXE embedded runtime: Node 18.5.0 (pkg 5.8.1, node18 targets).
+  npm package requires Node >= 18. The two numbers agree.
+- APK: arm64 only, debug-signed, minSdk 24, targetSdk 34.
+  Node runs from `nativeLibraryDir` as `libnode.so` (bundled Node
+  v26.13.1, from the Termux build). versionCode 102.
+- Works offline — no network required. No artifact phones home,
+  checks for updates, or downloads at first run. The APK manifest
+  requests no permissions. Online availability changes nothing:
+  there is no update check to fail.
+
+## CLI flags
+
+Every flag in `iroh --help`. All of them are documented in
+`API.md`; CI fails if any flag here is missing from `API.txt`
+(the generated text form of `API.md`).
+
+- `--events ALL|CALL,IF,...` — event categories to stream
+  (default ALL). `--no-result` — skip the result line.
+- `--file <path>` — the program file (same as the positional arg).
+- `--module` — trace as an ES module (JavaScript only).
+- `--analyze` — append an analysis line after the result line.
+- `--scan` — one scan line `{ vectors, findings, scores, summary }`
+  instead of the event flood. `--include-events` — embed the raw
+  events in the scan document (needs `--scan`).
+- `--live` — stream live-finding lines as findings trip, then a
+  live-summary line.
+- `--direct[=throttle|stop]` — run under the runaway-loop guard
+  (JavaScript only). Combines with `--analyze`, `--scan`, `--live`.
+- `--translate python|cpp|javascript` — translate instead of
+  tracing. `--from python|cpp|javascript` — source language
+  (default: by file extension).
+- `--lang python|cpp|javascript` — force the tracer (default: by
+  file extension).
+- `--version` — one line: version, dist hash, embedded runtime.
+- `-h` / `--help` — usage.
+
+## JSON shapes
+
+Ask for JSON. Never parse console prose; it is for humans and will
+change. Event streams are JSON lines, one object per line, with the
+`language` field always set.
+
+- Event line:
+  `{"type":"event","event":"FUNCTION_CALL","category":"CALL",
+  "trigger":"before","hash":11,"indent":1,"name":"factorial",
+  "arguments":[3],"external":false}`
+  followed by a result line `{"type":"result","value":6}` or an
+  error line `{"type":"error","name":...,"message":...}`.
+- `--scan` result:
+  `{vectors, findings, scores, summary}`. `vectors` carries
+  `features {calls, depth, repeat, imbalance, mix, coverage,
+  events}`, `vector[6]`, `names[6]`. `findings` is a list of
+  `{code, severity, message, evidence, neuron}`. `summary` carries
+  `{events, findings, warnings, language, infos,
+  neuron {label, score}, maxCallDepth, distinctRegions,
+  findingsTruncated}`. There is NO `unclosedFrames` field in
+  1.0.1 (that came in 1.1.1) — do not look for it.
+- `--translate` result (one line):
+  `{type:"translation", from, to, code, report}`. `report` carries
+  `{ok, from, to, staticOnly, clean, assumptions, unsupported,
+  notes, verify}`. Template literals to Python emit concatenation,
+  not f-strings; `verify` records the execution check (`ran: null`
+  is not `ran: true`).
+- `--live` lines: `live-finding` (with `firedAt`) as findings trip,
+  then `live-summary` (batch-equal findings, scores, vectors).
+- `--direct` lines: `directive` as the guard acts, then
+  `direct-summary` (findings, directive audit log, analysis).
+
+## Coverage denominators
+
+Coverage is fired / 30 for every language in 1.0.1 — the
+JavaScript category model, applied to all tracers. There is no
+`reachable` field in 1.0.1 (per-tracer reachable denominators
+came in 1.1.1). A C++ trace at 2 of 30 is complete at function
+level, not 28 short: the tracer can only fire CALL and FUNCTION.
+A Python trace fires ASSIGN, CATCH, CALL, FUNCTION, IF, LOOP.
+Do not read a missing `reachable` as 30 and do not read it as
+zero — the field does not exist in this generation; the
+denominator is always 30 and the honest reading is "of the
+JavaScript model".
+
+## Findings cap
+
+- Findings are capped at 200. `summary.findingsTruncated` is the
+  dropped count. If `findingsTruncated > 0`, the finding list is a
+  prefix, not the whole set — say so when you report it. Any score
+  derived from the list is a score over a prefix.
+
+## Memory model
+
+- A finished trace does NOT release its Stage in 1.0.1: the Stage
+  stays registered in `Iroh.stages` and its listeners keep the
+  trace alive. There is no `Stage.release` and no
+  `releaseTraceRun` in this generation (those came in 1.1.1).
+  In a long-lived process, memory grows with the events retained.
+- Full model: `docs/memory.md` in this repo, `txt/memory.md` in
+  the AI bundle.
+
+## Contract (six lines)
+
+1. Ask for JSON. Never parse console prose; it is for humans and
+   will change.
+2. `--scan` returns `{vectors, findings, scores, summary}`.
+   Findings are capped at 200; when `summary.findingsTruncated`
+   > 0 your list is a prefix, say so when you report.
+3. Every coverage number is fired out of 30 in 1.0.1 — the
+   JavaScript model, for every language. A C++ trace at 2 of 30
+   is complete at function level, not 28 short.
+4. Event streams are JSON lines, one object per event, `language`
+   field always set.
+5. Translate results carry a `verify` block: the emitted Python
+   is executed under python3 and the result recorded. `ran: null`
+   means not attempted, never success.
+6. Nothing in the report is a measurement of your program's
+   correctness. It is a measurement of what ran. Say which one
+   you have when you quote it.
