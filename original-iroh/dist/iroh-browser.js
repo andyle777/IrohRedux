@@ -735,7 +735,7 @@ var pp = Parser.prototype;
 
 // ## Parser utilities
 
-var literal = /^(?:'((?:[^']|\.)*)'|"((?:[^"]|\.)*)"|;)/;
+var literal = /^(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"|;)/;
 pp.strictDirective = function(start) {
   var this$1 = this;
 
