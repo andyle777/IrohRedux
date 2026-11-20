@@ -157,6 +157,7 @@ function printUsage() {
     "       iroh <file.js> --translate python|cpp [--from javascript]\n" +
     "       iroh <file.py|.cpp> --translate javascript [--from python|cpp]\n" +
     "       iroh <file.js> --direct[=throttle|stop]\n" +
+    "       iroh --version\n" +
     "Events are streamed as JSON lines on stdout, then a result line.\n" +
     "Use --events ALL (default) or a comma list of categories, e.g. CALL.\n" +
     ".mjs files (or --module) run as ES modules through Iroh.traceModule();\n" +
@@ -380,6 +381,30 @@ async function main() {
       fromArg = arg.slice("--from=".length);
     } else if (arg === "--help" || arg === "-h") {
       printUsage();
+      return;
+    } else if (arg === "--version") {
+      // 1.0.1 patch: `iroh --version` — the one-line self-report every
+      // artifact should print (Fix Spec 6.7): engine version, the dist
+      // SHA actually in this binary, and the runtime actually running
+      // it. In a pkg binary process.version is the embedded Node 18.5.0,
+      // not the floor in engines.node — that is the point. package.json
+      // is require()d, so pkg includes it in the snapshot; if it cannot
+      // be read the version prints as "unknown" rather than failing.
+      let version = "unknown";
+      try {
+        version = require("../package.json").version || "unknown";
+      } catch (e) {
+        // Keep going with "unknown".
+      }
+      let distSha = "missing";
+      try {
+        let crypto = require("node:crypto");
+        let bytes = fs.readFileSync(path.join(__dirname, "..", "dist", "iroh-node.js"));
+        distSha = crypto.createHash("sha256").update(bytes).digest("hex").slice(0, 12);
+      } catch (e) {
+        // Keep going with "missing".
+      }
+      process.stdout.write("iroh " + version + " (engine dist iroh-node.js " + distSha + ", runtime node " + process.version + ")\n");
       return;
     } else if (arg.startsWith("--")) {
       process.stderr.write("Unknown option: " + arg + "\n");
