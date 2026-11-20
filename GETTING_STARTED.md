@@ -1,3 +1,35 @@
+# FOR HUMANS
+
+This guide teaches you to run IrohRedux, step by step: trace a
+program, analyze the trace, translate it, watch it live, direct
+it, and check the box it runs on. If you only want the facts
+(flags, JSON shapes, reachable categories), skip to the
+[FOR AI](#for-ai) section at the end — the same file, machine
+first.
+
+## Install
+
+Download from the [Releases page](https://github.com/andyle777/IrohRedux/releases).
+No Node install needed for the binaries.
+
+- **Windows, Linux, macOS:** the EXE for your system. Download,
+  run. The EXE embeds its own Node runtime, version 18.5.0.
+- **Android:** the APK. Install it on your phone. JavaScript legs
+  only — there is no python3 on Android.
+
+Or from source (needs Node >= 22):
+
+```sh
+git clone https://github.com/andyle777/IrohRedux.git
+cd IrohRedux
+npm install
+npm run dist
+npm test
+```
+
+Works offline — no network required. Nothing phones home, checks
+for updates, or downloads at first run.
+
 ### Getting started
 
 The idea behind Iroh is simple. You attach listeners to your code and as soon as the specified code part is reached, it will fire. You can listen for calls, returns, loops or any other supported code type.
@@ -102,6 +134,18 @@ anything was unsupported), and `--from` is inferred from `.py` / `.cpp` /
 `.iroh` / `.bas` files. Direct legs run out of JavaScript to every other
 language; anything else goes two-hop via JavaScript and the report says
 so.
+
+Two 1.1.1-patch facts about translate. First, template literals to
+Python now emit concatenation, not f-strings: `` `a=${"lit"}` `` becomes
+`("a=" + "lit")`, so the emitted code parses and runs on Python 3.9–3.12
+(the old f-string output was a SyntaxError below 3.12 while the report
+said `ok: true`). Second, every translate result carries a `verify`
+block: `{attempted, ran, interpreter, exit}` — for the Python leg the
+emitted code is actually executed under `python3` (10 s cap) and `ran`
+is true only when it exited 0; when it fails, `stderr` carries the
+interpreter's output verbatim. `ran: null` means not attempted, never
+success. Other legs record `attempted: false` with a reason. See
+`API.md` for the full shape.
 
 ## Trace Python and C++ natively (0.9.0) — and IrohScript and BASIC (1.1.0)
 
@@ -328,12 +372,12 @@ certified).
 
 ```sh
 node cli/iroh.js doctor
-# Last test run: 2026-11-20T06:09:19.603Z on Node v24.22.1
-#   node: ran 435, failed 0, skipped 0
+# Last test run: 2026-11-20T08:22:43.349Z on Node v24.22.1
+#   node: ran 452, failed 0, skipped 0
 #   python: ran 25, failed 0, skipped 0
 #   ...
 # Toolchains: node v24.22.1, python3 3.12.3, g++ ...
-# dist: iroh-node.js 5eb030dd3a2d, ...
+# dist: iroh-node.js 3650052798f7, ...
 ```
 
 `iroh doctor` prints the last recorded test run (from
@@ -351,6 +395,40 @@ and diffs the events and result as JSON, printing
 `{"type":"verify","ok":true,"events":N}` and exiting 1 on
 disagreement (JavaScript only; it does not combine with `--translate`,
 `--direct`, or `--synthesize`).
+
+## Phone as server, laptop as node (1.1.1 patched)
+
+The APK starts a local server on your phone after setup, and shows
+its address on the status line:
+
+```
+Ready — Node v26.13.1 · IrohRedux 1.1.1 · JS legs only (no python3 on Android)
+· Server on 192.168.1.5:8471
+```
+
+A laptop on the same Wi-Fi joins it and runs the legs the phone
+cannot:
+
+```sh
+iroh node --server 192.168.1.5:8471
+```
+
+The phone runs the JavaScript legs locally and delegates Python,
+C++, IrohScript and BASIC to the laptop. Results come back with
+one extra field, `ranOn`, naming the machine that ran them. If no
+connected node can run a leg, the server says so (HTTP 503), never
+a faked result. Everything is on the local network only — no
+internet is needed or used. To try it on one box, start a server
+that only runs JavaScript (like the phone) and a node next to it:
+
+```sh
+iroh serve --port 8471 --host 127.0.0.1 --local-legs javascript
+iroh node --server 127.0.0.1:8471
+```
+
+Then `curl http://127.0.0.1:8471/health` shows the server, its
+dist hash, and the registered node. Full protocol, endpoints, and
+the honest limits: `SERVER.md`.
 
 The rest of this guide uses the classic Stage API, which is still fully
 supported and gives you live listeners that can change values mid-flight.
@@ -507,3 +585,50 @@ After the program finished, your console should come up with something like this
 With each branch deepness level we move in by 1 blank sign.
 
 You may noticed the first blank sign which is caused by ``Iroh.PROGRAM`` - when entering a program, the branch level increments by one and after the program is finished it decrements.
+
+---
+
+# FOR AI
+
+Machine-readable facts. Load this section without guessing. If a
+fact here disagrees with a prose paragraph above, this section wins
+— and the disagreement is a bug; file it.
+
+- Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
+  1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
+  `3650052798f7d049a1e81ddbbbf416fcc775e9bb05e0d28ee2bd42551511998a`.
+- Ask for JSON. Never parse console prose; it is for humans and
+  will change. Event streams are JSON lines, one object per line,
+  with the `language` field always set.
+- `--scan` returns `{vectors, findings, scores, summary}`.
+  Findings are capped at 200; when `summary.findingsTruncated`
+  > 0 your list is a prefix, say so when you report.
+- Every coverage number carries its own denominator. Use
+  `reachable` when present. Missing is not 30 and not zero; if
+  you cannot find it, report the score as unnormalised.
+  - javascript: 30 (all categories).
+  - python: 6 (ASSIGN, CATCH, CALL, FUNCTION, IF, LOOP).
+  - cpp: 2 (CALL, FUNCTION).
+  - irohscript: 4 (ASSIGN, CALL, FUNCTION, IF).
+  - basic: 5 (ASSIGN, CALL, FUNCTION, IF, LOOP).
+- Translate results carry a `verify` block:
+  `{attempted, ran, interpreter, exit}` plus `stderr` when `ran`
+  is false or `reason` when `attempted` is false. `ran: null`
+  means not attempted, not success. Only the Python leg is
+  executed (under `python3`, 10 s cap).
+- Template literals to Python emit concatenation, not f-strings:
+  `` `a=${x}` `` becomes `("a=" + str(x))`. The old f-string
+  output was a SyntaxError on Python 3.9–3.11 while the report
+  said `ok: true`.
+- Server / node: `iroh serve` (default port 8471, local network
+  only) serves `/trace`, `/analyze`, `/scan`, `/translate`,
+  `/capabilities`, `/health` as JSON. Every result is the engine's
+  own shape plus `ranOn` ("local" or the node id). A leg nobody
+  can run is HTTP 503, never a faked result. Full protocol:
+  `SERVER.md`.
+- Works offline — no network required. No artifact phones home,
+  checks for updates, or downloads at first run.
+- Full machine-readable reference: `API.md` (FOR AI section) and
+  `README.md` (FOR AI section). The AI bundle regenerates its
+  `txt/` files from the same markdown sources, so they cannot
+  drift.
