@@ -1,0 +1,5 @@
+IF FALSE
+    PRINT "never"
+END IF
+
+PRINT "alive"

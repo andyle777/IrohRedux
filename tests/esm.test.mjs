@@ -13,5 +13,5 @@ test("ESM import resolves to the same SDK", () => {
   );
   assert.equal(result, 24);
   assert.ok(events.length > 0);
-  assert.equal(Iroh.VERSION, "1.0.1");
+  assert.equal(Iroh.VERSION, "1.1.0");
 });

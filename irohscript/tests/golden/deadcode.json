@@ -1,0 +1,59 @@
+{
+  "ast": {
+    "node": "Program",
+    "statements": [
+      {
+        "cond": {
+          "node": "Literal",
+          "type": "Bool",
+          "value": false
+        },
+        "else": [],
+        "node": "If",
+        "then": [
+          {
+            "node": "Print",
+            "value": {
+              "node": "Literal",
+              "type": "String",
+              "value": "never"
+            }
+          }
+        ]
+      },
+      {
+        "node": "Print",
+        "value": {
+          "node": "Literal",
+          "type": "String",
+          "value": "alive"
+        }
+      }
+    ]
+  },
+  "ir": [
+    {
+      "op": "PRINT",
+      "value": {
+        "op": "LIT",
+        "type": "String",
+        "value": "alive"
+      }
+    }
+  ],
+  "irx": {
+    "program": [
+      {
+        "opcode": "PRINT",
+        "value": {
+          "op": "LIT",
+          "type": "String",
+          "value": "alive"
+        },
+        "version": "3.0"
+      }
+    ],
+    "version": "3.0"
+  },
+  "source": "IF FALSE\n PRINT \"never\"\nEND IF\nPRINT \"alive\""
+}

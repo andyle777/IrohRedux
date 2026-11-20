@@ -1,0 +1,5 @@
+10 GOSUB 100
+20 PRINT "back"
+30 END
+100 PRINT "in the subroutine"
+110 RETURN

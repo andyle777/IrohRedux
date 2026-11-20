@@ -1,0 +1,142 @@
+{
+  "ast": {
+    "node": "Program",
+    "statements": [
+      {
+        "body": [
+          {
+            "node": "Intent",
+            "value": {
+              "left": {
+                "node": "Literal",
+                "type": "String",
+                "value": "protect "
+              },
+              "node": "BinOp",
+              "op": "ADD",
+              "right": {
+                "name": "target",
+                "node": "Name"
+              }
+            }
+          }
+        ],
+        "name": "Protect",
+        "node": "FunctionDef",
+        "params": [
+          {
+            "name": "target",
+            "type": null
+          }
+        ]
+      },
+      {
+        "args": [
+          {
+            "node": "Literal",
+            "type": "String",
+            "value": "archive"
+          }
+        ],
+        "callee": {
+          "name": "Protect",
+          "node": "Name"
+        },
+        "node": "Call"
+      }
+    ]
+  },
+  "ir": [
+    {
+      "body": [
+        {
+          "op": "INTENT",
+          "value": {
+            "left": {
+              "op": "LIT",
+              "type": "String",
+              "value": "protect "
+            },
+            "op": "ADD",
+            "right": {
+              "name": "target",
+              "op": "LOAD"
+            }
+          }
+        }
+      ],
+      "name": "Protect",
+      "op": "FUNCDEF",
+      "params": [
+        {
+          "name": "target",
+          "type": null
+        }
+      ]
+    },
+    {
+      "op": "CALLSTMT",
+      "value": {
+        "args": [
+          {
+            "op": "LIT",
+            "type": "String",
+            "value": "archive"
+          }
+        ],
+        "name": "Protect",
+        "op": "CALL"
+      }
+    }
+  ],
+  "irx": {
+    "program": [
+      {
+        "body": [
+          {
+            "opcode": "INTENT",
+            "value": {
+              "left": {
+                "op": "LIT",
+                "type": "String",
+                "value": "protect "
+              },
+              "op": "ADD",
+              "right": {
+                "name": "target",
+                "op": "LOAD"
+              }
+            },
+            "version": "3.0"
+          }
+        ],
+        "name": "Protect",
+        "opcode": "FUNCDEF",
+        "params": [
+          {
+            "name": "target",
+            "type": null
+          }
+        ],
+        "version": "3.0"
+      },
+      {
+        "opcode": "CALLSTMT",
+        "value": {
+          "args": [
+            {
+              "op": "LIT",
+              "type": "String",
+              "value": "archive"
+            }
+          ],
+          "name": "Protect",
+          "op": "CALL"
+        },
+        "version": "3.0"
+      }
+    ],
+    "version": "3.0"
+  },
+  "source": "FUNCTION Protect(target)\n INTENT \"protect \" + target\nEND FUNCTION\nProtect(\"archive\")"
+}

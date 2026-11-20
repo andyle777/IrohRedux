@@ -191,7 +191,9 @@ test("a function never called in the trace needs a type hint for C++", () => {
 test("translate() rejects bad targets and same-language translation", () => {
   assert.throws(() => Iroh.translate("1;", { to: "rust" }), /unknown target/);
   assert.throws(() => Iroh.translate("1;", { to: "javascript" }), /both 'javascript'/);
-  assert.throws(() => Iroh.translate("x = 1", { from: "python", to: "cpp" }), /only JavaScript is a target/);
+  // Two-hop via JavaScript: Python -> C++ no longer throws (it went
+  // through JavaScript in 1.0.1 part 2); the same-source rule still does.
+  assert.equal(Iroh.translate("x = 1", { from: "python", to: "cpp" }).report.from, "python");
   assert.throws(() => Iroh.translate("1;", { from: "ruby", to: "javascript" }), /unknown source/);
 });
 
@@ -462,4 +464,36 @@ test("C++ refuses a function whose return type differs across calls", () => {
   );
   assert.equal(out.report.ok, false);
   assert.match(out.report.unsupported[0].message, /differs across calls/);
+});
+
+test("JS -> C++ emits <cmath> exactly once when Math and number printing combine", () => {
+  // A program that both uses Math (needs.cmath) and prints a Number
+  // (needs.jsnum, whose helper also needs <cmath>) used to get the
+  // include twice. Duplicate includes are harmless in C++, but the
+  // emitted header should still say it once.
+  let r = Iroh.translate("let x = Math.sqrt(2); console.log(x); console.log(1.5);", { to: "cpp" });
+  assert.equal(r.report.ok, true);
+  assert.equal((r.code.match(/#include <cmath>/g) || []).length, 1);
+});
+
+test("process.exit translates as program end: sys.exit in Python, std::exit in C++, END in BASIC", () => {
+  let js = "let x = 1;\nconsole.log(x);\nprocess.exit(0);";
+  let py = Iroh.translate(js, { to: "python" });
+  assert.equal(py.report.ok, true);
+  assert.match(py.code, /import sys/);
+  assert.match(py.code, /sys\.exit\(0\)/);
+  let cpp = Iroh.translate(js, { to: "cpp" });
+  assert.equal(cpp.report.ok, true);
+  assert.match(cpp.code, /#include <cstdlib>/);
+  assert.match(cpp.code, /std::exit\(0\)/);
+  let bas = Iroh.translate(js, { to: "basic" });
+  assert.equal(bas.report.ok, true);
+  assert.ok(bas.code.split("\n").includes("END"));
+  // The evidence trace runs the program in-process and keeps the
+  // evidence gathered before the exit: the call's types still come
+  // from the trace, not from static inference.
+  let typed = Iroh.translate("function add(a, b) { return a + b; }\nconsole.log(add(2, 3));\nprocess.exit(0);", { to: "cpp" });
+  assert.equal(typed.report.ok, true);
+  assert.match(typed.code, /int add\(int a, int b\)/);
+  assert.ok(typed.report.assumptions.some((a) => a.what.includes("taken from the trace")));
 });

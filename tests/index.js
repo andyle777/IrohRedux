@@ -43,9 +43,21 @@
 //                             throttles or stops, and the CLI --direct
 //                             flag on JS (Python/C++ and modules are
 //                             rejected).
+//   tests/irohscript.test.js — the 1.0.1-rework tracers: IrohScript
+//                             (IRX interpreter hooks) and BASIC (a
+//                             small dedicated interpreter) through
+//                             the CLI, with Iroh.analyze() proving
+//                             the cross-language findings.
+//   tests/synth.test.js      — the input synthesiser: concrete inputs
+//                             that drive a program down each branch, on
+//                             the live wire, and the CLI --synthesize
+//                             flag (with --live streaming).
 //   tests/esm.test.mjs      — ESM import of the package itself, through
 //                             the package.json "exports" map.
 //   python/tests/           — the Python client (unittest), needs python3.
+//   irohscript/tests/       — the IrohScript bootstrap + the
+//                             IrohScript/BASIC tracers (unittest),
+//                             needs python3, run from irohscript/.
 //   cpp/test_client.cpp     — the C++ client, needs g++.
 //   npm test
 // The TypeScript type test (tests/types.ts) is separate: `npm run test:types`.
@@ -62,12 +74,16 @@ function has(cmd) {
 }
 
 execSync(
-  "node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js tests/modern.test.js tests/trace.test.js tests/modules.test.js tests/decorators.test.js tests/analyze.test.js tests/translate.test.js tests/native.test.js tests/vectors.test.js tests/scan.test.js tests/live.test.js tests/direct.test.js tests/esm.test.mjs",
+  "node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js tests/modern.test.js tests/trace.test.js tests/modules.test.js tests/decorators.test.js tests/analyze.test.js tests/translate.test.js tests/translate-irohscript.test.js tests/irohscript-codegen.test.js tests/native.test.js tests/vectors.test.js tests/scan.test.js tests/live.test.js tests/direct.test.js tests/irohscript.test.js tests/synth.test.js tests/determinism.test.js tests/esm.test.mjs",
   { stdio: "inherit" }
 );
 
 if (has("python3")) {
   execSync("python3 -m unittest discover -s python/tests -v", { stdio: "inherit" });
+  // The IrohScript bootstrap and its tracers run from irohscript/
+  // (their tests import the `src` package, like the standalone
+  // language home does).
+  execSync("python3 -m unittest discover -s tests -v", { stdio: "inherit", cwd: "irohscript" });
 } else {
   console.log("Skipping Python tests: python3 not found.");
 }

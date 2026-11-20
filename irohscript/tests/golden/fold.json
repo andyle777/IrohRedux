@@ -1,0 +1,75 @@
+{
+  "ast": {
+    "node": "Program",
+    "statements": [
+      {
+        "name": "X",
+        "node": "Let",
+        "type": null,
+        "value": {
+          "left": {
+            "node": "Literal",
+            "type": "Int",
+            "value": 10
+          },
+          "node": "BinOp",
+          "op": "ADD",
+          "right": {
+            "node": "Literal",
+            "type": "Int",
+            "value": 20
+          }
+        }
+      },
+      {
+        "node": "Print",
+        "value": {
+          "name": "X",
+          "node": "Name"
+        }
+      }
+    ]
+  },
+  "ir": [
+    {
+      "op": "SET",
+      "target": "X",
+      "value": {
+        "op": "LIT",
+        "type": "Int",
+        "value": 30
+      }
+    },
+    {
+      "op": "PRINT",
+      "value": {
+        "name": "X",
+        "op": "LOAD"
+      }
+    }
+  ],
+  "irx": {
+    "program": [
+      {
+        "opcode": "SET",
+        "register": "X",
+        "value": {
+          "op": "LIT",
+          "type": "Int",
+          "value": 30
+        },
+        "version": "3.0"
+      },
+      {
+        "opcode": "PRINT",
+        "value": {
+          "name": "X",
+          "op": "LOAD"
+        },
+        "version": "3.0"
+      }
+    ],
+    "version": "3.0"
+  },
+  "source": "LET X = 10 + 20\nPRINT X"
+}

@@ -1,0 +1,5 @@
+10 LET S = 0
+20 FOR I = 1 TO 150
+30 S = S + I
+40 NEXT I
+50 PRINT S

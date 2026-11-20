@@ -1,6 +1,17 @@
 // Tiny neuron layer for IrohRedux 0.8.0 — a single perceptron over
 // trace-window features, pure JavaScript, no dependencies.
 //
+// The scoring core (the dot product and the label) is IrohScript,
+// compiled to JavaScript: irohscript/core/perceptron.iroh ->
+// src/neurons-irohscript.js (regenerate with
+// `npm run codegen:irohscript`). What stays here: feature extraction
+// (it walks the event stream with a set — IrohScript 3.0 has no
+// bounded loop and no dictionary yet), training (it loops over
+// samples), and the four-decimal rounding, which is a presentation
+// rule of this module, not the neuron's math.
+
+import { PredictScore, PredictLabel, Features, Weights } from "./neurons-irohscript.js";
+//
 // The perceptron answers one question: is this trace window "hot"
 // (a busy, repetitive, deeply-nested run) or "normal"? It is a
 // heuristic, not a verdict — every classification ships with its
@@ -101,11 +112,26 @@ export function createPerceptron(weights, bias) {
   let b = bias === void 0 ? DEFAULT_BIAS : bias;
   function predict(features) {
     let x = Array.isArray(features) ? features : featuresToArray(features);
-    let score = b;
-    for (let jj = 0; jj < 5; ++jj) score += w[jj] * (x[jj] || 0);
-    // Round the score for stable, readable output.
-    score = Math.round(score * 10000) / 10000;
-    return { score: score, label: score >= 0 ? "hot" : "normal" };
+    // The scoring core is IrohScript, compiled to JavaScript
+    // (irohscript/core/perceptron.iroh -> src/neurons-irohscript.js).
+    // The label is read off the rounded score, exactly as before:
+    // Predict's own label (from the raw score) is not used here, so a
+    // raw -0.00001 still rounds to -0 and reads "hot", as it always did.
+    let f = Features();
+    f.calls = x[0] || 0;
+    f.depth = x[1] || 0;
+    f.repeat = x[2] || 0;
+    f.imbalance = x[3] || 0;
+    f.mix = x[4] || 0;
+    let ww = Weights();
+    ww.w0 = w[0];
+    ww.w1 = w[1];
+    ww.w2 = w[2];
+    ww.w3 = w[3];
+    ww.w4 = w[4];
+    ww.bias = b;
+    let score = Math.round(PredictScore(f, ww) * 10000) / 10000;
+    return { score: score, label: PredictLabel(score) };
   }
   function train(samples, epochs, learningRate) {
     epochs = epochs === void 0 ? 100 : epochs;

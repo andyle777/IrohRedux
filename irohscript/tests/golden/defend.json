@@ -1,0 +1,102 @@
+{
+  "ast": {
+    "node": "Program",
+    "statements": [
+      {
+        "name": "THREAT",
+        "node": "Let",
+        "type": "Bool",
+        "value": {
+          "node": "Literal",
+          "type": "Bool",
+          "value": true
+        }
+      },
+      {
+        "cond": {
+          "name": "THREAT",
+          "node": "Name"
+        },
+        "else": [],
+        "node": "If",
+        "then": [
+          {
+            "node": "Print",
+            "value": {
+              "node": "Literal",
+              "type": "String",
+              "value": "Defend the archive."
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "ir": [
+    {
+      "op": "SET",
+      "target": "THREAT",
+      "type": "Bool",
+      "value": {
+        "op": "LIT",
+        "type": "Bool",
+        "value": true
+      }
+    },
+    {
+      "cond": {
+        "name": "THREAT",
+        "op": "LOAD"
+      },
+      "else": [],
+      "op": "IF",
+      "then": [
+        {
+          "op": "PRINT",
+          "value": {
+            "op": "LIT",
+            "type": "String",
+            "value": "Defend the archive."
+          }
+        }
+      ]
+    }
+  ],
+  "irx": {
+    "program": [
+      {
+        "opcode": "SET",
+        "register": "THREAT",
+        "type": "Bool",
+        "value": {
+          "op": "LIT",
+          "type": "Bool",
+          "value": true
+        },
+        "version": "3.0"
+      },
+      {
+        "cond": {
+          "name": "THREAT",
+          "op": "LOAD"
+        },
+        "else": [],
+        "opcode": "IF",
+        "then": [
+          {
+            "opcode": "PRINT",
+            "value": {
+              "op": "LIT",
+              "type": "String",
+              "value": "Defend the archive."
+            },
+            "version": "3.0"
+          }
+        ],
+        "version": "3.0"
+      }
+    ],
+    "version": "3.0"
+  },
+  "source": "LET THREAT : Bool = TRUE\nIF THREAT\n PRINT \"Defend the archive.\"\nEND IF"
+}

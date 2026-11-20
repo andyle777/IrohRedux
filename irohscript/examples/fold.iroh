@@ -1,0 +1,3 @@
+LET X = 10 + 20
+
+PRINT X

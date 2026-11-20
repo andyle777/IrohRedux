@@ -1,0 +1,3 @@
+LET enemy : Bool = TRUE
+
+enemy -> defend

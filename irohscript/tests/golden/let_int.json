@@ -1,0 +1,46 @@
+{
+  "ast": {
+    "node": "Program",
+    "statements": [
+      {
+        "name": "X",
+        "node": "Let",
+        "type": "Int",
+        "value": {
+          "node": "Literal",
+          "type": "Int",
+          "value": 10
+        }
+      }
+    ]
+  },
+  "ir": [
+    {
+      "op": "SET",
+      "target": "X",
+      "type": "Int",
+      "value": {
+        "op": "LIT",
+        "type": "Int",
+        "value": 10
+      }
+    }
+  ],
+  "irx": {
+    "program": [
+      {
+        "opcode": "SET",
+        "register": "X",
+        "type": "Int",
+        "value": {
+          "op": "LIT",
+          "type": "Int",
+          "value": 10
+        },
+        "version": "3.0"
+      }
+    ],
+    "version": "3.0"
+  },
+  "source": "LET X : Int = 10"
+}

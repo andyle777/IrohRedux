@@ -1,0 +1,44 @@
+{
+  "ast": {
+    "node": "Program",
+    "statements": [
+      {
+        "name": "IDENTITY_ROOT",
+        "node": "Const",
+        "type": null,
+        "value": {
+          "node": "Literal",
+          "type": "String",
+          "value": "AETHER-001"
+        }
+      }
+    ]
+  },
+  "ir": [
+    {
+      "op": "CONST",
+      "target": "IDENTITY_ROOT",
+      "value": {
+        "op": "LIT",
+        "type": "String",
+        "value": "AETHER-001"
+      }
+    }
+  ],
+  "irx": {
+    "program": [
+      {
+        "opcode": "CONST",
+        "register": "IDENTITY_ROOT",
+        "value": {
+          "op": "LIT",
+          "type": "String",
+          "value": "AETHER-001"
+        },
+        "version": "3.0"
+      }
+    ],
+    "version": "3.0"
+  },
+  "source": "CONST IDENTITY_ROOT = \"AETHER-001\""
+}

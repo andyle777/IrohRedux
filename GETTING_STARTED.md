@@ -99,15 +99,18 @@ too: `node cli/iroh.js program.js --translate python` (exit 1 when
 anything was unsupported), and `--from` is inferred from `.py` / `.cpp`
 files.
 
-## Trace Python and C++ natively (0.9.0)
+## Trace Python and C++ natively (0.9.0) — and IrohScript and BASIC (1.0.1 rework)
 
 ```sh
 node cli/iroh.js program.py --analyze
 node cli/iroh.js program.cpp --analyze
+node cli/iroh.js program.iroh --analyze
+node cli/iroh.js program.bas --analyze
 ```
 
-`--lang python|cpp|javascript` forces the language; the extension
-infers it (`.py` → python, `.cpp/.cc/.cxx` → cpp). The events are the
+`--lang python|cpp|javascript|irohscript|basic` forces the language; the extension
+infers it (`.py` → python, `.cpp/.cc/.cxx` → cpp, `.iroh` → irohscript,
+`.bas` → basic). The events are the
 same JSONL shape as JavaScript traces, so `Iroh.analyze()` works on them
 unchanged — a Python hot loop analyzes to `HOT_LOOP` (150 iterations,
 151 tests), a C++ deep recursion to `DEEP_RECURSION` (maxDepth 31,
@@ -128,6 +131,27 @@ event carries the post-assignment value, unlike JS compound
 assignments, which carry the RHS), only the target file is traced,
 comprehensions/`async for`/lambdas are not loop/branch instrumented,
 single-threaded.
+
+IrohScript (stdlib only, `irohscript/src/tracer.py`): hooks in the IRX
+interpreter — function calls (arguments, return, depth), `IF` tests
+(`IF_TEST`), assignments (`ASSIGN`). A one-sided branch analyzes to
+`ONE_SIDED_BRANCH`, a 25-deep recursion to `DEEP_RECURSION`. Honest
+limits: `LOOP` has no defined exit rule in the spec, so executing one
+is an error, not a trace — `HOT_LOOP` / `ZERO_ITERATION_LOOP` can never
+fire for IrohScript until that rule is decided; `INTENT` has no event
+category; a call that raises has no `CALL_END` / `LEAVE`.
+
+BASIC (stdlib only, `irohscript/src/basic.py` + `src/basic_trace.py`):
+a small dedicated interpreter — `FOR`/`NEXT` loops (`LOOP_TEST` /
+`LOOP_ENTER`), `IF` tests, `GOSUB` subroutines (as calls named
+`gosub@<line>`), assignments, `INPUT`. A 150-iteration `FOR` loop
+analyzes to `HOT_LOOP` (150 iterations, 151 tests), a never-entered one
+to `ZERO_ITERATION_LOOP`. Honest limits: `GOTO` has no event category,
+so `GOTO` loops are invisible in the trace; `DIM` and array reads have
+no events. The v1 subset is LET, PRINT, IF/THEN/ELSE, FOR/NEXT, GOTO,
+GOSUB/RETURN, INPUT, DIM/arrays, END/STOP — anything else (DATA/READ,
+WHILE/WEND, DEF FN, built-in functions) is a clear error naming the
+construct.
 
 C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
 `-finstrument-functions -rdynamic -O0` and linked against the runtime

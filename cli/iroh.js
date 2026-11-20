@@ -10,16 +10,23 @@
 //   cat program.js | node cli/iroh.js [--events CALL]
 //   node cli/iroh.js program.py [--lang python]
 //   node cli/iroh.js program.cpp [--lang cpp]
+//   node cli/iroh.js program.iroh [--lang irohscript]
+//   node cli/iroh.js program.bas [--lang basic]
 //   node cli/iroh.js program.js --analyze
 //   node cli/iroh.js program.py --scan
+//   node cli/iroh.js program.iroh --analyze
+//   node cli/iroh.js program.bas --live
 //   node cli/iroh.js program.js --live
 //   node cli/iroh.js program.js --direct
 //   node cli/iroh.js program.js --direct=stop
+//   node cli/iroh.js program.js --synthesize --entry classify --seeds '[[5]]'
+//   node cli/iroh.js program.js --synthesize --live --entry hot --seeds '[[150]]'
 //   node cli/iroh.js program.js --translate python
 //   node cli/iroh.js program.py --translate javascript
 //
-// The language is --lang python|cpp|javascript, or inferred from the
-// file extension (.py -> python, .cpp/.cc/.cxx -> cpp, anything else ->
+// The language is --lang python|cpp|javascript|irohscript|basic, or
+// inferred from the file extension (.py -> python, .cpp/.cc/.cxx ->
+// cpp, .iroh -> irohscript, .bas -> basic, anything else ->
 // javascript); stdin defaults to javascript.
 //
 // Output (stdout, JSONL):
@@ -37,6 +44,11 @@
 //    "appliedVia":"loop-test","note":"..."}
 //   {"type":"direct-summary","stopped":false,"stopReason":null,
 //    "findings":[...],"directives":[...],"analysis":{...}}
+//   {"type":"synth-run","run":0,"args":[5],"result":"small","error":null,
+//    "capped":false,"newlyCovered":[{"branch":"if:42","arm":"false"}]}
+//   {"type":"synth-branch","branch":"if:42","arm":"true","run":1,"args":[11]}
+//   {"type":"synth-summary","entry":"classify","coverage":{...},"runs":{...},
+//    "uncovered":[],"inputs":[...],"findings":[...],"summary":{...}}
 //   {"type":"translation","from":"javascript","to":"python","code":"...","report":{...}}
 //
 // --analyze appends an analysis line (see src/analyze.js) after the
@@ -71,7 +83,23 @@
 // streams live-finding lines as findings trip, and the direct-summary
 // already carries the live finish, so no separate live-summary line
 // is printed. --direct always traces ALL categories, so --events with
-// anything but ALL is a usage error. --translate skips tracing and
+// anything but ALL is a usage error.
+// --synthesize
+// (see src/synth.js) generates concrete inputs that drive a function
+// down each branch, on the live wire: it runs the function with seed
+// inputs, reads the live analyzer's ONE_SIDED_BRANCH findings as its
+// target list, and solves for inputs that flip each uncovered branch.
+// {\"type\":\"synth-run\",...} lines print per input tried (with what it
+// newly covered), {\"type\":\"synth-branch\",...} lines when an arm is
+// first covered, and one final {\"type\":\"synth-summary\",...} with the
+// coverage (arms covered / arms total, denominators on every number),
+// the uncovered branches with their reasons, and every input tried.
+// With --live, live-finding lines stream as findings trip during the
+// runs, the same as --live on a plain trace. --synthesize needs
+// --entry <function> and takes --seeds as a JSON array of argument
+// arrays (default: one call with no arguments) and --max-runs as the
+// run budget (default 50). JavaScript scripts only, like --direct.
+// --translate skips tracing and
 // translates the program instead (see src/translate.js); it takes
 // precedence over --events and --module, and exits 1 when the report
 // lists anything unsupported. --translate cannot be combined with
@@ -81,11 +109,24 @@
 // stdin defaults to javascript. --include-events only means
 // something with --scan, so without it it is a usage error.
 //
-// Language notes (0.9.0 native tracers):
+// Language notes (0.9.0 native tracers, 1.0.1 rework tracers):
 // - Python runs through python/iroh/trace.py (sys.settrace + AST
 //   instrumentation, stdlib only). The program's own stdout is
 //   redirected to stderr while it runs, so the JSONL stream stays
 //   clean; its prints are still visible, on the other stream.
+// - IrohScript runs through irohscript/src/trace.py (the IRX
+//   interpreter with event hooks, stdlib only): function calls, IF
+//   tests and assignments. LOOP has no defined exit rule in the
+//   spec, so executing one is an error, not a trace — HOT_LOOP and
+//   ZERO_ITERATION_LOOP can never fire for IrohScript until the
+//   LOOP rule is decided. The program's PRINT/ACTION output goes to
+//   stderr; the result line is null, like Python.
+// - BASIC runs through irohscript/src/basic_trace.py (a small
+//   dedicated interpreter, stdlib only): FOR/NEXT loops, IF tests,
+//   GOSUB subroutines (as FUNCTION_CALLs named "gosub@<line>") and
+//   assignments. GOTO has no event category, so GOTO loops are
+//   invisible in the trace. Same stdout/stderr split as Python;
+//   the result line is null, like Python.
 // - C++ runs through cpp/iroh_trace_rt.cpp: the program is compiled
 //   with -finstrument-functions -rdynamic -O0 and linked against the
 //   runtime (compiled without instrumentation), then run with its
@@ -130,6 +171,8 @@ const CXX = process.env.IROH_CXX || "g++";
 // before that, since they are all held in memory anyway).
 const MAX_BUFFER = 512 * 1024 * 1024;
 const TRACE_PY = path.join(__dirname, "..", "python", "iroh", "trace.py");
+const TRACE_IROHSCRIPT = path.join(__dirname, "..", "irohscript", "src", "trace.py");
+const TRACE_BASIC = path.join(__dirname, "..", "irohscript", "src", "basic_trace.py");
 const CPP_RT = path.join(__dirname, "..", "cpp", "iroh_trace_rt.cpp");
 
 // Normalize any thrown value into an error line. A program may throw a
@@ -153,10 +196,13 @@ function printUsage() {
     "       iroh <file.mjs> [--module] [--events CALL,IF,VAR]\n" +
     "       iroh <file.py> [--lang python] [--scan]\n" +
     "       iroh <file.cpp> [--lang cpp] [--scan]\n" +
+    "       iroh <file.iroh> [--lang irohscript] [--analyze]\n" +
+    "       iroh <file.bas> [--lang basic] [--scan]\n" +
     "       cat file.js | iroh [--events CALL,IF,VAR]\n" +
-    "       iroh <file.js> --translate python|cpp [--from javascript]\n" +
-    "       iroh <file.py|.cpp> --translate javascript [--from python|cpp]\n" +
+    "       iroh <file.js> --translate python|cpp|irohscript|basic [--from javascript]\n" +
+    "       iroh <file.py|.cpp|.iroh|.bas> --translate javascript|python|cpp|irohscript|basic [--from python|cpp|irohscript|basic]\n" +
     "       iroh <file.js> --direct[=throttle|stop]\n" +
+    "       iroh <file.js> --synthesize --entry <fn> [--seeds '[[5]]'] [--max-runs 50]\n" +
     "Events are streamed as JSON lines on stdout, then a result line.\n" +
     "Use --events ALL (default) or a comma list of categories, e.g. CALL.\n" +
     ".mjs files (or --module) run as ES modules through Iroh.traceModule();\n" +
@@ -174,11 +220,20 @@ function printUsage() {
     "included) and for modules (.mjs or --module). --analyze and\n" +
     "--scan are honoured with --direct (an analysis / scan line after\n" +
     "the direct-summary); --live streams live-finding lines during a\n" +
-    "directed run. --direct always traces ALL categories. --lang\n" +
-    "python|cpp|javascript selects the\n" +
+    "directed run. --direct always traces ALL categories. --synthesize\n" +
+    "generates inputs that drive a function down each branch (needs\n" +
+    "--entry <fn>; --seeds is a JSON array of argument arrays,\n" +
+    "--max-runs the run budget): synth-run lines print per input tried,\n" +
+    "then a final synth-summary line with the coverage and every\n" +
+    "uncovered branch with its reason. With --live, live-finding lines\n" +
+    "stream as findings trip during the runs. --lang\n" +
+    "python|cpp|javascript|irohscript|basic selects the\n" +
     "tracer (default: inferred from the file extension).\n" +
     "--translate prints one translation line instead of tracing; --from\n" +
-    "defaults by file extension (.py -> python, .cpp/.cc/.cxx -> cpp).\n" +
+    "defaults by file extension (.py -> python, .cpp/.cc/.cxx -> cpp,\n" +
+    ".iroh -> irohscript, .bas -> basic). --direct is JavaScript-only:\n" +
+    "the script tracers run under spawnSync, so no directive can reach\n" +
+    "them mid-run (the same limit Python/C++ already have).\n" +
     "--translate cannot be combined with --live, --scan, --analyze or\n" +
     "--direct. --include-events needs --scan.\n"
   );
@@ -209,16 +264,22 @@ function parseLines(text, onSkipped) {
 function inferLanguage(file) {
   if (file !== null && file.endsWith(".py")) return "python";
   if (file !== null && /\.(cpp|cc|cxx)$/.test(file)) return "cpp";
+  if (file !== null && file.endsWith(".iroh")) return "irohscript";
+  if (file !== null && file.endsWith(".bas")) return "basic";
   return "javascript";
 }
 
-// Run the Python tracer on `file` (a real path). Returns
-// { events, result, error } — error is an error-line object or null.
-// stdin is inherited, so a traced program that reads input (input(),
-// sys.stdin.read()) sees the same stdin the CLI was given instead of
+// Run a Python tracer script (python/iroh/trace.py,
+// irohscript/src/trace.py, irohscript/src/basic_trace.py) on `file`.
+// All three share the JSONL contract: {"type":"event",...} lines,
+// a final {"type":"result","value":null} line, and a
+// {"type":"error",...} line with a non-zero exit on failure.
+// Returns { events, result, error } — error is an error-line object
+// or null. stdin is inherited, so a traced program that reads input
+// (input(), INPUT) sees the same stdin the CLI was given instead of
 // an immediate EOF.
-function runPython(file, eventsArg) {
-  let proc = spawnSync(PYTHON, [TRACE_PY, "--events", eventsArg, file], {
+function runScriptTracer(tracerPath, file, eventsArg) {
+  let proc = spawnSync(PYTHON, [tracerPath, "--events", eventsArg, file], {
     encoding: "utf8",
     maxBuffer: MAX_BUFFER,
     stdio: ["inherit", "pipe", "inherit"],
@@ -237,9 +298,28 @@ function runPython(file, eventsArg) {
     else if (item.type === "error") error = item;
   }
   if (proc.status !== 0 && error === null) {
-    error = errorLine(new Error("python tracer exited with code " + proc.status));
+    error = errorLine(new Error("tracer exited with code " + proc.status));
   }
   return { events: events, result: result, error: error };
+}
+
+// Run the Python tracer on `file` (a real path). Returns
+// { events, result, error } — error is an error-line object or null.
+function runPython(file, eventsArg) {
+  return runScriptTracer(TRACE_PY, file, eventsArg);
+}
+
+// Run the IrohScript tracer on `file` (a real path). Same return as
+// runPython; the result is null (an IrohScript program has no
+// completion value).
+function runIrohscript(file, eventsArg) {
+  return runScriptTracer(TRACE_IROHSCRIPT, file, eventsArg);
+}
+
+// Run the BASIC tracer on `file` (a real path). Same return as
+// runPython; the result is null.
+function runBasic(file, eventsArg) {
+  return runScriptTracer(TRACE_BASIC, file, eventsArg);
 }
 
 // Compile `file` (a .cpp path) with -finstrument-functions against the
@@ -325,6 +405,10 @@ async function main() {
   let includeEventsFlag = false;
   let liveFlag = false;
   let directMode = null; // "throttle" | "stop" once --direct is given
+  let synthesizeFlag = false;
+  let entryArg = null;
+  let seedsArg = null;
+  let maxRunsArg = null;
   let translateTo = null;
   let fromArg = null;
   let langArg = null;
@@ -363,6 +447,23 @@ async function main() {
         return;
       }
       directMode = mode;
+    } else if (arg === "--synthesize") {
+      synthesizeFlag = true;
+    } else if (arg === "--entry") {
+      entryArg = args[++ii];
+      if (entryArg === void 0) { printUsage(); process.exitCode = 2; return; }
+    } else if (arg.startsWith("--entry=")) {
+      entryArg = arg.slice("--entry=".length);
+    } else if (arg === "--seeds") {
+      seedsArg = args[++ii];
+      if (seedsArg === void 0) { printUsage(); process.exitCode = 2; return; }
+    } else if (arg.startsWith("--seeds=")) {
+      seedsArg = arg.slice("--seeds=".length);
+    } else if (arg === "--max-runs") {
+      maxRunsArg = args[++ii];
+      if (maxRunsArg === void 0) { printUsage(); process.exitCode = 2; return; }
+    } else if (arg.startsWith("--max-runs=")) {
+      maxRunsArg = arg.slice("--max-runs=".length);
     } else if (arg === "--lang") {
       langArg = args[++ii];
       if (langArg === void 0) { printUsage(); process.exitCode = 2; return; }
@@ -400,8 +501,8 @@ async function main() {
   // Validated before reading any file, so a bad --lang is a usage
   // error (exit 2) even when the file is missing too.
   let language = langArg ? langArg.toLowerCase() : inferLanguage(file);
-  if (language !== "javascript" && language !== "python" && language !== "cpp") {
-    process.stderr.write("Unknown language: " + language + " (use javascript, python or cpp)\n");
+  if (language !== "javascript" && language !== "python" && language !== "cpp" && language !== "irohscript" && language !== "basic") {
+    process.stderr.write("Unknown language: " + language + " (use javascript, python, cpp, irohscript or basic)\n");
     printUsage();
     process.exitCode = 2;
     return;
@@ -455,15 +556,10 @@ async function main() {
   // result line — one translation line, exit 1 when anything was
   // unsupported.
   if (translateTo !== null) {
-    let from = fromArg;
-    if (!from) {
-      if (file !== null && file.endsWith(".py")) from = "python";
-      else if (file !== null && /\.(cpp|cc|cxx)$/.test(file)) from = "cpp";
-      else from = "javascript";
-    }
+    let from = fromArg || language;
     let out;
     try {
-      out = Iroh.translate(code, { from: from, to: translateTo });
+      out = Iroh.translate(code, { from: from, to: translateTo, irohscriptHome: path.join(__dirname, "..", "irohscript") });
     } catch (e) {
       printLine(errorLine(e));
       process.exitCode = 1;
@@ -533,7 +629,7 @@ async function main() {
   // pointing at lines the user never saw.
   if (directMode !== null) {
     if (language !== "javascript") {
-      process.stderr.write("--direct is JavaScript-only: Python/C++ traces are buffered after the run, so there is nothing live to direct\n");
+      process.stderr.write("--direct is JavaScript-only: Python/C++/IrohScript/BASIC traces are buffered after the run, so there is nothing live to direct\n");
       printUsage();
       process.exitCode = 2;
       return;
@@ -602,6 +698,120 @@ async function main() {
     process.exitCode = 0;
     return;
   }
+  // Synthesize mode: generate inputs that drive a function down each
+  // branch (Iroh.synthesize, see src/synth.js). synth-run lines print
+  // per input tried, synth-branch lines when an arm is first covered,
+  // and one final synth-summary line with the coverage, the uncovered
+  // branches with their reasons, and every input tried. With --live,
+  // live-finding lines stream as findings trip during the runs.
+  // JavaScript scripts only, like --direct: synthesis runs the
+  // function under trace, and modules have no synthesis hook. It needs
+  // all event categories — an --events filter would hide branches —
+  // and it conflicts with --direct (two different drivers of the run).
+  if (synthesizeFlag) {
+    if (language !== "javascript") {
+      process.stderr.write("--synthesize is JavaScript-only: synthesis runs the function under trace\n");
+      printUsage();
+      process.exitCode = 2;
+      return;
+    }
+    if (moduleFlag) {
+      process.stderr.write("--synthesize cannot run modules (synthesis runs scripts synchronously)\n");
+      printUsage();
+      process.exitCode = 2;
+      return;
+    }
+    if (directMode !== null) {
+      process.stderr.write("--synthesize cannot be combined with --direct\n");
+      printUsage();
+      process.exitCode = 2;
+      return;
+    }
+    if (eventsArg.toUpperCase() !== "ALL") {
+      process.stderr.write("--synthesize needs all event categories; do not combine with --events\n");
+      printUsage();
+      process.exitCode = 2;
+      return;
+    }
+    if (!entryArg) {
+      process.stderr.write("--synthesize needs --entry <function>\n");
+      printUsage();
+      process.exitCode = 2;
+      return;
+    }
+    let seeds;
+    try {
+      seeds = seedsArg ? JSON.parse(seedsArg) : [[]];
+    } catch (e) {
+      process.stderr.write("--seeds must be a JSON array of argument arrays: " + e.message + "\n");
+      printUsage();
+      process.exitCode = 2;
+      return;
+    }
+    if (!Array.isArray(seeds)) {
+      process.stderr.write("--seeds must be a JSON array of argument arrays\n");
+      printUsage();
+      process.exitCode = 2;
+      return;
+    }
+    let maxRuns;
+    if (maxRunsArg !== null) {
+      maxRuns = Number(maxRunsArg);
+      if (!Number.isInteger(maxRuns) || maxRuns < 1) {
+        process.stderr.write("--max-runs must be a positive integer, got " + maxRunsArg + "\n");
+        printUsage();
+        process.exitCode = 2;
+        return;
+      }
+    }
+    let synthOut;
+    try {
+      synthOut = Iroh.synthesize(code, {
+        entry: entryArg,
+        seeds: seeds,
+        maxRuns: maxRuns,
+        onProgress: (ev) => {
+          if (ev.type === "run") {
+            printLine({
+              type: "synth-run",
+              run: ev.run,
+              args: ev.args,
+              result: ev.result,
+              error: ev.error,
+              capped: ev.capped,
+              newlyCovered: ev.newlyCovered,
+            });
+          } else if (ev.type === "branch-covered") {
+            printLine({
+              type: "synth-branch",
+              branch: ev.branch,
+              arm: ev.arm,
+              run: ev.run,
+              args: ev.args,
+            });
+          } else if (ev.type === "live-finding" && liveFlag) {
+            printLine(Object.assign({ type: "live-finding" }, ev.finding));
+          }
+        },
+      });
+    } catch (e) {
+      printLine(errorLine(e));
+      process.exitCode = 1;
+      return;
+    }
+    printLine({
+      type: "synth-summary",
+      entry: synthOut.entry,
+      coverage: synthOut.coverage,
+      runs: synthOut.runs,
+      uncovered: synthOut.uncovered,
+      inputs: synthOut.inputs,
+      findings: synthOut.findings,
+      summary: synthOut.summary,
+    });
+    process.exitCode = 0;
+    return;
+  }
   if (language === "javascript") {
     // Modules: an explicit --module, or a .mjs file. Scripts (including
     // top-level await) go through traceAsync(); modules through
@@ -649,13 +859,20 @@ async function main() {
     let tmpDir = null;
     if (traceFile === null) {
       tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-stdin-"));
-      traceFile = path.join(tmpDir, language === "python" ? "stdin.py" : "stdin.cpp");
+      let stdinName = language === "python" ? "stdin.py"
+        : language === "cpp" ? "stdin.cpp"
+        : language === "irohscript" ? "stdin.iroh"
+        : language === "basic" ? "stdin.bas"
+        : "stdin.js";
+      traceFile = path.join(tmpDir, stdinName);
       fs.writeFileSync(traceFile, code, "utf8");
     }
     try {
-      let run = language === "python"
-        ? runPython(traceFile, eventsArg)
-        : runCpp(traceFile, eventsArg);
+      let run;
+      if (language === "python") run = runPython(traceFile, eventsArg);
+      else if (language === "irohscript") run = runIrohscript(traceFile, eventsArg);
+      else if (language === "basic") run = runBasic(traceFile, eventsArg);
+      else run = runCpp(traceFile, eventsArg);
       collected = run.events;
       result = run.result;
       traceError = run.error;

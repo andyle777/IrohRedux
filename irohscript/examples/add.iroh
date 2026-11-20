@@ -1,0 +1,7 @@
+FUNCTION Add(a, b)
+    RETURN a + b
+END FUNCTION
+
+LET result = Add(10, 20)
+
+PRINT result

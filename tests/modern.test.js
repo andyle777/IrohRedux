@@ -91,3 +91,72 @@ test("Stage constructor honours parser options", () => {
   let stage = new Iroh.Stage(code);
   assert.equal(eval(stage.script), 1);
 });
+
+test("new on a non-constructor throws exactly like untraced code (OP_NEW parity)", () => {
+  // Same family as the DEBUG_FUNCTION_CALL fix: DEBUG_OP_NEW read
+  // ctor.name before checking the constructor was a function, so
+  // `new null()` threw an Iroh-internal "Cannot read properties of
+  // null (reading 'name')" and `new 5()` threw "event.ctor is not a
+  // constructor" instead of the engine's "<callee> is not a
+  // constructor". No OP_NEW event fires for a construction that
+  // cannot happen.
+  for (let code of ["new null()", "new 5()", "new undefined()", "new (1)()"]) {
+    let untraced;
+    try { eval(code); } catch (e) { untraced = e.constructor.name + ": " + e.message; }
+    let traced;
+    try { Iroh.trace(code); } catch (e) { traced = e.constructor.name + ": " + e.message; }
+    assert.equal(traced, untraced, code);
+  }
+});
+
+test("ES2026: the three features Node 24 already has trace correctly", async () => {
+  // Array.fromAsync (Node 22+): async iterable -> array.
+  assert.deepEqual(
+    await runAsync("async function* gen() { yield 1; yield 2; yield 3; } Array.fromAsync(gen());"),
+    [1, 2, 3]
+  );
+  // JSON.rawJSON (Node 21+): a 2^53+1 integer survives stringify only
+  // as raw JSON, and the JSON.parse reviver sees the source text.
+  assert.equal(run("JSON.stringify(JSON.rawJSON('9007199254740993'));"), "9007199254740993");
+  assert.deepEqual(
+    run("JSON.parse('{\"n\": 9007199254740993}', (key, value, context) => key === 'n' ? context.source : value);"),
+    { n: "9007199254740993" }
+  );
+  // Error.isError (Node 24.3+).
+  assert.deepEqual(
+    run("[Error.isError(new Error('x')), Error.isError(new TypeError()), Error.isError({}), Error.isError('boom')];"),
+    [true, true, false, false]
+  );
+});
+
+test("ES2026: calls to methods the runtime lacks throw the natural TypeError", () => {
+  // Four of the seven ES2026 features are plain library calls that
+  // Node 24.22.1 does not have yet: Uint8Array base64/hex needs
+  // Node 25, Map upserts and Iterator.concat need Node 26, and
+  // Math.sumPrecise is not in Node 24 at all. Before the fix, tracing
+  // one masked the natural error with an Iroh-internal
+  // "Cannot read properties of undefined (reading 'name')" (or, for a
+  // non-function value, "before.call.apply is not a function").
+  // Traced code must now fail exactly like untraced code. The
+  // per-feature checks only run where the runtime still lacks the
+  // method, so the test stays green on newer runtimes.
+  const missing = [
+    ["Uint8Array.fromBase64('aGk=');", typeof Uint8Array.fromBase64],
+    ["let m = new Map(); m.getOrInsert('k', 1);", typeof Map.prototype.getOrInsert],
+    ["Iterator.concat([1].values(), [2].values()).toArray();", typeof Iterator.concat],
+    ["Math.sumPrecise([0.1, 0.2]);", typeof Math.sumPrecise],
+  ];
+  for (const [code, type] of missing) {
+    if (type !== "undefined") continue;
+    let plain = null;
+    try { eval(code); } catch (e) { plain = e; }
+    let traced = null;
+    try { run(code); } catch (e) { traced = e; }
+    assert.ok(plain instanceof TypeError, code);
+    assert.ok(traced instanceof TypeError, code);
+    assert.equal(traced.message, plain.message, code);
+  }
+  // The same parity for a method missing on any object, on any runtime.
+  assert.throws(() => run("let o = {}; o.nope();"), /o\.nope is not a function/);
+  assert.throws(() => run("(1)();"), /1 is not a function/);
+});

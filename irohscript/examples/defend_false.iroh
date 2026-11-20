@@ -1,0 +1,5 @@
+LET THREAT : Bool = FALSE
+
+IF THREAT
+    PRINT "Defend the archive."
+END IF

@@ -1,0 +1,65 @@
+# The perceptron's scoring core, in IrohScript — the first IrohRedux
+# core component written in the project's own language (part 3 of the
+# 1.0.1 rework). Compiled to JavaScript by src/irohscript-codegen.js;
+# the generated file is src/neurons-irohscript.js (do not edit it by
+# hand — regenerate with `npm run codegen:irohscript`).
+#
+# This is the neuron's decision, and nothing else: score = dot(weights,
+# features) + bias, label "hot" when the score is >= 0. The weights
+# come in as a parameter (the trained constants live in
+# src/neurons.js, not here), the five features come in as a struct,
+# and the score comes back raw — src/neurons.js still rounds it to
+# four decimals, exactly as before.
+#
+# What stays in JavaScript, and why: extractFeatures walks the event
+# stream with a set of seen (event, hash) pairs — IrohScript 3.0 has
+# no bounded loop (LOOP has no exit rule) and no dictionary, so that
+# walk cannot be written in the language yet. train() loops over
+# samples, same reason. Those are language gaps, not this file's
+# choice: when the language grows a bounded loop, they move over too.
+#
+# Division note: this file uses no division and no modulo, so the
+# open division question (Python-style vs C++ truncated) does not
+# touch it. The code generator preserves Python-style semantics
+# where they arise.
+
+STRUCT Features
+    calls : Float
+    depth : Float
+    repeat : Float
+    imbalance : Float
+    mix : Float
+END STRUCT
+
+STRUCT Weights
+    w0 : Float
+    w1 : Float
+    w2 : Float
+    w3 : Float
+    w4 : Float
+    bias : Float
+END STRUCT
+
+STRUCT Result
+    score : Float
+    label : String
+END STRUCT
+
+FUNCTION PredictScore(f : Features, w : Weights)
+    RETURN w.bias + w.w0 * f.calls + w.w1 * f.depth + w.w2 * f.repeat + w.w3 * f.imbalance + w.w4 * f.mix
+END FUNCTION
+
+FUNCTION PredictLabel(score : Float)
+    IF score >= 0.0
+        RETURN "hot"
+    ELSE
+        RETURN "normal"
+    END IF
+END FUNCTION
+
+FUNCTION Predict(f : Features, w : Weights)
+    LET r : Result
+    r.score = PredictScore(f, w)
+    r.label = PredictLabel(r.score)
+    RETURN r
+END FUNCTION

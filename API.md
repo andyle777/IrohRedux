@@ -243,26 +243,81 @@ combinations (`--translate` with `--live`/`--scan`/`--analyze`/
 without `--scan`) are usage errors, exit 2, checked before the file
 is read.
 
-``translate(code, options)``: Hybrid translation engine (0.8.0). Returns
+``synthesize(code, options)``: Input synthesiser (1.1.0) —
+generate concrete inputs that drive a named entry function down each
+branch, on the live wire. Runs the function with the seed inputs under
+trace, reads the live analyzer's `ONE_SIDED_BRANCH` findings as the
+target list, and solves for inputs that flip each uncovered branch —
+boundary values for numeric comparisons (`x > 10` → 11 and 10),
+the observed constant for equality (`x === 7` → 7), the observed
+string for string equality, each side of `&&` / `||`, 1 / 0 for a
+bare parameter, a string of the right length for `.length` against a
+numeric literal, and the discriminant value for a switch case — with
+seeds plus guided mutation as fallback. Iterates until every branch is
+covered or the run budget (default 50 runs, seeds included) is hit.
+Returns `{ entry, inputs, coverage, runs, uncovered, findings,
+summary }` — `coverage` is arms covered / arms total with every
+branch site (`branches`, each with `arms`, `covered` and per-arm
+`reasons`); `runs` is used / budget; `uncovered` lists every arm left
+uncovered WITH its reason (a condition over `Date.now()` /
+`Math.random` / `new Date`, a compound expression the v1 solver
+cannot invert, a branch the budget ran out on); `findings` is the
+per-run live findings (deduped by code + branch site + message) plus
+the final aggregate `ONE_SIDED_BRANCH` findings with their branch
+attached. Each run is capped at `loopCap` true tests per loop (default
+10000): the next test is flipped to false and the run is marked
+`capped`, and the flipped test does not count as coverage — a
+non-terminating candidate is a capped run, not a hang. Progress
+streams through `onProgress(event)` as `run` (with `newlyCovered`),
+`branch-covered` and `live-finding` events, the way `--live` streams
+findings. Scripts only, synchronous entry functions — modules,
+top-level await and async entries are rejected; seeds must be JSON
+values. The program runs, so its side effects happen. The CLI
+`--synthesize --entry <name>` prints `synth-run` / `synth-branch` /
+`synth-summary` JSON lines (and `live-finding` lines with `--live`),
+with `--seeds '<json>'` and `--max-runs <n>`; it rejects
+`--module` / `--direct` / `--events` combinations with exit 2.
+v1 solver limits, stated honestly: it solves direct
+parameter-vs-literal comparisons only — compound expressions
+(`x * 2 > 10`), comparisons between two parameters, and conditions
+over external or nondeterministic values are reported uncovered, not
+faked; a switch default is solved with a value matching no case
+literal, and only `===` case literals are solved.
+
+``translate(code, options)``: Hybrid translation engine (0.8.0; all five
+languages as sources and targets since the 1.0.1 rework, part 2). Returns
 `{ code, report }` where `report` is `{ ok, from, to, staticOnly, clean,
 assumptions, unsupported, notes }`. JavaScript out (`to: "python" |
-"cpp"`) is hybrid: the AST (static) plus trace evidence (dynamic — the
-program is run through the tracer first, and the events resolve what
-static analysis cannot: runtime types, values, which branches fired).
-The reverse legs (`from: "python" | "cpp"`, `to: "javascript"`) are
-static-only by design (`staticOnly: true`) — they translate from source
-alone. Native Python and C++ tracers exist since 0.9.0, but the
-translation legs do not use them. Python is parsed with Python's own `ast`
-module (a small stdlib-only helper run through `python3`, which emits
-the AST as JSON); C++ is parsed by a scoped subset parser in the
-library. v1 scope, both directions: functions, arithmetic, loops,
-conditionals, arrays (Python lists / C++ vectors), strings, console
-output (`console.log` / `print` / `std::cout`). No classes, no
-closures-as-objects, no async. Unsupported constructs are reported in
-`report.unsupported` and the emitted code raises/throws at that point,
-loudly — never silently mistranslated. Assumptions cite their trace
-evidence (e.g. `FUNCTION_CALL 'add' arguments [2,3]` for a C++
-parameter type). `options.types` supplies C++ types the trace could not
+"cpp" | "irohscript" | "basic"`) is hybrid: the AST (static) plus trace
+evidence (dynamic — the program is run through the tracer first, and
+the events resolve what static analysis cannot: runtime types, values,
+which branches fired). The reverse legs (`from: "python" | "cpp" |
+"irohscript" | "basic"`, `to: "javascript"`) are static-only by design
+(`staticOnly: true`) — they translate from source alone. Native Python
+and C++ tracers exist since 0.9.0, but the translation legs do not use
+them. Any other pair (IrohScript to Python, BASIC to C++, Python to
+C++) goes two-hop through JavaScript, and the report's notes say so.
+Python is parsed with Python's own `ast` module (a small stdlib-only
+helper run through `python3`, which emits the AST as JSON); C++ is
+parsed by a scoped subset parser in the library. IrohScript is parsed
+by the bootstrap compiler (an embedded helper run through `python3`;
+`options.irohscriptHome` names the directory holding the `irohscript`
+package — the CLI passes the in-repo copy) and BASIC by the in-repo
+`src/basic.py` parser. v1 scope, both directions: functions,
+arithmetic, loops, conditionals, arrays (Python lists / C++ vectors),
+strings, console output (`console.log` / `print` / `std::cout`).
+JavaScript functions become BASIC GOSUB subroutines; IrohScript
+`ACTION`/`INTENT` become `__iroh_action`/`__iroh_intent` recorders;
+recursive functions to BASIC, GOTO to JavaScript, and IrohScript LOOP
+to JavaScript are unsupported (no form exists). No classes, no
+closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
+with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
+leg emits the first form so the loop variable stays visible after the
+loop. Unsupported constructs are reported in `report.unsupported` and
+the emitted code raises/throws at that point, loudly — never silently
+mistranslated. Assumptions cite their trace evidence (e.g.
+`FUNCTION_CALL 'add' arguments [2,3]` for a C++ parameter type).
+`options.types` supplies C++ types the trace could not
 (`{ functions: { add: { params: ["int", "int"], returns: "int" } } }`).
 The JS-out leg runs the program through the tracer for evidence, and
 its `console.log` output is silenced while it runs, so `translate()` has
@@ -272,7 +327,29 @@ loops) happen for real — `translate()` does not sandbox it. `translateAsync(co
 version — in the ESM build the Python leg loads `child_process` by
 dynamic import (the sync version needs the CJS build's `require` for
 that leg); in a browser, the Python leg throws a clear error and the
-C++ leg works.
+C++ leg works. The async path now honours `to` for the Python,
+IrohScript and BASIC legs (before the 1.0.1 rework it ignored `to`
+and always returned JavaScript).
+
+``compileIrohscript(source, options)``: The IrohScript compiler
+backend (1.0.1 rework, part 3). Compiles IrohScript source to a
+JavaScript module string — clean, runnable ES2015, or a clear error
+naming the construct it cannot compile. Unlike `translate()`, there
+is no report and no stub: LOOP (no exit rule), ACTION, INTENT, the
+legacy Conditional form, and IMPORT all throw. Structs become factory
+functions (`export function Features() { return { calls: 0, ... }; }`),
+enums become string-valued objects, top-level functions are exported.
+Division/modulo are Python-style, the bootstrap's semantics: DIV
+emits plain `/` (float division, the same as Python's) and MOD emits
+a floored `__iroh_pymod` helper. `options.irohscriptHome` names the
+directory holding the `irohscript` package. `compileIrohscriptAsync(source, options)` is the async version (dynamic import of
+`child_process`, works in ESM Node). The first core component
+compiled this way is the perceptron's scoring core
+(`irohscript/core/perceptron.iroh` -> `src/neurons-irohscript.js`,
+regenerated with `npm run codegen:irohscript`); the checked-in
+generated file is verified against a fresh compile by the test suite,
+so it cannot drift from its source. In a browser, both entries throw
+a clear error (no python3 there).
 
 ``eventToJSON(event, trigger)``: Turns a live RuntimeEvent into the plain
 object `trace()` returns. The CLI uses this too, so its JSON lines and
@@ -289,19 +366,25 @@ can turn event type/category numbers back into names; the CLI
 raw number. `Iroh.CALL`, `Iroh.IF`, etc. are the category numbers
 themselves (see [Listener Specification](#specification)).
 
-#### Using Iroh from Python and C++:
+#### Using Iroh from Python, C++, IrohScript and BASIC:
 
 The `iroh` CLI (`cli/iroh.js`) streams trace events as JSON lines, so
 other languages can consume Iroh without speaking JavaScript — and since
 0.9.0 Python and C++ programs trace NATIVELY through the same CLI, with
-the same event shape and the same `analyze()` findings:
+the same event shape and the same `analyze()` findings, joined in the
+1.0.1 rework by IrohScript and BASIC:
 `node cli/iroh.js program.py` (or `--lang python`) runs the Python tracer
 (`sys.settrace` + AST instrumentation, `python/iroh/trace.py`, stdlib
 only); `node cli/iroh.js program.cpp` (or `--lang cpp`) compiles the
 program with `-finstrument-functions` and runs it against the runtime in
 `cpp/iroh_trace_rt.cpp` (function-level only — see the 0.9.0 CHANGELOG
-entry for the honest limits). `--analyze` and `--scan` work for all three
-languages. Thin clients live in `python/` (stdlib only:
+entry for the honest limits). `node cli/iroh.js program.iroh` (or
+`--lang irohscript`) runs the IrohScript tracer (IRX interpreter hooks,
+`irohscript/src/trace.py`, stdlib only); `node cli/iroh.js program.bas`
+(or `--lang basic`) runs the BASIC tracer (a small dedicated interpreter,
+`irohscript/src/basic_trace.py`, stdlib only) — see the 1.0.1-rework
+CHANGELOG entry for what each sees and what it honestly cannot.
+`--analyze`, `--scan` and `--live` work for all five languages. Thin clients live in `python/` (stdlib only:
 `run(code, events=None)` → `(events, result)`,
 `trace_python(code)` / `trace_python_file(path)`,
 `scan(code)` / `scan_python(code)` / `scan_python_file(path)`) and

@@ -17,7 +17,7 @@ var extend = function(cls, prot) {
   }
 };
 
-var version = "1.0.1";
+var version = "1.1.0";
 
 // indent factor
 const INDENT_FACTOR = 1;
@@ -524,6 +524,22 @@ function uBranchHash() {
   return ubidx++;
 }
 
+// Reset the patch counters at the start of a patch run (Stage.patch).
+// They are module-level counters, so without this the hashes, temp
+// variable names and $$ANON_ names in one trace depend on how many
+// traces this process has already run — the same program traced twice
+// in one process got different event hashes, and analyze() embeds
+// those hashes in its findings, so its output was not byte-stable
+// across calls in one process. Patching is synchronous, so no two
+// patch runs can interleave and collide; every counter is consumed
+// only inside one patch run (hashes, temp vars, anonymous-function
+// names, frame and patcher uids), so resetting per run is safe.
+function resetPatchCounters() {
+  utvidx = 1;
+  uidx = 1;
+  ubidx = 1;
+}
+
 function parse$1(input, options) {
   // Same default as helpers.parse: Acorn 8 requires ecmaVersion.
   // "latest" + allowHashBang: see helpers.parse.
@@ -624,6 +640,7 @@ var _utils = Object.freeze({
 	reserveTempVarId: reserveTempVarId,
 	uid: uid,
 	uBranchHash: uBranchHash,
+	resetPatchCounters: resetPatchCounters,
 	parse: parse$1,
 	generate: generate$1,
 	safeValue: safeValue,
@@ -5274,6 +5291,22 @@ function DEBUG_FUNCTION_CALL(hash, ctx, object, call, args) {
     root = object;
     proto = null;
   }
+  // A callee that is not a function (e.g. a method the runtime does
+  // not have yet, like Math.sumPrecise on Node 24) must fail exactly
+  // like untraced code: `TypeError: <callee> is not a function`.
+  // Reading root.name first would mask it with an Iroh-internal
+  // "Cannot read properties of undefined (reading 'name')" (or, for a
+  // non-function value like 1, "before.call.apply is not a function").
+  // No CALL event fires: like an optional call that never happens, a
+  // call that cannot happen is not an event. The callee source text
+  // comes from the original input, so the message matches the engine's.
+  if (typeof root !== "function") {
+    let calleeSource = null;
+    if (node && node.callee && typeof node.callee.start === "number" && typeof node.callee.end === "number" && typeof this.input === "string") {
+      calleeSource = this.input.slice(node.callee.start, node.callee.end);
+    }
+    throw new TypeError((calleeSource || "callee") + " is not a function");
+  }
   name = root.name;
 
   // external functions are traced as sloppy
@@ -5490,6 +5523,24 @@ function DEBUG_VAR_INIT(hash, name, value) {
 
 // #NEW
 function DEBUG_OP_NEW(hash, ctor, args) {
+  // A constructor that is not a function (e.g. `new null()`,
+  // `new 5()`) must fail exactly like untraced code: `TypeError:
+  // <callee> is not a constructor`. Reading ctor.name first would
+  // mask it with an Iroh-internal "Cannot read properties of null
+  // (reading 'name')" (or, for a non-function value like 5,
+  // "event.ctor is not a constructor"). No OP_NEW event fires: like
+  // a call that cannot happen, a construction that cannot happen is
+  // not an event. The callee source text comes from the original
+  // input, so the message matches the engine's. (Same family as the
+  // DEBUG_FUNCTION_CALL fix in the ES2026 probe.)
+  if (typeof ctor !== "function") {
+    let node = this.nodes[hash] ? this.nodes[hash].node : null;
+    let ctorSource = null;
+    if (node && node.callee && typeof node.callee.start === "number" && typeof node.callee.end === "number" && typeof this.input === "string") {
+      ctorSource = this.input.slice(node.callee.start, node.callee.end);
+    }
+    throw new TypeError((ctorSource || "ctor") + " is not a constructor");
+  }
 
   // API
   let event = this.createEvent(INSTR.OP_NEW);
@@ -6251,6 +6302,11 @@ Stage.prototype.getFrameByHashFrom = function(frm, hash) {
 };
 
 Stage.prototype.patch = function(input) {
+  // Fresh counters per patch run: the hash, temp-var and anonymous-
+  // function counters are module-level, so without this the same
+  // program patched twice in one process gets different hashes and
+  // different generated names (see resetPatchCounters in utils.js).
+  resetPatchCounters();
   let patcher = new Patcher(this);
   // Parse at the newest language level Acorn supports ("latest": ES2025
   // RegExp modifiers, `using` declarations, import attributes) plus
@@ -6804,8 +6860,35 @@ var _setup = Object.freeze({
 	greet: greet
 });
 
+// GENERATED — do not edit by hand. Source: irohscript/core/perceptron.iroh
+// Regenerate with: npm run codegen:irohscript
+// (IrohScript -> JavaScript, src/irohscript-codegen.js; division/modulo are Python-style.)
+function Features() { return { calls: 0, depth: 0, repeat: 0, imbalance: 0, mix: 0 }; }
+function Weights() { return { w0: 0, w1: 0, w2: 0, w3: 0, w4: 0, bias: 0 }; }
+
+function PredictScore(f, w) {
+  return w.bias + w.w0 * f.calls + w.w1 * f.depth + w.w2 * f.repeat + w.w3 * f.imbalance + w.w4 * f.mix;
+}
+function PredictLabel(score) {
+  if (score >= 0) {
+    return "hot";
+  } else {
+    return "normal";
+  }
+}
+
 // Tiny neuron layer for IrohRedux 0.8.0 — a single perceptron over
 // trace-window features, pure JavaScript, no dependencies.
+//
+// The scoring core (the dot product and the label) is IrohScript,
+// compiled to JavaScript: irohscript/core/perceptron.iroh ->
+// src/neurons-irohscript.js (regenerate with
+// `npm run codegen:irohscript`). What stays here: feature extraction
+// (it walks the event stream with a set — IrohScript 3.0 has no
+// bounded loop and no dictionary yet), training (it loops over
+// samples), and the four-decimal rounding, which is a presentation
+// rule of this module, not the neuron's math.
+
 //
 // The perceptron answers one question: is this trace window "hot"
 // (a busy, repetitive, deeply-nested run) or "normal"? It is a
@@ -6907,11 +6990,26 @@ function createPerceptron(weights, bias) {
   let b = bias === void 0 ? DEFAULT_BIAS : bias;
   function predict(features) {
     let x = Array.isArray(features) ? features : featuresToArray(features);
-    let score = b;
-    for (let jj = 0; jj < 5; ++jj) score += w[jj] * (x[jj] || 0);
-    // Round the score for stable, readable output.
-    score = Math.round(score * 10000) / 10000;
-    return { score: score, label: score >= 0 ? "hot" : "normal" };
+    // The scoring core is IrohScript, compiled to JavaScript
+    // (irohscript/core/perceptron.iroh -> src/neurons-irohscript.js).
+    // The label is read off the rounded score, exactly as before:
+    // Predict's own label (from the raw score) is not used here, so a
+    // raw -0.00001 still rounds to -0 and reads "hot", as it always did.
+    let f = Features();
+    f.calls = x[0] || 0;
+    f.depth = x[1] || 0;
+    f.repeat = x[2] || 0;
+    f.imbalance = x[3] || 0;
+    f.mix = x[4] || 0;
+    let ww = Weights();
+    ww.w0 = w[0];
+    ww.w1 = w[1];
+    ww.w2 = w[2];
+    ww.w3 = w[3];
+    ww.w4 = w[4];
+    ww.bias = b;
+    let score = Math.round(PredictScore(f, ww) * 10000) / 10000;
+    return { score: score, label: PredictLabel(score) };
   }
   function train(samples, epochs, learningRate) {
     epochs = epochs === void 0 ? 100 : epochs;
@@ -8918,14 +9016,1309 @@ var _direct = Object.freeze({
 	runawayGuard: runawayGuard
 });
 
-// Hybrid translation engine for IrohRedux 0.8.0 — JavaScript ->
-// Python / C++, Python -> JavaScript, C++ -> JavaScript.
+// Input synthesiser for IrohRedux — generate concrete inputs that
+// drive a program down each branch, on the live wire:
+//
+//   Iroh.synthesize(code, { entry, seeds, maxRuns, onProgress })
+//     -> { entry, inputs, coverage, runs, uncovered, findings, summary }
+//
+// Concolic-style, with no SMT solver available: run the program under
+// trace with seed inputs, collect branch outcomes from the trace
+// events, then solve for the inputs that flip each uncovered branch.
+// The v1 solver is deliberately small and honest about it: for a
+// numeric comparison it computes the boundary value (x > 10 -> 11 and
+// 10), for equality it uses the observed constant (x === 7 -> 7), for
+// a string equality the observed string, for && / || it targets each
+// side, and for a bare parameter it uses truthy/falsy (1 / 0). Seeds
+// plus guided mutation are the fallback. Every run counts against
+// the budget (default 50), and a branch the solver cannot flip is
+// reported with its reason — never hidden, never claimed.
+//
+// Live wire integration (src/live.js): each run streams through its
+// own liveAnalyzer, so HOT_LOOP and friends fire mid-run and stream
+// out through onProgress as live-finding events. The target list is
+// the aggregate analyzer's ONE_SIDED_BRANCH findings: after each run
+// the events of all runs so far are fed (hashes remapped to the
+// branch site's source position, because the instrumenter's hashes
+// are per-Stage) into a fresh liveAnalyzer, and finish() gives the
+// one-sided branches — the branches that still need an input. Only
+// the ONE_SIDED_BRANCH findings are taken from the aggregate: its
+// other findings would conflate separate runs (loop iterations add
+// up across runs). Capped loop-test flips (see below) are filtered
+// out of the aggregate stream — they are the tool's intervention,
+// not the program's behaviour.
+//
+// Runaway protection: a candidate input may make a loop never end.
+// Each run caps every loop at loopCap true tests (default 10,000):
+// the next LOOP_TEST is flipped to false, the run is marked capped,
+// and the flipped test is NOT counted as branch coverage — the input
+// did not cover the exit arm, the cap did. The flip uses the same
+// mechanism as the director (src/direct.js): the DEBUG functions
+// return the event's value after listeners fire, so mutating the raw
+// event in rawOnEvent changes the running program.
+//
+// Limits (also in CHANGELOG.md): scripts only, synchronous entry
+// functions (no top-level await, no modules, no async entry —
+// traceAsync()/traceModule() have no synthesis hook in v1); seeds
+// must be JSON values; the solver handles direct parameter-vs-literal
+// comparisons, .length against a numeric literal, && / || / ! and
+// bare parameters — compound expressions, calls, and anything that
+// is not an input parameter are reported, not solved. Switch cases
+// are covered in the same pass (see below).
+//
+// Branch model: a site is a condition evaluation point, keyed by its
+// kind and the source position of its test. if / loop / ternary sites
+// have two arms (true/false); a switch case has one arm (matched),
+// and the default has one arm (reached). Coverage is arms covered /
+// arms total, with the site count alongside — every number carries
+// its denominator.
+
+const SYNTHESIZE_DEFAULTS = {
+  maxRuns: 50,
+  loopCap: 10000,
+};
+
+const SOLVER_DEPTH_LIMIT = 4;
+const STATEMENT_PREVIEW_CHARS = 200;
+
+// --- generic AST walk (same shape as analyze.js inspectSource) -------
+function walk(node, visit) {
+  if (node === null || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (let ii = 0; ii < node.length; ++ii) walk(node[ii], visit);
+    return;
+  }
+  if (typeof node.type === "string") visit(node);
+  let keys = Object.keys(node);
+  for (let ii = 0; ii < keys.length; ++ii) {
+    let key = keys[ii];
+    if (key === "loc" || key === "range" || key === "start" || key === "end") continue;
+    walk(node[key], visit);
+  }
+}
+
+function sourceOf(program, node) {
+  if (!node || typeof node.start !== "number" || typeof node.end !== "number") return null;
+  return program.slice(node.start, node.end);
+}
+
+// --- entry function ----------------------------------------------------
+// The function under test: a top-level function declaration, or a
+// top-level const/let/var holding a function or arrow function.
+function resolveEntry(ast, entry) {
+  let body = ast.body || [];
+  for (let ii = 0; ii < body.length; ++ii) {
+    let st = body[ii];
+    if (st.type === "FunctionDeclaration" && st.id && st.id.name === entry) {
+      return st;
+    }
+    if (st.type === "VariableDeclaration") {
+      for (let jj = 0; jj < st.declarations.length; ++jj) {
+        let d = st.declarations[jj];
+        if (
+          d.id && d.id.name === entry && d.init &&
+          (d.init.type === "FunctionExpression" || d.init.type === "ArrowFunctionExpression")
+        ) {
+          return d.init;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function paramList(fnNode) {
+  let params = [];
+  for (let ii = 0; ii < fnNode.params.length; ++ii) {
+    let p = fnNode.params[ii];
+    if (p.type === "Identifier") params.push({ name: p.name, pattern: false });
+    else params.push({ name: null, pattern: true });
+  }
+  return params;
+}
+
+function paramIndex(params, name) {
+  for (let ii = 0; ii < params.length; ++ii) {
+    if (!params[ii].pattern && params[ii].name === name) return ii;
+  }
+  return -1;
+}
+
+// --- switch map ----------------------------------------------------------
+// From the source AST: every case, keyed the same way the trace maps
+// it (case test start, or the case start for default), with the
+// discriminant and the case value so the solver can target it.
+function buildSwitchMap(ast) {
+  let map = {};
+  walk(ast, function(node) {
+    if (node.type !== "SwitchStatement") return;
+    for (let ii = 0; ii < node.cases.length; ++ii) {
+      let cs = node.cases[ii];
+      let key = cs.test ? "case:" + cs.test.start : "default:" + cs.start;
+      map[key] = {
+        discriminant: node.discriminant,
+        caseValue: cs.test || null,
+        caseNode: cs,
+        isDefault: !cs.test,
+      };
+    }
+  });
+  return map;
+}
+
+// --- argument serialization ----------------------------------------------
+// Seeds must be JSON values: the call is built as source text, so a
+// function, symbol, bigint, or a nested undefined / non-finite number
+// cannot be written down. Loud failure now, not a silently wrong call.
+function validateJsonValue(value, where) {
+  if (value === null) return;
+  let t = typeof value;
+  if (t === "string" || t === "boolean") return;
+  if (t === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error("synthesize() seeds must be JSON values — " + where + " is " + String(value));
+    }
+    return;
+  }
+  if (t === "undefined") {
+    throw new Error("synthesize() seeds must be JSON values — " + where + " is undefined (only a top-level argument may be undefined)");
+  }
+  if (Array.isArray(value)) {
+    for (let ii = 0; ii < value.length; ++ii) validateJsonValue(value[ii], where + "[" + ii + "]");
+    return;
+  }
+  if (t === "object") {
+    let keys = Object.keys(value);
+    for (let ii = 0; ii < keys.length; ++ii) validateJsonValue(value[keys[ii]], where + "." + keys[ii]);
+    return;
+  }
+  throw new Error("synthesize() seeds must be JSON values — " + where + " is a " + t);
+}
+
+function serializeArg(value) {
+  if (value === void 0) return "undefined";
+  validateJsonValue(value, "seed value");
+  if (typeof value === "number") return String(value);
+  return JSON.stringify(value);
+}
+
+// --- solver: boundary values ----------------------------------------------
+function differentValue(literal) {
+  if (typeof literal === "number") return literal + 1;
+  if (typeof literal === "string") return literal === "" ? "x" : "";
+  if (typeof literal === "boolean") return !literal;
+  if (literal === null) return 0;
+  return 1;
+}
+
+// Values for the parameter that make `param <op> literal` come out
+// `want`. Numbers only for the ordered comparisons; equality works
+// for any literal type. Returns an array, or null when the operator
+// cannot be solved for this literal.
+function boundaryValues(operator, literal, want) {
+  if (operator === ">" || operator === ">=" || operator === "<" || operator === "<=") {
+    if (typeof literal !== "number") return null;
+  }
+  if (operator === ">") return want ? [literal + 1] : [literal];
+  if (operator === ">=") return want ? [literal] : [literal - 1];
+  if (operator === "<") return want ? [literal - 1] : [literal];
+  if (operator === "<=") return want ? [literal] : [literal + 1];
+  if (operator === "===" || operator === "==") return want ? [literal] : [differentValue(literal)];
+  if (operator === "!==" || operator === "!=") return want ? [differentValue(literal)] : [literal];
+  return null;
+}
+
+// String values whose .length makes `param.length <op> literal` come
+// out `want`. Returns an array, or null when no string length can
+// satisfy it (e.g. length < 0).
+function lengthValues(operator, literal, want) {
+  if (typeof literal !== "number" || literal < 0 || Math.floor(literal) !== literal) return null;
+  let n;
+  if (operator === ">") n = want ? literal + 1 : literal;
+  else if (operator === ">=") n = want ? literal : literal - 1;
+  else if (operator === "<") n = want ? literal - 1 : literal;
+  else if (operator === "<=") n = want ? literal : literal + 1;
+  else if (operator === "===" || operator === "==") n = want ? literal : literal + 1;
+  else if (operator === "!==" || operator === "!=") n = want ? literal + 1 : literal;
+  else return null;
+  if (n < 0) return null;
+  return ["a".repeat(n)];
+}
+
+function flipComparison(operator) {
+  if (operator === "<") return ">";
+  if (operator === ">") return "<";
+  if (operator === "<=") return ">=";
+  if (operator === ">=") return "<=";
+  if (operator === "===" || operator === "==" || operator === "!==" || operator === "!=") return operator;
+  return null;
+}
+
+const COMPARISON_OPS = [">", ">=", "<", "<=", "===", "==", "!==", "!="];
+
+function isNondeterministic(node, program) {
+  let found = false;
+  walk(node, function(child) {
+    if (found) return;
+    if (child.type === "CallExpression" || child.type === "NewExpression") {
+      let src = sourceOf(program, child);
+      if (src && (/Date\.now/.test(src) || /Math\.random/.test(src) || /new Date/.test(src))) {
+        found = true;
+      }
+    }
+  });
+  return found;
+}
+
+// Solve `testNode` for the outcome `want` (true/false), starting
+// from `args` (the witness run's arguments). Returns
+// { candidates: [argArray, ...] } or { reason: "..." }. A candidate
+// is a full replacement argument list; the run verifies it — the
+// solver proposes, the trace disposes.
+function solveTest(node, want, args, params, counterStarts, program, depth) {
+  if (depth > SOLVER_DEPTH_LIMIT) {
+    return { reason: "condition nests deeper than the v1 solver follows (" + SOLVER_DEPTH_LIMIT + " levels)" };
+  }
+  if (!node) return { reason: "condition is missing" };
+  if (isNondeterministic(node, program)) {
+    return { reason: "condition depends on a nondeterministic source (" + sourceOf(program, node) + ") — no input can steer it" };
+  }
+  if (node.type === "Literal") {
+    return { reason: "condition is the constant " + sourceOf(program, node) + " — no input can change it" };
+  }
+  if (node.type === "UnaryExpression" && node.operator === "!") {
+    return solveTest(node.argument, !want, args, params, counterStarts, program, depth + 1);
+  }
+  if (node.type === "UnaryExpression") {
+    return { reason: "condition is a unary '" + node.operator + "' expression — the v1 solver handles '!' only" };
+  }
+  if (node.type === "Identifier") {
+    let idx = paramIndex(params, node.name);
+    if (idx < 0) {
+      return { reason: "condition reads '" + node.name + "', which is not an input parameter" };
+    }
+    // Truthiness works across types: any truthy value takes the true
+    // arm, any falsy value the false arm.
+    let next = args.slice();
+    next[idx] = want ? 1 : 0;
+    return { candidates: [next] };
+  }
+  if (node.type === "LogicalExpression") {
+    if (node.operator === "&&") {
+      if (want) {
+        let left = solveTest(node.left, true, args, params, counterStarts, program, depth + 1);
+        if (left.reason) return left;
+        let right = solveTest(node.right, true, left.candidates[0], params, counterStarts, program, depth + 1);
+        if (right.reason) return right;
+        return { candidates: right.candidates };
+      }
+      let left = solveTest(node.left, false, args, params, counterStarts, program, depth + 1);
+      let right = solveTest(node.right, false, args, params, counterStarts, program, depth + 1);
+      let cands = [];
+      if (left.candidates) cands = cands.concat(left.candidates);
+      if (right.candidates) cands = cands.concat(right.candidates);
+      if (cands.length > 0) return { candidates: cands };
+      return { reason: left.reason || right.reason || "neither side of '&&' can be made false" };
+    }
+    if (node.operator === "||") {
+      if (!want) {
+        let left = solveTest(node.left, false, args, params, counterStarts, program, depth + 1);
+        if (left.reason) return left;
+        let right = solveTest(node.right, false, left.candidates[0], params, counterStarts, program, depth + 1);
+        if (right.reason) return right;
+        return { candidates: right.candidates };
+      }
+      let left = solveTest(node.left, true, args, params, counterStarts, program, depth + 1);
+      let right = solveTest(node.right, true, args, params, counterStarts, program, depth + 1);
+      let cands = [];
+      if (left.candidates) cands = cands.concat(left.candidates);
+      if (right.candidates) cands = cands.concat(right.candidates);
+      if (cands.length > 0) return { candidates: cands };
+      return { reason: left.reason || right.reason || "neither side of '||' can be made true" };
+    }
+    return { reason: "condition uses '" + node.operator + "' — the v1 solver handles '&&' and '||' only" };
+  }
+  if (node.type === "BinaryExpression") {
+    return solveComparison(node, want, args, params, counterStarts, program);
+  }
+  if (node.type === "CallExpression" || node.type === "NewExpression") {
+    return { reason: "condition calls " + sourceOf(program, node) + " — the solver cannot invert calls" };
+  }
+  if (node.type === "MemberExpression") {
+    return { reason: "condition reads " + sourceOf(program, node) + " — the solver handles direct parameter comparisons and .length only" };
+  }
+  return { reason: "condition has the form " + node.type + " — the v1 solver does not handle it" };
+}
+
+function solveComparison(node, want, args, params, counterStarts, program) {
+  let op = node.operator;
+  if (COMPARISON_OPS.indexOf(op) < 0) {
+    if (op === "in" || op === "instanceof") {
+      return { reason: "condition uses '" + op + "' — the v1 solver handles comparisons only" };
+    }
+    return { reason: "condition is a compound expression over inputs (" + sourceOf(program, node) + ") — v1 solves direct parameter-vs-literal comparisons only" };
+  }
+  let left = node.left;
+  let right = node.right;
+  let operator = op;
+  // A loop counter with a known start value (for (let i = 0; ...) or
+  // the nearest preceding literal assignment) reads as that value on
+  // the first test, so `i < n` solves as `0 < n`.
+  if (left.type === "Identifier" && counterStarts && counterStarts[left.name] !== void 0) {
+    left = { type: "Literal", value: counterStarts[left.name] };
+  } else if (right.type === "Identifier" && counterStarts && counterStarts[right.name] !== void 0) {
+    right = { type: "Literal", value: counterStarts[right.name] };
+    operator = flipComparison(operator);
+    if (operator === null) return { reason: "cannot flip operator '" + op + "'" };
+  }
+  // param.length vs a numeric literal.
+  if (
+    left.type === "MemberExpression" && left.object.type === "Identifier" &&
+    left.property && left.property.name === "length" && !left.computed
+  ) {
+    return solveLengthComparison(left.object.name, operator, right, want, args, params, program);
+  }
+  if (
+    right.type === "MemberExpression" && right.object.type === "Identifier" &&
+    right.property && right.property.name === "length" && !right.computed
+  ) {
+    let flipped = flipComparison(operator);
+    if (flipped === null) return { reason: "cannot flip operator '" + op + "'" };
+    return solveLengthComparison(right.object.name, flipped, left, want, args, params, program);
+  }
+  let paramSide = null;
+  let litSide = null;
+  let paramOnLeft = true;
+  if (left.type === "Identifier" && right.type === "Literal") {
+    paramSide = left;
+    litSide = right;
+    paramOnLeft = true;
+  } else if (right.type === "Identifier" && left.type === "Literal") {
+    paramSide = right;
+    litSide = left;
+    paramOnLeft = false;
+  } else {
+    if (left.type === "Identifier" && paramIndex(params, left.name) >= 0) {
+      return { reason: "condition compares two inputs (" + sourceOf(program, node) + ") — v1 solves parameter-vs-literal comparisons only" };
+    }
+    if (right.type === "Identifier" && paramIndex(params, right.name) >= 0) {
+      return { reason: "condition compares two inputs (" + sourceOf(program, node) + ") — v1 solves parameter-vs-literal comparisons only" };
+    }
+    if (left.type === "Identifier") {
+      return { reason: "condition reads '" + left.name + "', which is not an input parameter" };
+    }
+    if (right.type === "Identifier") {
+      return { reason: "condition reads '" + right.name + "', which is not an input parameter" };
+    }
+    return { reason: "condition is a compound expression over inputs (" + sourceOf(program, node) + ") — v1 solves direct parameter-vs-literal comparisons only" };
+  }
+  let idx = paramIndex(params, paramSide.name);
+  if (idx < 0) {
+    return { reason: "condition reads '" + paramSide.name + "', which is not an input parameter" };
+  }
+  if (!paramOnLeft) {
+    operator = flipComparison(operator);
+    if (operator === null) return { reason: "cannot flip operator '" + op + "'" };
+  }
+  let values = boundaryValues(operator, litSide.value, want);
+  if (values === null) {
+    return { reason: "condition compares a parameter with a non-numeric literal (" + sourceOf(program, node) + ") — v1 solves numeric bounds and equality only" };
+  }
+  let out = [];
+  for (let ii = 0; ii < values.length; ++ii) {
+    let next = args.slice();
+    next[idx] = values[ii];
+    out.push(next);
+  }
+  return { candidates: out };
+}
+
+function solveLengthComparison(paramName, operator, litNode, want, args, params, program) {
+  let idx = paramIndex(params, paramName);
+  if (idx < 0) {
+    return { reason: "condition reads '" + paramName + ".length', and '" + paramName + "' is not an input parameter" };
+  }
+  if (!litNode || litNode.type !== "Literal" || typeof litNode.value !== "number") {
+    return { reason: "condition compares .length with a non-literal (" + sourceOf(program, litNode) + ") — v1 solves .length against numeric literals only" };
+  }
+  let values = lengthValues(operator, litNode.value, want);
+  if (values === null) {
+    return { reason: "no string length satisfies " + paramName + ".length " + operator + " " + litNode.value + " for the wanted arm" };
+  }
+  let out = [];
+  for (let ii = 0; ii < values.length; ++ii) {
+    let next = args.slice();
+    next[idx] = values[ii];
+    out.push(next);
+  }
+  return { candidates: out };
+}
+
+// --- loop counter start values -------------------------------------------
+// The value a loop counter starts with: the for-init, or the nearest
+// preceding literal assignment to that name in the source. Only
+// literal numbers count — anything else is not a start the solver
+// can trust.
+function counterStartsFor(loopNode, ast) {
+  let best = {};
+  function note(name, value, start) {
+    if (!best[name] || start > best[name].start) {
+      best[name] = { start: start, value: value };
+    }
+  }
+  if (loopNode.type === "ForStatement" && loopNode.init) {
+    let init = loopNode.init;
+    if (init.type === "VariableDeclaration") {
+      for (let ii = 0; ii < init.declarations.length; ++ii) {
+        let d = init.declarations[ii];
+        if (d.id && d.id.type === "Identifier" && d.init && d.init.type === "Literal" && typeof d.init.value === "number") {
+          note(d.id.name, d.init.value, d.start);
+        }
+      }
+    } else if (init.type === "AssignmentExpression" && init.operator === "=" &&
+        init.left.type === "Identifier" && init.right.type === "Literal" && typeof init.right.value === "number") {
+      note(init.left.name, init.right.value, init.start);
+    }
+  }
+  walk(ast, function(node) {
+    if (node.start >= loopNode.start) return;
+    if (node.type === "VariableDeclaration") {
+      for (let ii = 0; ii < node.declarations.length; ++ii) {
+        let d = node.declarations[ii];
+        if (d.id && d.id.type === "Identifier" && d.init && d.init.type === "Literal" && typeof d.init.value === "number") {
+          note(d.id.name, d.init.value, d.start);
+        }
+      }
+    }
+    if (node.type === "AssignmentExpression" && node.operator === "=" &&
+        node.left.type === "Identifier" && node.right.type === "Literal" && typeof node.right.value === "number") {
+      note(node.left.name, node.right.value, node.start);
+    }
+  });
+  let starts = {};
+  let names = Object.keys(best);
+  for (let ii = 0; ii < names.length; ++ii) starts[names[ii]] = best[names[ii]].value;
+  return starts;
+}
+
+// --- guided mutation fallback ---------------------------------------------
+// One small change per argument, in order. Tried once per site, after
+// the solver gives up — a nudge that sometimes stumbles onto the
+// arm the solver could not compute.
+function mutations(args) {
+  let out = [];
+  for (let ii = 0; ii < args.length; ++ii) {
+    let v = args[ii];
+    if (typeof v === "number") {
+      out.push(withArg(args, ii, v + 1));
+      out.push(withArg(args, ii, v - 1));
+      out.push(withArg(args, ii, 0));
+    } else if (typeof v === "string") {
+      out.push(withArg(args, ii, ""));
+      out.push(withArg(args, ii, v + "x"));
+    } else if (typeof v === "boolean") {
+      out.push(withArg(args, ii, !v));
+    } else if (v === null || v === void 0) {
+      out.push(withArg(args, ii, 1));
+      out.push(withArg(args, ii, ""));
+    }
+  }
+  return out;
+}
+
+function withArg(args, index, value) {
+  let next = args.slice();
+  next[index] = value;
+  return next;
+}
+
+// --- branch sites ----------------------------------------------------------
+// A site is a condition evaluation point, keyed by kind and the source
+// position of its test — positions are stable across runs (the entry
+// call is appended after the code under test), while the
+// instrumenter's hashes are per-Stage and are not.
+function siteInfoForEvent(stage, event) {
+  if (typeof event.hash !== "number" || !stage.nodes || !stage.nodes[event.hash]) return null;
+  let node = stage.nodes[event.hash].node;
+  if (!node) return null;
+  if (event.event === "IF_TEST" && event.trigger === "test") {
+    if (!node.test) return null;
+    return { kind: "if", node: node, testNode: node.test, arm: event.value === true ? "true" : "false" };
+  }
+  if (event.event === "LOOP_TEST" && event.trigger === "test") {
+    return { kind: "loop", node: node, testNode: node.test || null, arm: event.value === true ? "true" : "false" };
+  }
+  if (event.event === "TERNARY" && event.trigger === "fire") {
+    if (!node.test) return null;
+    return { kind: "ternary", node: node, testNode: node.test, arm: event.test === true ? "true" : "false" };
+  }
+  return null;
+}
+
+function siteInfoForCase(stage, event) {
+  if (event.event !== "CASE_ENTER" || event.trigger !== "enter") return null;
+  if (typeof event.hash !== "number" || !stage.nodes || !stage.nodes[event.hash]) return null;
+  let node = stage.nodes[event.hash].node;
+  if (!node) return null;
+  return { kind: "case", node: node, testNode: node.test || null, arm: "matched" };
+}
+
+// Solve a switch-case target: the discriminant must equal the case
+// value (or, for default, match no case value).
+function solveCaseTarget(site, args, params) {
+  if (site.isDefault) {
+    let idx = paramIndex(params, site.discriminantName);
+    if (idx < 0 || !site.caseLiterals) {
+      return { reason: "default arm cannot be targeted: the discriminant is not a bare input parameter" };
+    }
+    let lits = site.caseLiterals;
+    if (lits.length === 0) return { candidates: [args.slice()] };
+    let allNumbers = true;
+    let allStrings = true;
+    for (let ii = 0; ii < lits.length; ++ii) {
+      if (typeof lits[ii] !== "number") allNumbers = false;
+      if (typeof lits[ii] !== "string") allStrings = false;
+    }
+    let next = args.slice();
+    if (allNumbers) {
+      let max = lits[0];
+      for (let ii = 1; ii < lits.length; ++ii) if (lits[ii] > max) max = lits[ii];
+      next[idx] = max + 1;
+      return { candidates: [next] };
+    }
+    if (allStrings) {
+      let candidate = "no-match";
+      let n = 2;
+      while (lits.indexOf(candidate) !== -1) candidate = "no-match-" + n++;
+      next[idx] = candidate;
+      return { candidates: [next] };
+    }
+    return { reason: "default arm cannot be targeted: the case values mix types, so no single non-matching value is evident" };
+  }
+  if (!site.discriminant || !site.caseValue) {
+    return { reason: "switch case cannot be solved: no discriminant or case value recorded" };
+  }
+  // Bare parameter === literal case value.
+  if (site.discriminant.type === "Identifier" && site.caseValue.type === "Literal") {
+    let idx = paramIndex(params, site.discriminant.name);
+    if (idx < 0) {
+      return { reason: "switch discriminant reads '" + site.discriminant.name + "', which is not an input parameter" };
+    }
+    let next = args.slice();
+    next[idx] = site.caseValue.value;
+    return { candidates: [next] };
+  }
+  // param.length === numeric literal case value.
+  if (
+    site.discriminant.type === "MemberExpression" &&
+    site.discriminant.object.type === "Identifier" &&
+    site.discriminant.property && site.discriminant.property.name === "length" &&
+    !site.discriminant.computed && site.caseValue.type === "Literal" &&
+    typeof site.caseValue.value === "number"
+  ) {
+    let idx = paramIndex(params, site.discriminant.object.name);
+    if (idx < 0) {
+      return { reason: "switch discriminant reads '" + site.discriminant.object.name + ".length', which is not an input parameter" };
+    }
+    let next = args.slice();
+    next[idx] = "a".repeat(site.caseValue.value);
+    return { candidates: [next] };
+  }
+  return { reason: "switch case cannot be solved: the discriminant is not a bare parameter or .length against a literal case value" };
+}
+
+// --- the synthesiser ---------------------------------------------------------
+function synthesize(code, options) {
+  let iroh = this;
+  options = options || {};
+  if (typeof code !== "string") {
+    throw new Error("synthesize() needs the program as a string");
+  }
+  let entry = options.entry;
+  if (typeof entry !== "string" || entry === "") {
+    throw new Error("synthesize() needs options.entry — the name of the function under test");
+  }
+  let maxRuns = options.maxRuns === void 0 ? SYNTHESIZE_DEFAULTS.maxRuns : options.maxRuns;
+  let loopCap = options.loopCap === void 0 ? SYNTHESIZE_DEFAULTS.loopCap : options.loopCap;
+  if (typeof maxRuns !== "number" || maxRuns < 1 || Math.floor(maxRuns) !== maxRuns) {
+    throw new Error("synthesize() maxRuns must be a positive integer, got " + maxRuns);
+  }
+  if (typeof loopCap !== "number" || loopCap < 1 || Math.floor(loopCap) !== loopCap) {
+    throw new Error("synthesize() loopCap must be a positive integer, got " + loopCap);
+  }
+  let onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
+  let analyzeOptions = options.analyze || {};
+  let liveThresholds = {};
+  if (analyzeOptions.source === void 0) liveThresholds.source = code;
+  else liveThresholds.source = analyzeOptions.source;
+  if (analyzeOptions.hotLoopThreshold !== void 0) liveThresholds.hotLoopThreshold = analyzeOptions.hotLoopThreshold;
+  if (analyzeOptions.deepRecursionThreshold !== void 0) liveThresholds.deepRecursionThreshold = analyzeOptions.deepRecursionThreshold;
+  if (analyzeOptions.repeatSequenceMinOccurrences !== void 0) liveThresholds.repeatSequenceMinOccurrences = analyzeOptions.repeatSequenceMinOccurrences;
+  if (analyzeOptions.oneSidedMinTests !== void 0) liveThresholds.oneSidedMinTests = analyzeOptions.oneSidedMinTests;
+
+  let ast;
+  try {
+    ast = parse$1(code);
+  } catch (e) {
+    throw new Error("synthesize() cannot parse the code: " + e.message);
+  }
+  let entryNode = resolveEntry(ast, entry);
+  if (!entryNode) {
+    throw new Error("synthesize() entry \"" + entry + "\" not found as a top-level function in the code");
+  }
+  let params = paramList(entryNode);
+  // Clean AST nodes by source span, for resolving a branch's test
+  // expression. The stage's stored clones are NOT clean: the patch
+  // stages run in the order 2, 7, 4, 5, 1, 3, 6, 8, and stage 1
+  // wraps every literal in a DEBUG_LITERAL call — so a clone made in
+  // stage 8 (ternary) already contains wrapped literals, while the
+  // if/loop clones (stages 2/7) were made before the wrapping. The
+  // positions are identical in both parses (the entry call is appended
+  // after the code under test), so the span keys the clean node.
+  let nodeBySpan = {};
+  walk(ast, function(node) {
+    if (typeof node.start !== "number" || typeof node.end !== "number") return;
+    let key = node.start + ":" + node.end;
+    if (!nodeBySpan[key]) nodeBySpan[key] = [];
+    nodeBySpan[key].push(node);
+  });
+  function cleanNode(stageNode) {
+    if (!stageNode || typeof stageNode.start !== "number" || typeof stageNode.end !== "number") return stageNode;
+    let list = nodeBySpan[stageNode.start + ":" + stageNode.end];
+    if (!list) return stageNode;
+    for (let ii = 0; ii < list.length; ++ii) {
+      if (list[ii].type === stageNode.type) return list[ii];
+    }
+    return list[0];
+  }
+  let switchMap = buildSwitchMap(ast);
+  // Case literals per switch, for the default arm: the discriminant
+  // values a non-matching input must avoid. Keyed by the switch's
+  // discriminant start.
+  let switchCases = {};
+  walk(ast, function(node) {
+    if (node.type !== "SwitchStatement") return;
+    let lits = [];
+    let discName = node.discriminant.type === "Identifier" ? node.discriminant.name : null;
+    for (let ii = 0; ii < node.cases.length; ++ii) {
+      if (node.cases[ii].test && node.cases[ii].test.type === "Literal") {
+        lits.push(node.cases[ii].test.value);
+      }
+    }
+    switchCases[node.discriminant.start] = { literals: lits, discriminantName: discName };
+  });
+
+  let seeds = options.seeds === void 0 ? [[]] : options.seeds;
+  if (!Array.isArray(seeds)) {
+    throw new Error("synthesize() seeds must be an array of argument arrays");
+  }
+  for (let ii = 0; ii < seeds.length; ++ii) {
+    if (!Array.isArray(seeds[ii])) {
+      throw new Error("synthesize() seed " + ii + " is not an array of arguments");
+    }
+    for (let jj = 0; jj < seeds[ii].length; ++jj) serializeArg(seeds[ii][jj]);
+  }
+
+  let sites = {};
+  let siteOrder = [];
+  let allRuns = [];
+  let inputs = [];
+  let tried = {};
+  let agenda = [];
+  for (let ii = 0; ii < seeds.length; ++ii) agenda.push({ args: seeds[ii].slice(), via: "seed" });
+  let runIndex = 0;
+  let synthesizedCount = 0;
+
+  // A progress listener is observational: it must never break a run.
+  function emit(ev) {
+    if (!onProgress) return;
+    try {
+      onProgress(ev);
+    } catch (e) {
+      // Deliberate: progress is a report, not a control channel.
+    }
+  }
+
+  function getOrCreateSite(info, program) {
+    let key;
+    if (info.kind === "case") {
+      key = info.testNode ? "case:" + info.testNode.start : "default:" + info.node.start;
+    } else {
+      key = info.kind + ":" + (info.testNode ? info.testNode.start : info.node.start);
+    }
+    let site = sites[key];
+    if (site) return site;
+    let statement = sourceOf(program, info.node);
+    if (statement && statement.length > STATEMENT_PREVIEW_CHARS) {
+      statement = statement.slice(0, STATEMENT_PREVIEW_CHARS) + "…";
+    }
+    if (info.kind === "case") {
+      let sw = switchMap[key];
+      let condition = info.testNode
+        ? "switch discriminant === " + sourceOf(program, info.testNode)
+        : "switch default (no case matched)";
+      let discInfo = null;
+      if (sw && sw.discriminant) {
+        discInfo = switchCases[sw.discriminant.start] || null;
+      }
+      site = {
+        id: key,
+        kind: "case",
+        condition: condition,
+        statement: statement,
+        location: info.testNode
+          ? { start: info.testNode.start, end: info.testNode.end }
+          : { start: info.node.start, end: info.node.end },
+        arms: ["matched"],
+        counts: { matched: 0 },
+        coveredBy: { matched: null },
+        covered: false,
+        witnessArgs: null,
+        witnessRun: null,
+        attempted: { matched: false },
+        reasons: { matched: null },
+        mutationTried: false,
+        discriminant: sw ? sw.discriminant : null,
+        caseValue: sw ? sw.caseValue : null,
+        isDefault: sw ? sw.isDefault : !info.testNode,
+        discriminantName: discInfo ? discInfo.discriminantName : null,
+        caseLiterals: discInfo ? discInfo.literals : null,
+      };
+    } else {
+      let condition = info.testNode
+        ? sourceOf(program, info.testNode)
+        : "true (no test)";
+      site = {
+        id: key,
+        kind: info.kind,
+        condition: condition,
+        statement: statement,
+        location: info.testNode
+          ? { start: info.testNode.start, end: info.testNode.end }
+          : { start: info.node.start, end: info.node.end },
+        arms: ["true", "false"],
+        counts: { "true": 0, "false": 0 },
+        coveredBy: { "true": null, "false": null },
+        covered: false,
+        witnessArgs: null,
+        witnessRun: null,
+        attempted: { "true": false, "false": false },
+        reasons: { "true": null, "false": null },
+        mutationTried: false,
+        // The clean test node (see cleanNode): the stage's stored
+        // clone may contain patch-wrapped children, which the solver
+        // cannot read.
+        testNode: cleanNode(info.testNode),
+        counterStarts: info.kind === "loop" ? counterStartsFor(info.node, ast) : {},
+      };
+    }
+    sites[key] = site;
+    siteOrder.push(key);
+    return site;
+  }
+
+  function siteByLocationStart(start) {
+    for (let ii = 0; ii < siteOrder.length; ++ii) {
+      let site = sites[siteOrder[ii]];
+      if (site.location && site.location.start === start) return site;
+    }
+    return null;
+  }
+
+  // The aggregate live analyzer's ONE_SIDED_BRANCH findings are the
+  // target list. Hashes are remapped to the branch site's source
+  // position first — the instrumenter's hashes are per-Stage, so the
+  // same branch has a different hash in every run. Capped flips are
+  // filtered out: they are the tool's intervention, not the program.
+  // Only ONE_SIDED_BRANCH is taken from the aggregate — its other
+  // findings would conflate separate runs (loop iterations add up).
+  function remapEvent(line, stage) {
+    if (line.event !== "IF_TEST" && line.event !== "LOOP_TEST" && line.event !== "TERNARY") return line;
+    if (typeof line.hash !== "number" || !stage.nodes || !stage.nodes[line.hash]) return line;
+    let node = stage.nodes[line.hash].node;
+    if (!node) return line;
+    let canonical = node.test && typeof node.test.start === "number" ? node.test.start : node.start;
+    let copy = Object.assign({}, line);
+    copy.hash = canonical;
+    return copy;
+  }
+
+  function aggregateOneSided() {
+    let agg = liveAnalyzer(liveThresholds);
+    for (let rr = 0; rr < allRuns.length; ++rr) {
+      let runRec = allRuns[rr];
+      for (let ee = 0; ee < runRec.events.length; ++ee) {
+        let line = runRec.events[ee];
+        if (line.capped) continue;
+        agg.feed(remapEvent(line, runRec.stage));
+      }
+    }
+    let fin = agg.finish();
+    let out = [];
+    for (let ii = 0; ii < fin.findings.length; ++ii) {
+      if (fin.findings[ii].code === "ONE_SIDED_BRANCH") out.push(fin.findings[ii]);
+    }
+    return out;
+  }
+
+  function runCandidate(args, runNo) {
+    let program = code + "\n" + entry + "(" + args.map(serializeArg).join(", ") + ");";
+    let live = liveAnalyzer(liveThresholds);
+    let loopCounts = {};
+    let capped = false;
+    let run = runInternals.createTraceRun(iroh, program, {
+      events: "ALL",
+      rawOnEvent: function(raw, trigger, line) {
+        if (raw.type === INSTR.LOOP_TEST && trigger === "test" && raw.value === true) {
+          let key = String(raw.hash);
+          loopCounts[key] = (loopCounts[key] || 0) + 1;
+          if (loopCounts[key] > loopCap) {
+            capped = true;
+            raw.value = false;
+            line.value = false;
+            line.capped = true;
+          }
+        }
+      },
+      onEvent: function(line) {
+        let fired = live.feed(line);
+        for (let ii = 0; ii < fired.length; ++ii) {
+          emit({ type: "live-finding", run: runNo, finding: fired[ii] });
+        }
+      },
+    });
+    let stage = run.stage;
+    let runner = runInternals.compileRunner(iroh, stage, false);
+    let result = void 0;
+    let error = null;
+    try {
+      result = runner(iroh);
+    } catch (e) {
+      error = e;
+      runInternals.attachTraceEvents(e, run.events);
+    }
+    let liveSummary = live.finish();
+    return {
+      run: runNo,
+      args: args.slice(),
+      program: program,
+      stage: stage,
+      events: run.events,
+      result: result,
+      error: error,
+      capped: capped,
+      liveFindings: liveSummary.findings,
+    };
+  }
+
+  function updateSites(runRec) {
+    let newly = [];
+    let events = runRec.events;
+    for (let ii = 0; ii < events.length; ++ii) {
+      let ev = events[ii];
+      if (ev.capped) continue;
+      let info = null;
+      let isCase = false;
+      if (
+        (ev.event === "IF_TEST" && ev.trigger === "test") ||
+        (ev.event === "LOOP_TEST" && ev.trigger === "test") ||
+        (ev.event === "TERNARY" && ev.trigger === "fire")
+      ) {
+        info = siteInfoForEvent(runRec.stage, ev);
+      } else if (ev.event === "CASE_ENTER" && ev.trigger === "enter") {
+        info = siteInfoForCase(runRec.stage, ev);
+        isCase = info !== null;
+      }
+      if (!info) continue;
+      let site = getOrCreateSite(info, runRec.program);
+      let arm = info.arm;
+      let before = site.counts[arm];
+      site.counts[arm] += 1;
+      if (before === 0) {
+        site.coveredBy[arm] = runRec.run;
+        newly.push({ branch: site.id, arm: arm });
+        emit({ type: "branch-covered", branch: site.id, arm: arm, run: runRec.run, args: runRec.args.slice() });
+      }
+      site.witnessArgs = runRec.args.slice();
+      site.witnessRun = runRec.run;
+      if (isCase) {
+        if (site.counts.matched > 0) site.covered = true;
+      } else if (site.counts["true"] > 0 && site.counts["false"] > 0) {
+        site.covered = true;
+      }
+    }
+    return newly;
+  }
+
+  function solveForTarget(target) {
+    let site = target.site;
+    let witness = site.witnessArgs || [];
+    let args = witness.slice();
+    while (args.length < params.length) args.push(void 0);
+    if (site.kind === "case") {
+      return solveCaseTarget(site, args, params);
+    }
+    if (!site.testNode) {
+      return { reason: "loop has no test expression — it always runs, so the exit arm cannot be covered by an input" };
+    }
+    return solveTest(site.testNode, target.arm === "true", args, params, site.counterStarts || {}, code, 0);
+  }
+
+  function pushAgenda(args, via) {
+    let key = JSON.stringify(args);
+    if (tried[key]) return false;
+    for (let ii = 0; ii < agenda.length; ++ii) {
+      if (JSON.stringify(agenda[ii].args) === key) return false;
+    }
+    agenda.push({ args: args.slice(), via: via });
+    return true;
+  }
+
+  function pickTarget(oneSided) {
+    for (let ii = 0; ii < oneSided.length; ++ii) {
+      let f = oneSided[ii];
+      let site = f.evidence && typeof f.evidence.hash === "number"
+        ? siteByLocationStart(f.evidence.hash)
+        : null;
+      if (!site) continue;
+      for (let aa = 0; aa < site.arms.length; ++aa) {
+        let arm = site.arms[aa];
+        if (site.counts[arm] === 0 && !site.attempted[arm]) return { site: site, arm: arm };
+      }
+    }
+    // Fallback: a branch tested too few times for the analyzer to call
+    // one-sided (fewer than oneSidedMinTests tests) is targeted from
+    // the table directly.
+    for (let ii = 0; ii < siteOrder.length; ++ii) {
+      let site = sites[siteOrder[ii]];
+      for (let aa = 0; aa < site.arms.length; ++aa) {
+        let arm = site.arms[aa];
+        if (site.counts[arm] === 0 && !site.attempted[arm]) return { site: site, arm: arm };
+      }
+    }
+    return null;
+  }
+
+  // Register every switch case up front: a case no run ever matches
+  // still counts as a branch. Without this the total would silently
+  // shrink to the cases the seeds happened to hit.
+  let switchKeys = Object.keys(switchMap);
+  for (let ii = 0; ii < switchKeys.length; ++ii) {
+    let sw = switchMap[switchKeys[ii]];
+    getOrCreateSite({ kind: "case", node: sw.caseNode, testNode: sw.caseValue }, code);
+  }
+
+  // --- main loop -----------------------------------------------------------
+  while (runIndex < maxRuns) {
+    if (agenda.length === 0) {
+      let oneSided = aggregateOneSided();
+      let target = pickTarget(oneSided);
+      if (!target) break;
+      let solved = solveForTarget(target);
+      if (solved.candidates && solved.candidates.length > 0) {
+        let added = 0;
+        for (let ii = 0; ii < solved.candidates.length; ++ii) {
+          if (pushAgenda(solved.candidates[ii], "solver")) added += 1;
+        }
+        if (added === 0) {
+          target.site.attempted[target.arm] = true;
+          target.site.reasons[target.arm] = solved.reason || "the solver's candidates were already tried";
+        }
+      } else {
+        target.site.attempted[target.arm] = true;
+        target.site.reasons[target.arm] = solved.reason || "the solver produced no candidate";
+        if (!target.site.mutationTried) {
+          target.site.mutationTried = true;
+          let muts = mutations(target.site.witnessArgs || []);
+          for (let ii = 0; ii < muts.length; ++ii) pushAgenda(muts[ii], "mutation");
+        }
+      }
+      continue;
+    }
+    let item = agenda.shift();
+    let key = JSON.stringify(item.args);
+    if (tried[key]) continue;
+    tried[key] = true;
+    let runRec = runCandidate(item.args, runIndex);
+    runIndex += 1;
+    allRuns.push(runRec);
+    let newly = updateSites(runRec);
+    let inputRec = {
+      args: runRec.args.slice(),
+      run: runRec.run,
+      result: safeValue(runRec.result, 3, new Set()),
+      error: runRec.error ? (runRec.error.message || String(runRec.error)) : null,
+      capped: runRec.capped,
+      covers: newly.map(function(n) { return n.branch + ":" + n.arm; }),
+      via: item.via,
+    };
+    inputs.push(inputRec);
+    if (item.via !== "seed") synthesizedCount += 1;
+    emit({
+      type: "run",
+      run: runRec.run,
+      args: runRec.args.slice(),
+      result: inputRec.result,
+      error: inputRec.error,
+      capped: runRec.capped,
+      newlyCovered: newly,
+    });
+  }
+
+  // --- report ----------------------------------------------------------------
+  let coveredArms = 0;
+  let totalArms = 0;
+  let branches = [];
+  let uncovered = [];
+  for (let ii = 0; ii < siteOrder.length; ++ii) {
+    let site = sites[siteOrder[ii]];
+    let publicArms = [];
+    for (let aa = 0; aa < site.arms.length; ++aa) {
+      let arm = site.arms[aa];
+      totalArms += 1;
+      let isCovered = site.counts[arm] > 0;
+      if (isCovered) coveredArms += 1;
+      publicArms.push({
+        arm: arm,
+        observed: site.counts[arm],
+        covered: isCovered,
+        coveredBy: site.coveredBy[arm],
+      });
+      if (!isCovered) {
+        let reason = site.reasons[arm];
+        if (!reason) {
+          reason = "not targeted: the run budget of " + maxRuns + " was exhausted after " + runIndex + " runs";
+        }
+        uncovered.push({
+          id: site.id,
+          kind: site.kind,
+          condition: site.condition,
+          statement: site.statement,
+          location: site.location,
+          arm: arm,
+          reason: reason,
+          observed: site.counts[arm],
+        });
+      }
+    }
+    branches.push({
+      id: site.id,
+      kind: site.kind,
+      condition: site.condition,
+      statement: site.statement,
+      location: site.location,
+      arms: publicArms,
+      covered: site.covered,
+      reasons: site.reasons,
+    });
+  }
+
+  // Findings: the final aggregate ONE_SIDED_BRANCH findings first
+  // (they carry their branch), then the per-run live findings —
+  // deduped by code + branch site + message. The site is canonical
+  // (the condition's source position): a per-run finding's hash is
+  // its own Stage's hash, so the same loop would otherwise appear
+  // once per run that never entered it.
+  function canonicalHash(stage, hash) {
+    if (typeof hash !== "number" || !stage || !stage.nodes || !stage.nodes[hash]) return hash;
+    let node = stage.nodes[hash].node;
+    if (!node) return hash;
+    return node.test && typeof node.test.start === "number" ? node.test.start : node.start;
+  }
+  function findingKey(f, stage) {
+    let h = "";
+    if (f.evidence) {
+      if (typeof f.evidence.hash === "number") {
+        h = String(canonicalHash(stage, f.evidence.hash));
+      } else if (Array.isArray(f.evidence.hashes)) {
+        let parts = [];
+        for (let ii = 0; ii < f.evidence.hashes.length; ++ii) {
+          parts.push(String(canonicalHash(stage, f.evidence.hashes[ii])));
+        }
+        h = parts.join(",");
+      }
+    }
+    return f.code + "|" + h + "|" + f.message;
+  }
+  let findings = [];
+  let seenFinding = {};
+  function addFinding(f, stage) {
+    let key = findingKey(f, stage);
+    if (seenFinding[key]) return;
+    seenFinding[key] = true;
+    findings.push(f);
+  }
+  let finalOneSided = aggregateOneSided();
+  for (let ii = 0; ii < finalOneSided.length; ++ii) {
+    let f = finalOneSided[ii];
+    let copy = Object.assign({}, f);
+    let site = f.evidence && typeof f.evidence.hash === "number"
+      ? siteByLocationStart(f.evidence.hash)
+      : null;
+    if (site) {
+      copy.branch = site.id;
+      copy.condition = site.condition;
+    }
+    // The aggregate hash is already canonical (a source position).
+    addFinding(copy, null);
+  }
+  for (let rr = 0; rr < allRuns.length; ++rr) {
+    let lf = allRuns[rr].liveFindings;
+    for (let ii = 0; ii < lf.length; ++ii) addFinding(lf[ii], allRuns[rr].stage);
+  }
+
+  let coverage = {
+    covered: coveredArms,
+    total: totalArms,
+    value: totalArms > 0 ? Math.round((coveredArms / totalArms) * 10000) / 10000 : 1,
+    sites: siteOrder.length,
+    branches: branches,
+  };
+  return {
+    entry: entry,
+    inputs: inputs,
+    coverage: coverage,
+    runs: { used: runIndex, budget: maxRuns },
+    uncovered: uncovered,
+    findings: findings,
+    summary: {
+      branchesCovered: coveredArms,
+      branchesTotal: totalArms,
+      sites: siteOrder.length,
+      inputsRun: inputs.length,
+      inputsSynthesized: synthesizedCount,
+      runsUsed: runIndex,
+      runsBudget: maxRuns,
+      uncoveredBranches: uncovered.length,
+    },
+  };
+}
+
+
+var _synth = Object.freeze({
+	SYNTHESIZE_DEFAULTS: SYNTHESIZE_DEFAULTS,
+	synthesize: synthesize
+});
+
+// Shared Python bridge for the IrohScript bootstrap (the Level 0
+// Python compiler in irohscript/). Used by the translator
+// (src/translate.js) and the IrohScript -> JavaScript code generator
+// (src/irohscript-codegen.js). Nothing in this file is wired onto the
+// public Iroh object: src/index.js does not import it, so these
+// helpers stay internal. The browser bundle has no python3 and no
+// require: getChildProcessSync() returns null there and callers throw
+// a clear error (see the async path for the ESM alternative).
+//
+// Division/modulo note: the AST helper compiles with the bootstrap,
+// whose semantics are Python-style (7/2 = 3.5, -5 % 3 = 1). The code
+// generator preserves that with __iroh_pymod for MOD and plain / for
+// DIV (JavaScript / is float division, the same as Python's). If Andy
+// ever calls C++-style (truncated) instead, the flip is one helper
+// function in the code generator, not a change here.
+
+// Locate the IrohScript sources (the Python bootstrap lives in the
+// repo at irohscript/). Resolution order: options.irohscriptHome,
+// IROHSCRIPT_HOME, <cwd>/irohscript, <cwd> itself when it already is
+// the irohscript directory.
+function irohscriptHomeCandidates(options) {
+  let out = [];
+  function push(h) {
+    if (h && out.indexOf(h) === -1) out.push(h);
+  }
+  if (options && options.irohscriptHome) push(options.irohscriptHome);
+  if (typeof process !== "undefined" && process.env && process.env.IROHSCRIPT_HOME) {
+    push(process.env.IROHSCRIPT_HOME);
+  }
+  if (typeof process !== "undefined" && process.cwd) {
+    try {
+      push(process.cwd() + "/irohscript");
+      push(process.cwd());
+    } catch (e) {}
+  }
+  return out;
+}
+
+// Run one of the embedded Python helpers (below) against `code`.
+// The helper gets the irohscript directory as argv[1] and the source
+// on stdin, and prints JSON on stdout. Candidates are tried in order
+// until one resolves the import; any other failure is the real error
+// (a compile error in the source, or a broken helper).
+function runIrohscriptPython(code, options, childProcess, helper, what) {
+  let candidates = irohscriptHomeCandidates(options);
+  for (let ii = 0; ii < candidates.length; ++ii) {
+    let stdout;
+    try {
+      stdout = childProcess.execFileSync("python3", ["-c", helper, candidates[ii]], {
+        input: code,
+        encoding: "utf8",
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    } catch (e) {
+      if (e.code === "ENOENT") {
+        throw new Error("Iroh.translate: python3 was not found on PATH (needed to parse " + what + " source)");
+      }
+      let stderr = e.stderr ? String(e.stderr) : "";
+      if (stderr.indexOf("ModuleNotFoundError") !== -1 || stderr.indexOf("No module named") !== -1) {
+        continue;
+      }
+      let lines = stderr.split("\n").filter(function(l) { return l.trim() !== ""; });
+      let last = lines.length > 0 ? lines[lines.length - 1] : (e.message || String(e));
+      throw new Error("Iroh.translate: " + what + " failed: " + last);
+    }
+    return JSON.parse(stdout);
+  }
+  throw new Error("Iroh.translate: IrohScript sources not found (looked for irohscript/src/compiler.py) — run from the IrohRedux checkout, set IROHSCRIPT_HOME, or pass { irohscriptHome }");
+}
+
+// stdlib-only Python helper: reads IrohScript source on stdin,
+// compiles it with the bootstrap compiler, writes the AST as JSON on
+// stdout (warnings go to stderr). No hand-rolled IrohScript parser
+// on the JS side — the bootstrap is the authority, the same way
+// Python -> JS uses Python's own ast module.
+const IROHSCRIPT_AST_HELPER = [
+  "import json, sys",
+  "sys.path.insert(0, sys.argv[1])",
+  "from src.compiler import IrohCompiler",
+  "src = sys.stdin.read()",
+  "try:",
+  "    result = IrohCompiler().compile(src)",
+  "except Exception as exc:",
+  "    sys.stderr.write('CompileError: %s\\n' % (exc,))",
+  "    sys.exit(1)",
+  "for w in result.warnings:",
+  "    sys.stderr.write('warning: %s\\n' % (w,))",
+  "sys.stdout.write(json.dumps(result.ast.to_dict()))",
+].join("\n");
+
+function getChildProcessSync() {
+  // `require` is the CJS bundle's module require; in the ESM and
+  // browser bundles it is undefined, so this safely returns null
+  // there (the Python leg then throws a clear error — see
+  // translateAsync for the ESM path).
+  if (typeof require === "function") {
+    try {
+      return require("node:child_process");
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
+
+// Dynamic import() without writing `import()` literally in src/:
+// buble cannot parse import() syntax (same pattern as setup.js).
+function nodeImport$1(specifier) {
+  return new Function("s", "return import(s);")(specifier);
+}
+
+// Hybrid translation engine for IrohRedux — JavaScript <-> Python /
+// C++ / IrohScript / BASIC.
 //
 //   Iroh.translate(code, { from, to })      -> { code, report } (sync)
 //   Iroh.translateAsync(code, { from, to }) -> Promise of the same
 //
 // `from` defaults to "javascript"; `to` is "python" | "cpp" |
-// "javascript". The JavaScript-out leg is hybrid: the AST (static)
+// "javascript" | "irohscript" | "basic". The JavaScript-out leg is hybrid: the AST (static)
 // plus trace evidence (dynamic — the program is run through the
 // tracer first and the events resolve what static analysis can't:
 // runtime types, values, which branches fired). The reverse legs
@@ -9216,7 +10609,7 @@ function makeJSEmitter(target, report, env, hints) {
   let isPy = target === "python";
   let lines = [];
   let indentLevel = 0;
-  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false };
+  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, cstdlib: false, sysexit: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false };
   let noted = {};
   function noteOnce(key, text) {
     if (!noted[key]) {
@@ -9656,6 +11049,21 @@ function makeJSEmitter(target, report, env, hints) {
       let prop = node.callee.computed
         ? null
         : (node.callee.property.name !== void 0 ? node.callee.property.name : node.callee.property.value);
+      // process.exit(code): the program ends. It only ever reaches
+      // this emitter from a BASIC END/STOP (the BASIC leg emits it)
+      // or from user JS calling it directly. Python gets sys.exit
+      // (with an import), C++ gets std::exit (with <cstdlib>) — both
+      // end the program in any context, so code after the call stays
+      // unreachable exactly as in the source. No arg means code 0.
+      if (node.callee.object.type === "Identifier" && node.callee.object.name === "process" && prop === "exit") {
+        let code = node.arguments.length > 0 ? expr(node.arguments[0], 16) : "0";
+        if (isPy) {
+          needs.sysexit = true;
+          return "sys.exit(" + code + ")";
+        }
+        needs.cstdlib = true;
+        return "std::exit(" + code + ")";
+      }
       let obj = expr(node.callee.object, 15);
       if (prop === "push") {
         let args = node.arguments.map(function(a) { return expr(a, 16); }).join(", ");
@@ -10041,26 +11449,37 @@ function makeJSEmitter(target, report, env, hints) {
   }
 
   function forLoopPattern(node) {
-    // Classic numeric for: for (let i = A; i <op> B; update)
-    if (!node.init || node.init.type !== "VariableDeclaration") return null;
-    if (node.init.declarations.length !== 1) return null;
-    let decl = node.init.declarations[0];
-    if (decl.id.type !== "Identifier" || !decl.init) return null;
+    // Classic numeric for: for (let i = A; i <op> B; update), or
+    // for (i = A; i <op> B; update) with i declared earlier (the
+    // BASIC leg emits the second form so the loop variable stays
+    // visible after the loop, the way BASIC scoping works).
+    let name = null;
+    let start = null;
+    if (node.init && node.init.type === "VariableDeclaration") {
+      if (node.init.declarations.length !== 1) return null;
+      let decl = node.init.declarations[0];
+      if (decl.id.type !== "Identifier" || !decl.init) return null;
+      name = decl.id.name;
+      start = decl.init;
+    } else if (node.init && node.init.type === "AssignmentExpression" && node.init.operator === "=" && node.init.left.type === "Identifier") {
+      name = node.init.left.name;
+      start = node.init.right;
+    } else return null;
     if (!node.test || node.test.type !== "BinaryExpression") return null;
     let test = node.test;
-    if (test.left.type !== "Identifier" || test.left.name !== decl.id.name) return null;
+    if (test.left.type !== "Identifier" || test.left.name !== name) return null;
     if (["<", "<=", ">", ">="].indexOf(test.operator) === -1) return null;
     let step = null;
     let upd = node.update;
     if (!upd) return null;
-    if (upd.type === "UpdateExpression" && upd.argument.type === "Identifier" && upd.argument.name === decl.id.name) {
+    if (upd.type === "UpdateExpression" && upd.argument.type === "Identifier" && upd.argument.name === name) {
       step = upd.operator === "++" ? 1 : -1;
-    } else if (upd.type === "AssignmentExpression" && upd.left.type === "Identifier" && upd.left.name === decl.id.name) {
+    } else if (upd.type === "AssignmentExpression" && upd.left.type === "Identifier" && upd.left.name === name) {
       if (upd.operator === "+=" && upd.right.type === "Literal" && typeof upd.right.value === "number") step = upd.right.value;
       else if (upd.operator === "-=" && upd.right.type === "Literal" && typeof upd.right.value === "number") step = -upd.right.value;
       else return null;
     } else return null;
-    return { name: decl.id.name, start: decl.init, op: test.operator, end: test.right, step: step };
+    return { name: name, start: start, op: test.operator, end: test.right, step: step };
   }
 
   function stmt(node) {
@@ -10484,6 +11903,7 @@ function makeJSEmitter(target, report, env, hints) {
       let header = [];
       if (needs.math) header.push("import math");
       if (needs.random) header.push("import random");
+      if (needs.sysexit) header.push("import sys");
       if (needs.jsmod) {
         // JS % is the truncated remainder; Python % is floored.
         // int(a / b) truncates toward zero, so this keeps ints int
@@ -10570,6 +11990,7 @@ function makeJSEmitter(target, report, env, hints) {
     if (needs.cmath) header.push("#include <cmath>");
     if (needs.algorithm) header.push("#include <algorithm>");
     if (needs.stdexcept) header.push("#include <stdexcept>");
+    if (needs.cstdlib) header.push("#include <cstdlib>");
     if (needs.vectorHelper) {
       header.push("");
       header.push("template <typename T>");
@@ -10594,7 +12015,11 @@ function makeJSEmitter(target, report, env, hints) {
       // zeros; -6 < k <= 0 writes "0." with -k zeros; otherwise
       // exponential with a bare exponent ("1e+21", "1e-7").
       header.push("");
-      header.push("#include <cmath>");
+      // __iroh_jsnum uses std::isnan / std::isinf, so it needs
+      // <cmath> — but only if the main header did not already emit it
+      // (a program that both uses Math and prints a Number used to get
+      // the include twice).
+      if (!needs.cmath) header.push("#include <cmath>");
       header.push("#include <cstdio>");
       header.push("#include <sstream>");
       header.push("std::string __iroh_jsnum(double v) {");
@@ -10683,23 +12108,52 @@ function translateFromJS(iroh, code, to, options) {
   // runs natively (the instrumenter does not rewrite it — Iroh.log
   // is only the fixtures' explicit print), so the global
   // console.log is swapped, not just Iroh.log.
+  // process.exit is stubbed too, for the same reason: a translated
+  // BASIC program ends with process.exit(0) (its END), and the
+  // evidence trace runs the program in-process — without the stub,
+  // translating a BASIC program with END killed the host process
+  // silently (exit 0, no output, no error). The stub throws a
+  // sentinel instead; trace() attaches the events gathered before
+  // the END to the thrown error, so the evidence is kept and the
+  // program ending is not mistaken for a failure. (In a browser
+  // there is no process to stub, and a process.exit in the traced
+  // code falls through to the evidence-unavailable path.)
   let events = [];
   let originalLog = iroh.log;
   let originalConsoleLog = typeof console !== "undefined" ? console.log : null;
+  let originalExit = (typeof process !== "undefined" && process && typeof process.exit === "function") ? process.exit : null;
   iroh.log = function() {};
   if (originalConsoleLog) console.log = function() {};
+  if (originalExit) {
+    process.exit = function(code) {
+      let err = new Error("__iroh_end");
+      err.__iroh_end = true;
+      err.__iroh_exit_code = code;
+      throw err;
+    };
+  }
   try {
     events = iroh.trace(code).events;
   } catch (e) {
-    report.notes.push(
-      "Dynamic trace evidence unavailable (" + (e.message || String(e)) + "); types come from static inference or hints only."
-    );
+    if (e && e.__iroh_end) {
+      events = e.events || [];
+    } else {
+      report.notes.push(
+        "Dynamic trace evidence unavailable (" + (e.message || String(e)) + "); types come from static inference or hints only."
+      );
+    }
   } finally {
     iroh.log = originalLog;
     if (originalConsoleLog) console.log = originalConsoleLog;
+    if (originalExit) process.exit = originalExit;
   }
   let env = buildTraceEnv(events);
-  let emitter = makeJSEmitter(to, report, env, options.types || null);
+  let emitter;
+  if (to === "irohscript" || to === "basic") {
+    emitter = makeIrohJSEmitter(to, report, env, options.types || null);
+  } else {
+    emitter = makeJSEmitter(to, report, env, options.types || null);
+  }
   let out = emitter.run(ast);
   let c = out.counts;
   if (c.functions > 0) {
@@ -10740,10 +12194,17 @@ function translateFromJS(iroh, code, to, options) {
     if (!env.called[fnNames[ii]]) uncalled.push(fnNames[ii]);
   }
   if (uncalled.length > 0) {
-    report.notes.push(
-      "Function(s) never called in the trace (" + uncalled.join(", ") +
-      "): C++ parameter types for them came from a type hint, or the function was reported unsupported."
-    );
+    if (to === "cpp") {
+      report.notes.push(
+        "Function(s) never called in the trace (" + uncalled.join(", ") +
+        "): C++ parameter types for them came from a type hint, or the function was reported unsupported."
+      );
+    } else {
+      report.notes.push(
+        "Function(s) never called in the trace (" + uncalled.join(", ") +
+        "): parameter types for them came from a type hint, or were omitted."
+      );
+    }
   }
   return { code: out.text, report: report };
 }
@@ -10773,26 +12234,7 @@ const PYTHON_AST_HELPER = [
   "sys.stdout.write(json.dumps(conv(tree)))",
 ].join("\n");
 
-function getChildProcessSync() {
-  // `require` is the CJS bundle's module require; in the ESM and
-  // browser bundles it is undefined, so this safely returns null
-  // there (the Python leg then throws a clear error — see
-  // translateAsync for the ESM path).
-  if (typeof require === "function") {
-    try {
-      return require("node:child_process");
-    } catch (e) {
-      return null;
-    }
-  }
-  return null;
-}
 
-// Dynamic import() without writing `import()` literally in src/:
-// buble cannot parse import() syntax (same pattern as setup.js).
-function nodeImport$1(specifier) {
-  return new Function("s", "return import(s);")(specifier);
-}
 
 function runPythonAst(code, childProcess) {
   let stdout;
@@ -12353,64 +13795,1684 @@ function translateFromCpp(code) {
 // Public entry points
 // ------------------------------------------------------------------
 
+// ------------------------------------------------------------------
+// IrohScript and BASIC (1.0.1 rework, part 2) — the translator learns
+// the two new languages, both directions, and --translate accepts
+// them. The design follows the 0.8.0 engine's rules: unsupported
+// constructs are reported with a loud throwing stub, never silently
+// mistranslated; every assumption cites its evidence.
+//
+// Legs:
+//   IrohScript -> JavaScript: the IrohScript AST (from the bootstrap
+//     compiler, via python3) is walked statically — the source's own
+//     type annotations carry the types, so no trace is needed
+//     (staticOnly: true).
+//   BASIC -> JavaScript: the BASIC parse tree (from basic.py, via
+//     python3) is walked statically (staticOnly: true). GOSUB
+//     subroutines become functions; GOTO is not in the v1 scope and
+//     is a loud stub (the pc-dispatch transform is the follow-up).
+//   JavaScript -> IrohScript / BASIC: the JS emitter below walks the
+//     Acorn AST with trace evidence, the way the Python/C++ legs do
+//     (hybrid, staticOnly: false). IrohScript has no for-loop and no
+//     arrays in v1, BASIC has no while loop and no real functions —
+//     what cannot be expressed is a loud stub, not a guess.
+//   Anything -> Python / C++ from IrohScript or BASIC, and
+//     Python / C++ -> IrohScript or BASIC, go two-hop via JavaScript
+//     (the JS leg in the middle is traced for its types, exactly as
+//     the direct JS -> Python/C++ leg is). The report says so.
+//   --direct stays JavaScript-only: the script tracers (Python, C++,
+//     IrohScript, BASIC) run under spawnSync, so no directive can
+//     reach them mid-run — the same limit Python/C++ already have.
+//     Parity, not a gap introduced here.
+// ------------------------------------------------------------------
+
+
+
+
+// stdlib-only Python helper: reads BASIC source on stdin, parses it
+// with basic.py's own parser, writes the parse tree as JSON on
+// stdout (tuples become lists). No hand-rolled BASIC parser here.
+const BASIC_AST_HELPER = [
+  "import json, sys",
+  "sys.path.insert(0, sys.argv[1] + '/src')",
+  "from basic import parse_program",
+  "def conv(v):",
+  "    if isinstance(v, tuple):",
+  "        return [conv(x) for x in v]",
+  "    if isinstance(v, list):",
+  "        return [conv(x) for x in v]",
+  "    return v",
+  "src = sys.stdin.read()",
+  "try:",
+  "    prog = parse_program(src)",
+  "except Exception as exc:",
+  "    sys.stderr.write('BasicError: %s\\n' % (exc,))",
+  "    sys.exit(1)",
+  "sys.stdout.write(json.dumps(conv(prog)))",
+].join("\n");
+
+// Default value for an IrohScript type (for LET with no initializer
+// and for STRUCT field defaults). null means "a constructor call".
+function irohTypeDefault(typeName) {
+  if (typeName === "Int" || typeName === "Float") return "0";
+  if (typeName === "String") return '""';
+  if (typeName === "Bool") return "false";
+  if (typeName && typeName.indexOf("Vector") === 0) return "[]";
+  return null;
+}
+
+// IrohScript AST (JSON, node-tagged) -> JavaScript. Static-only: the
+// source's type annotations carry the types, and the AST keeps the
+// source's structure (Let/If/FunctionDef/Conditional/Action/Intent).
+function makeIrohAstJSEmitter(report) {
+  let lines = [];
+  let indentLevel = 0;
+  let needs = { pymod: false, action: false, intent: false };
+  let counts = { functions: 0, loops: 0, conditionals: 0, variables: 0, outputs: 0 };
+  let noted = {};
+  function indentStr() { return "  ".repeat(indentLevel); }
+  function emitLine(text) { lines.push(indentStr() + text); }
+  function noteOnce(key, text) {
+    if (!noted[key]) { noted[key] = true; report.notes.push(text); }
+  }
+  function stubStmt(detail, construct) {
+    markUnsupported(report, construct, detail);
+    emitLine("throw new Error(" + JSON.stringify("IrohRedux: " + detail) + ");");
+  }
+  let BIN_PREC = { OR: 1, AND: 2, EQ: 3, NEQ: 3, LT: 3, LE: 3, GT: 3, GE: 3, ADD: 4, SUB: 4, MUL: 5, DIV: 5, MOD: 5 };
+  function exprPrec(node) {
+    if (!node || typeof node !== "object") return 7;
+    if (node.node === "BinOp") return BIN_PREC[node.op] || 1;
+    if (node.node === "UnaryOp") return 6;
+    return 7;
+  }
+  function expr(node, parentPrec) {
+    if (!node || typeof node !== "object") return "undefined";
+    let prec = exprPrec(node);
+    let out = "";
+    if (node.node === "Literal") {
+      if (typeof node.value === "string") out = JSON.stringify(node.value);
+      else if (typeof node.value === "number" || typeof node.value === "boolean") out = String(node.value);
+      else if (node.value === null || node.value === void 0) out = "null";
+      else out = JSON.stringify(node.value);
+    } else if (node.node === "Name") {
+      out = node.name;
+    } else if (node.node === "BinOp") {
+      if (node.op === "MOD") {
+        needs.pymod = true;
+        out = "__iroh_pymod(" + expr(node.left, 7) + ", " + expr(node.right, 7) + ")";
+      } else {
+        let map = { ADD: "+", SUB: "-", MUL: "*", DIV: "/", EQ: "===", NEQ: "!==", LT: "<", LE: "<=", GT: ">", GE: ">=", AND: "&&", OR: "||" };
+        out = expr(node.left, prec) + " " + (map[node.op] || node.op) + " " + expr(node.right, prec + 1);
+      }
+    } else if (node.node === "UnaryOp") {
+      out = (node.op === "NOT" ? "!" : "-") + expr(node.operand, 6);
+    } else if (node.node === "Call") {
+      out = expr(node.callee, 7) + "(" + node.args.map(function(a) { return expr(a, 0); }).join(", ") + ")";
+    } else if (node.node === "MemberAccess") {
+      out = expr(node.object, 7) + "." + node.member;
+    } else {
+      markUnsupported(report, node.node || "expression", "expression node '" + (node.node || "?") + "' is not in the v1 scope");
+      out = "(function() { throw new Error(" + JSON.stringify("IrohRedux: expression '" + (node.node || "?") + "' is not in the v1 scope") + "); })()";
+    }
+    if (prec < (parentPrec || 0)) return "(" + out + ")";
+    return out;
+  }
+  function emitBlock(stmts) {
+    indentLevel += 1;
+    for (let ii = 0; ii < stmts.length; ++ii) stmt(stmts[ii]);
+    indentLevel -= 1;
+  }
+  function stmt(node) {
+    if (!node || typeof node.node !== "string") return;
+    if (node.node === "Let" || node.node === "Const") {
+      counts.variables += 1;
+      let kw = node.node === "Const" ? "const " : "let ";
+      if (node.value === null || node.value === void 0) {
+        if (node.type) {
+          let dflt = irohTypeDefault(node.type);
+          if (dflt !== null) { emitLine(kw + node.name + " = " + dflt + ";"); return; }
+          emitLine(kw + node.name + " = " + node.type + "();");
+          return;
+        }
+        emitLine(kw + node.name + ";");
+        return;
+      }
+      emitLine(kw + node.name + " = " + expr(node.value, 0) + ";");
+      return;
+    }
+    if (node.node === "Assign") {
+      emitLine(expr(node.target, 0) + " = " + expr(node.value, 0) + ";");
+      return;
+    }
+    if (node.node === "Print") {
+      counts.outputs += 1;
+      emitLine("console.log(" + expr(node.value, 0) + ");");
+      return;
+    }
+    if (node.node === "Action") {
+      needs.action = true;
+      emitLine("__iroh_action(" + expr(node.value, 0) + ");");
+      return;
+    }
+    if (node.node === "If") {
+      counts.conditionals += 1;
+      emitLine("if (" + expr(node.cond, 0) + ") {");
+      emitBlock(node.then);
+      if (node.else && node.else.length > 0) {
+        emitLine("} else {");
+        emitBlock(node.else);
+      }
+      emitLine("}");
+      return;
+    }
+    if (node.node === "Conditional") {
+      counts.conditionals += 1;
+      needs.action = true;
+      emitLine("if (" + expr(node.condition, 0) + ") {");
+      indentLevel += 1;
+      emitLine("__iroh_action(" + expr(node.action, 0) + ");");
+      indentLevel -= 1;
+      emitLine("}");
+      return;
+    }
+    if (node.node === "Loop") {
+      stubStmt("IrohScript LOOP has no defined exit condition in IrohScript 3.0 (spec section 6 shows the form but not the termination rule)", "Loop");
+      return;
+    }
+    if (node.node === "FunctionDef") {
+      counts.functions += 1;
+      let params = node.params.map(function(p) { return p.name; }).join(", ");
+      emitLine("function " + node.name + "(" + params + ") {");
+      emitBlock(node.body);
+      emitLine("}");
+      return;
+    }
+    if (node.node === "Return") {
+      emitLine(node.value ? "return " + expr(node.value, 0) + ";" : "return;");
+      return;
+    }
+    if (node.node === "StructDef") {
+      let fields = node.fields.map(function(f) {
+        let dflt = irohTypeDefault(f.type);
+        return f.name + ": " + (dflt !== null ? dflt : f.type + "()");
+      }).join(", ");
+      emitLine("function " + node.name + "() { return { " + fields + " }; }");
+      return;
+    }
+    if (node.node === "EnumDef") {
+      let members = node.members.map(function(m) { return m + ": " + JSON.stringify(m); }).join(", ");
+      emitLine("var " + node.name + " = { " + members + " };");
+      return;
+    }
+    if (node.node === "Import") {
+      noteOnce("import-" + node.name, "IMPORT '" + node.name + "' has no runtime effect (namespaces are runtime extensions); the import was dropped.");
+      return;
+    }
+    if (node.node === "Intent") {
+      needs.intent = true;
+      emitLine("__iroh_intent(" + expr(node.value, 0) + ");");
+      return;
+    }
+    if (node.node === "Call") {
+      emitLine(expr(node, 0) + ";");
+      return;
+    }
+    stubStmt("statement node '" + node.node + "' is not in the v1 scope", node.node);
+  }
+  function run(ast) {
+    let stmts = ast.statements || [];
+    let fns = [];
+    let rest = [];
+    for (let ii = 0; ii < stmts.length; ++ii) {
+      if (stmts[ii].node === "FunctionDef") fns.push(stmts[ii]);
+      else rest.push(stmts[ii]);
+    }
+    for (let ii = 0; ii < fns.length; ++ii) stmt(fns[ii]);
+    if (fns.length > 0 && rest.length > 0) lines.push("");
+    for (let ii = 0; ii < rest.length; ++ii) stmt(rest[ii]);
+    let header = [];
+    if (needs.pymod) {
+      header.push("function __iroh_pymod(a, b) { return ((a % b) + b) % b; }");
+      header.push("");
+    }
+    if (needs.action) {
+      header.push("var __iroh_actions = [];");
+      header.push("function __iroh_action(v) { __iroh_actions.push(v); console.log(v); }");
+      header.push("");
+    }
+    if (needs.intent) {
+      header.push("var __iroh_intents = [];");
+      header.push("function __iroh_intent(v) { __iroh_intents.push(v); }");
+      header.push("");
+    }
+    return { text: header.concat(lines).join("\n") + "\n", counts: counts };
+  }
+  return { run: run, counts: counts };
+}
+
+// BASIC parse tree (JSON lists, from basic.py) -> JavaScript.
+// Static-only. The program is flattened into slots in line order;
+// GOSUB subroutines become hoisted functions, FOR/NEXT becomes a
+// for loop, GOTO is not in the v1 scope (the pc-dispatch transform
+// is the follow-up) and is a loud stub.
+function makeBasicJSEmitter(report) {
+  let lines = [];
+  let indentLevel = 0;
+  let needs = { pymod: false, input: false, dim: false };
+  let counts = { functions: 0, loops: 0, conditionals: 0, variables: 0, outputs: 0 };
+  let declared = {};
+  let dimmed = {};
+  let noted = {};
+  let subTargets = [];
+  let stepCounter = 0;
+  function indentStr() { return "  ".repeat(indentLevel); }
+  function emitLine(text) { lines.push(indentStr() + text); }
+  function noteOnce(key, text) {
+    if (!noted[key]) { noted[key] = true; report.notes.push(text); }
+  }
+  function stubStmt(detail, construct) {
+    markUnsupported(report, construct, detail);
+    emitLine("throw new Error(" + JSON.stringify("IrohRedux: " + detail) + ");");
+  }
+  let BIN_PREC = { OR: 1, AND: 2, "=": 3, "<>": 3, "<": 3, "<=": 3, ">": 3, ">=": 3, "+": 4, "-": 4, "*": 5, "/": 5, "%": 5 };
+  function exprPrec(node) {
+    if (!node || !Array.isArray(node)) return 7;
+    if (node[0] === "bin") return BIN_PREC[node[1]] || 1;
+    if (node[0] === "un") return 6;
+    return 7;
+  }
+  function expr(node, parentPrec) {
+    if (!node || !Array.isArray(node)) return "undefined";
+    let prec = exprPrec(node);
+    let out = "";
+    if (node[0] === "num" || node[0] === "str") {
+      out = JSON.stringify(node[1]);
+    } else if (node[0] === "var") {
+      out = node[1];
+    } else if (node[0] === "arr") {
+      if (!dimmed[node[1]]) {
+        markUnsupported(report, "ArrayExpression", "array '" + node[1] + "' is used without DIM");
+        out = "(function() { throw new Error(" + JSON.stringify("IrohRedux: array '" + node[1] + "' is used without DIM") + "); })()";
+      } else {
+        out = node[1];
+        for (let ii = 0; ii < node[2].length; ++ii) out += "[" + expr(node[2][ii], 0) + "]";
+      }
+    } else if (node[0] === "bin") {
+      let op = node[1];
+      if (op === "%") {
+        needs.pymod = true;
+        out = "__iroh_pymod(" + expr(node[2], 7) + ", " + expr(node[3], 7) + ")";
+      } else {
+        let map = { "=": "===", "<>": "!==", AND: "&&", OR: "||" };
+        let jsOp = map[op] || op;
+        out = expr(node[2], prec) + " " + jsOp + " " + expr(node[3], prec + 1);
+      }
+    } else if (node[0] === "un") {
+      out = (node[1] === "NOT" ? "!" : "-") + expr(node[2], 6);
+    } else {
+      markUnsupported(report, "expression", "expression '" + node[0] + "' is not in the v1 scope");
+      out = "(function() { throw new Error(" + JSON.stringify("IrohRedux: expression '" + node[0] + "' is not in the v1 scope") + "); })()";
+    }
+    if (prec < (parentPrec || 0)) return "(" + out + ")";
+    return out;
+  }
+  function emitPrint(items) {
+    counts.outputs += 1;
+    if (!items || items.length === 0) { emitLine("console.log();"); return; }
+    let parts = [];
+    let trailing = false;
+    for (let ii = 0; ii < items.length; ++ii) {
+      let item = items[ii];
+      let sep = item.length > 1 ? item[1] : null;
+      parts.push(expr(item[0], 0));
+      if (sep === ";") { parts.push('""'); trailing = true; }
+      else if (sep === ",") {
+        noteOnce("print-zone", "PRINT with ',' moves to the next print zone (14 columns); translated as a tab.");
+        parts.push('"\\t"');
+        trailing = true;
+      } else {
+        trailing = false;
+      }
+    }
+    let joined = parts.join(" + ");
+    if (trailing) {
+      noteOnce("print-trailing", "PRINT with a trailing separator writes without a newline (process.stdout.write, Node-only).");
+      emitLine("process.stdout.write(" + joined + ");");
+    } else {
+      emitLine("console.log(" + joined + ");");
+    }
+  }
+  // Emit a sequence of BASIC statements (a flat slot range, or one
+  // IF branch list). `inSub` is true inside a GOSUB subroutine body;
+  // `isFlat` is true when `items` is the program's flat slot array
+  // (so subroutine ranges are skipped there, never inside a branch).
+  function emitSeq(items, from, to, subRanges, inSub, isFlat) {
+    let ii = from;
+    while (ii < to) {
+      if (isFlat) {
+        let skipped = false;
+        for (let kk = 0; kk < subTargets.length; ++kk) {
+          let range = subRanges[subTargets[kk]];
+          if (range && ii >= range.start && ii < range.end) { ii = range.end; skipped = true; break; }
+        }
+        if (skipped) continue;
+      }
+      let s = items[ii].stmt;
+      let kind = s[0];
+      if (kind === "rem") { ii += 1; continue; }
+      if (kind === "let") {
+        counts.variables += 1;
+        if (!declared[s[1]]) { declared[s[1]] = true; emitLine("let " + s[1] + " = " + expr(s[2], 0) + ";"); }
+        else emitLine(s[1] + " = " + expr(s[2], 0) + ";");
+        ii += 1;
+        continue;
+      }
+      if (kind === "setelem") {
+        if (!dimmed[s[1]]) {
+          stubStmt("array '" + s[1] + "' is assigned without DIM", "ArrayExpression");
+          ii += 1;
+          continue;
+        }
+        let target = s[1];
+        for (let jj = 0; jj < s[2].length; ++jj) target += "[" + expr(s[2][jj], 0) + "]";
+        emitLine(target + " = " + expr(s[3], 0) + ";");
+        ii += 1;
+        continue;
+      }
+      if (kind === "dim") {
+        dimmed[s[1]] = true;
+        needs.dim = true;
+        let fill = s[1].charAt(s[1].length - 1) === "$" ? '""' : "0";
+        let sizes = s[2].map(function(e) { return expr(e, 0); }).join(", ");
+        if (!declared[s[1]]) { declared[s[1]] = true; emitLine("let " + s[1] + " = __basic_dim([" + sizes + "], " + fill + ");"); }
+        else emitLine(s[1] + " = __basic_dim([" + sizes + "], " + fill + ");");
+        ii += 1;
+        continue;
+      }
+      if (kind === "print") { emitPrint(s[1]); ii += 1; continue; }
+      if (kind === "input") {
+        needs.input = true;
+        for (let jj = 0; jj < s[2].length; ++jj) {
+          let name = s[2][jj];
+          let prompt = jj === 0 ? s[1] : null;
+          let call = "__basic_input(" + (prompt === null ? "null" : JSON.stringify(prompt)) + ")";
+          if (name.charAt(name.length - 1) === "$") {
+            if (!declared[name]) { declared[name] = true; emitLine("let " + name + " = " + call + ";"); }
+            else emitLine(name + " = " + call + ";");
+          } else {
+            if (!declared[name]) { declared[name] = true; emitLine("let " + name + " = Number(" + call + ");"); }
+            else emitLine(name + " = Number(" + call + ");");
+          }
+        }
+        noteOnce("input-lines", "INPUT reads one line per variable; a comma-separated line is not split (BASIC reads several values from one line).");
+        ii += 1;
+        continue;
+      }
+      if (kind === "if") {
+        counts.conditionals += 1;
+        emitLine("if (" + expr(s[1], 0) + ") {");
+        indentLevel += 1;
+        emitStmtList(s[2], subRanges, inSub);
+        indentLevel -= 1;
+        if (s[3] && s[3].length > 0) {
+          emitLine("} else {");
+          indentLevel += 1;
+          emitStmtList(s[3], subRanges, inSub);
+          indentLevel -= 1;
+        }
+        emitLine("}");
+        ii += 1;
+        continue;
+      }
+      if (kind === "for") {
+        counts.loops += 1;
+        let depth = 1;
+        let nextIdx = -1;
+        for (let jj = ii + 1; jj < to; ++jj) {
+          if (items[jj].stmt[0] === "for") depth += 1;
+          if (items[jj].stmt[0] === "next") {
+            depth -= 1;
+            if (depth === 0) { nextIdx = jj; break; }
+          }
+        }
+        if (nextIdx === -1) {
+          stubStmt("FOR '" + s[1] + "' has no matching NEXT in the v1 scope", "ForStatement");
+          ii += 1;
+          continue;
+        }
+        let varName = s[1];
+        if (!declared[varName]) { declared[varName] = true; emitLine("let " + varName + ";"); }
+        let stepExpr = s[4] === null || s[4] === void 0 ? "1" : expr(s[4], 0);
+        let stepVal = s[4] === null || s[4] === void 0 ? 1 : (s[4][0] === "num" ? s[4][1] : null);
+        let stepIsLiteral = stepVal !== null;
+        let stepName = null;
+        let test;
+        if (stepIsLiteral && stepVal >= 0) test = varName + " <= " + expr(s[3], 0);
+        else if (stepIsLiteral) test = varName + " >= " + expr(s[3], 0);
+        else {
+          stepCounter += 1;
+          stepName = "__basic_step_" + stepCounter;
+          test = "(" + stepName + " >= 0 ? " + varName + " <= " + expr(s[3], 0) + " : " + varName + " >= " + expr(s[3], 0) + ")";
+        }
+        if (!stepIsLiteral) emitLine("let " + stepName + " = " + stepExpr + ";");
+        emitLine("for (" + varName + " = " + expr(s[2], 0) + "; " + test + "; " + varName + " += " + (stepIsLiteral ? stepExpr : stepName) + ") {");
+        indentLevel += 1;
+        emitSeq(items, ii + 1, nextIdx, subRanges, inSub, isFlat);
+        indentLevel -= 1;
+        emitLine("}");
+        ii = nextIdx + 1;
+        continue;
+      }
+      if (kind === "next") {
+        stubStmt("NEXT without a matching FOR", "ForStatement");
+        ii += 1;
+        continue;
+      }
+      if (kind === "gosub") {
+        if (!(s[1] in subRanges)) {
+          stubStmt("GOSUB target line " + s[1] + " does not exist", "GOSUB");
+        } else {
+          emitLine("__gosub_" + s[1] + "();");
+        }
+        ii += 1;
+        continue;
+      }
+      if (kind === "goto") {
+        stubStmt("GOTO line " + s[1] + " is not in the v1 scope (the pc-dispatch transform is the follow-up)", "GOTO");
+        ii += 1;
+        continue;
+      }
+      if (kind === "return") {
+        if (inSub) emitLine("return;");
+        else stubStmt("RETURN outside a GOSUB subroutine", "RETURN");
+        ii += 1;
+        continue;
+      }
+      if (kind === "end" || kind === "stop") {
+        emitLine("process.exit(0);");
+        ii += 1;
+        continue;
+      }
+      stubStmt("statement '" + kind + "' is not in the v1 scope", kind);
+      ii += 1;
+    }
+    return ii;
+  }
+  function emitStmtList(stmts, subRanges, inSub) {
+    let items = [];
+    for (let ii = 0; ii < stmts.length; ++ii) items.push({ stmt: stmts[ii] });
+    emitSeq(items, 0, items.length, subRanges, inSub, false);
+  }
+  function run(prog) {
+    let flat = [];
+    let lineMap = {};
+    for (let ii = 0; ii < prog.length; ++ii) {
+      let lineNo = prog[ii][0];
+      let stmts = prog[ii][2] || [];
+      if (lineNo !== null && lineNo !== void 0 && !(lineNo in lineMap)) lineMap[lineNo] = flat.length;
+      for (let jj = 0; jj < stmts.length; ++jj) flat.push({ stmt: stmts[jj], line: lineNo });
+    }
+    let subRanges = {};
+    let gosubTargets = [];
+    for (let ii = 0; ii < flat.length; ++ii) {
+      if (flat[ii].stmt[0] === "gosub") {
+        let target = flat[ii].stmt[1];
+        if (gosubTargets.indexOf(target) === -1) gosubTargets.push(target);
+      }
+    }
+    for (let ii = 0; ii < gosubTargets.length; ++ii) {
+      let target = gosubTargets[ii];
+      let start = lineMap[target];
+      if (start === void 0) continue;
+      let end = flat.length;
+      for (let jj = start; jj < flat.length; ++jj) {
+        if (flat[jj].stmt[0] === "return") { end = jj + 1; break; }
+        if (flat[jj].stmt[0] === "end" || flat[jj].stmt[0] === "stop") { end = jj; break; }
+      }
+      subRanges[target] = { start: start, end: end };
+      counts.functions += 1;
+    }
+    for (let ii = 0; ii < gosubTargets.length; ++ii) {
+      let target = gosubTargets[ii];
+      let range = subRanges[target];
+      if (!range) continue;
+      emitLine("function __gosub_" + target + "() {");
+      indentLevel += 1;
+      emitSeq(flat, range.start, range.end, subRanges, true, false);
+      indentLevel -= 1;
+      emitLine("}");
+    }
+    if (gosubTargets.length > 0) lines.push("");
+    subTargets = gosubTargets;
+    // Mainline: one pass over the flat slots; emitSeq skips the
+    // subroutine ranges itself.
+    emitSeq(flat, 0, flat.length, subRanges, false, true);
+    let header = [];
+    if (needs.pymod) {
+      header.push("function __iroh_pymod(a, b) { return ((a % b) + b) % b; }");
+      header.push("");
+    }
+    if (needs.dim) {
+      header.push("function __basic_dim(sizes, fill) {");
+      header.push("  if (sizes.length === 0) return fill;");
+      header.push("  var arr = new Array(sizes[0] + 1);");
+      header.push("  for (var i = 0; i < arr.length; ++i) arr[i] = __basic_dim(sizes.slice(1), fill);");
+      header.push("  return arr;");
+      header.push("}");
+      header.push("");
+    }
+    if (needs.input) {
+      header.push("var __basic_input_lines = null;");
+      header.push("var __basic_input_at = 0;");
+      header.push("function __basic_input(prompt) {");
+      header.push("  if (prompt) process.stdout.write(prompt);");
+      header.push("  if (__basic_input_lines === null) {");
+      header.push("    __basic_input_lines = require(\"fs\").readFileSync(0, \"utf8\").split(\"\\n\");");
+      header.push("  }");
+      header.push("  var line = __basic_input_at < __basic_input_lines.length ? __basic_input_lines[__basic_input_at++] : \"\";");
+      header.push("  return line;");
+      header.push("}");
+      header.push("");
+      noteOnce("input-node", "INPUT in translated JavaScript reads stdin with require(\"fs\") (Node-only).");
+    }
+    return { text: header.concat(lines).join("\n") + "\n", counts: counts };
+  }
+  return { run: run, counts: counts };
+}
+
+function translateFromIrohscript(code, childProcess, options) {
+  let report = newReport("irohscript", "javascript", true);
+  let ast = runIrohscriptPython(code, options, childProcess, IROHSCRIPT_AST_HELPER, "IrohScript");
+  let emitter = makeIrohAstJSEmitter(report);
+  let out = emitter.run(ast);
+  finishSourceLeg(report, out.counts);
+  return { code: out.text, report: report };
+}
+
+function translateFromBasic(code, childProcess, options) {
+  let report = newReport("basic", "javascript", true);
+  let prog = runIrohscriptPython(code, options, childProcess, BASIC_AST_HELPER, "BASIC");
+  let emitter = makeBasicJSEmitter(report);
+  let out = emitter.run(prog);
+  finishSourceLeg(report, out.counts);
+  return { code: out.text, report: report };
+}
+
+// Shared report tail for the static-only source legs: the same
+// "clean" entries translateFromJS writes, so every leg reports the
+// same way.
+function finishSourceLeg(report, c) {
+  if (c.functions > 0) {
+    report.clean.push({ construct: "functions", count: c.functions, detail: "function declarations translated" });
+  }
+  if (c.variables > 0) {
+    report.clean.push({ construct: "variables", count: c.variables, detail: "variable declarations translated" });
+  }
+  if (c.loops > 0) {
+    report.clean.push({ construct: "loops", count: c.loops, detail: "for loops translated" });
+  }
+  if (c.conditionals > 0) {
+    report.clean.push({ construct: "conditionals", count: c.conditionals, detail: "if statements translated" });
+  }
+  if (c.outputs > 0) {
+    report.clean.push({ construct: "console-output", count: c.outputs, detail: "print statements translated" });
+  }
+}
+
+// Map a C++ type (the spelling buildTraceEnv / inferType produce)
+// to the IrohScript type name. null means "no annotation".
+function irohTypeOfCpp(cppType) {
+  if (!cppType) return null;
+  if (cppType === "int") return "Int";
+  if (cppType === "double") return "Float";
+  if (cppType === "std::string") return "String";
+  if (cppType === "bool") return "Bool";
+  let m = /^std::vector<(.+)>$/.exec(cppType);
+  if (m) {
+    let inner = irohTypeOfCpp(m[1]);
+    return inner ? "Vector<" + inner + ">" : null;
+  }
+  return null;
+}
+
+// JavaScript AST (Acorn) -> IrohScript or BASIC. Hybrid like the
+// Python/C++ legs: the caller traces the program first and env
+// carries the evidence. v1 scope is the same as the other legs
+// (functions, arithmetic, loops, conditionals, arrays, strings,
+// console output) minus what the target language cannot express:
+// IrohScript has no for-loop and no arrays; BASIC has no while loop
+// and no real functions (they become GOSUB subroutines). What cannot
+// be expressed is a loud stub, not a guess.
+function makeIrohJSEmitter(target, report, env, hints) {
+  let isIroh = target === "irohscript";
+  let lines = [];
+  let indentLevel = 0;
+  let counts = { functions: 0, loops: 0, conditionals: 0, variables: 0, outputs: 0 };
+  let declared = {};
+  let noted = {};
+  let ctx = { vars: {} };
+  for (let k in env.vars) ctx.vars[k] = env.vars[k].type;
+  if (hints && hints.variables) {
+    for (let k in hints.variables) ctx.vars[k] = hints.variables[k];
+  }
+  function indentStr() { return "  ".repeat(indentLevel); }
+  function emitLine(text) { lines.push(indentStr() + text); }
+  function noteOnce(key, text) {
+    if (!noted[key]) { noted[key] = true; report.notes.push(text); }
+  }
+  function assumeOnce(key, what, evidence) {
+    if (!noted[key]) {
+      noted[key] = true;
+      recordAssumption(report, what, evidence);
+    }
+  }
+  function stubStmt(detail, construct) {
+    markUnsupported(report, construct, detail);
+    if (isIroh) emitLine("__iroh_unsupported(" + JSON.stringify(detail) + ");");
+    else {
+      emitLine("PRINT " + basicQuote("IrohRedux: " + detail));
+      emitLine("END");
+    }
+  }
+  function stubExpr(detail, construct) {
+    markUnsupported(report, construct, detail);
+    if (isIroh) return "__iroh_unsupported(" + JSON.stringify(detail) + ")";
+    return "(1 / 0)";
+  }
+  function basicQuote(s) {
+    return '"' + String(s).replace(/"/g, '""') + '"';
+  }
+  function irohTypeOf(node) {
+    let t = null;
+    try { t = inferType(node, ctx); } catch (e) { t = null; }
+    return irohTypeOfCpp(t);
+  }
+  function paramType(fnName, idx, node) {
+    if (hints && hints.functions && hints.functions[fnName] && hints.functions[fnName].params) {
+      let p = hints.functions[fnName].params[idx];
+      if (p) return irohTypeOfCpp(p);
+    }
+    let f = env.funcs && env.funcs[fnName];
+    if (f && f.args && idx < f.args.length) return irohTypeOfCpp(cppTypeOfValue(f.args[idx]));
+    if (node) return irohTypeOf(node);
+    return null;
+  }
+  function expr(node, parentPrec) {
+    if (!node || typeof node.type !== "string") return "undefined";
+    let prec = precedence(node);
+    let out = "";
+    if (node.type === "Literal") {
+      if (typeof node.value === "string") out = isIroh ? JSON.stringify(node.value) : basicQuote(node.value);
+      else if (typeof node.value === "number") out = String(node.value);
+      else if (typeof node.value === "boolean") out = isIroh ? (node.value ? "True" : "False") : (node.value ? "-1" : "0");
+      else if (node.value === null) {
+        out = stubExpr("null has no equivalent in " + target, "Literal");
+      } else {
+        out = JSON.stringify(node.value);
+      }
+    } else if (node.type === "Identifier") {
+      out = node.name;
+    } else if (node.type === "BinaryExpression" || node.type === "LogicalExpression") {
+      let op = node.operator;
+      if (op === "%") {
+        assumeOnce("js-mod", "JavaScript % truncates toward zero; " + (isIroh ? "IrohScript" : "BASIC") + " % floors (Python-style); results differ when the left operand is negative", "IrohScript/BASIC % is Python-style floored modulo (bootstrap interpreter, basic.py); JavaScript % truncates toward zero");
+        out = expr(node.left, prec) + " % " + expr(node.right, prec + 1);
+      } else if (op === "**") {
+        out = stubExpr("the ** operator has no equivalent in " + target, "BinaryExpression");
+      } else if (op === "==" || op === "!=") {
+        assumeOnce("loose-eq", "JavaScript loose equality (==/!=) is translated as strict equality (===/!==); values of different types compare differently", "no loose-equality operator exists in " + target);
+        let jsOp = op === "==" ? (isIroh ? "==" : "=") : (isIroh ? "!=" : "<>");
+        out = expr(node.left, prec) + " " + jsOp + " " + expr(node.right, prec + 1);
+      } else if (op === "===" || op === "!==") {
+        let jsOp = op === "===" ? (isIroh ? "==" : "=") : (isIroh ? "!=" : "<>");
+        out = expr(node.left, prec) + " " + jsOp + " " + expr(node.right, prec + 1);
+      } else if (op === "&&" || op === "||") {
+        let jsOp = op === "&&" ? "AND" : "OR";
+        out = expr(node.left, prec) + " " + jsOp + " " + expr(node.right, prec + 1);
+      } else if (op === "instanceof" || op === "in") {
+        out = stubExpr("the " + op + " operator has no equivalent in " + target, "BinaryExpression");
+      } else {
+        out = expr(node.left, prec) + " " + op + " " + expr(node.right, prec + 1);
+      }
+    } else if (node.type === "UnaryExpression") {
+      if (node.operator === "!") out = "NOT " + expr(node.argument, 6);
+      else if (node.operator === "-") out = "-" + expr(node.argument, 6);
+      else {
+        out = stubExpr("unary " + node.operator + " has no equivalent in " + target, "UnaryExpression");
+      }
+    } else if (node.type === "CallExpression") {
+      let callee = node.callee;
+      if (callee.type === "MemberExpression" && !callee.computed && callee.object.type === "Identifier" && callee.object.name === "console" && callee.property.name === "log") {
+        out = stubExpr("console.log as a value (not a statement) has no equivalent in " + target, "CallExpression");
+      } else if (callee.type === "Identifier") {
+        out = callee.name + "(" + node.arguments.map(function(a) { return expr(a, 0); }).join(", ") + ")";
+      } else if (callee.type === "MemberExpression" && !callee.computed) {
+        if (!isIroh) {
+          out = stubExpr("method calls have no equivalent in BASIC", "CallExpression");
+        } else {
+          out = expr(callee.object, 7) + "." + callee.property.name + "(" + node.arguments.map(function(a) { return expr(a, 0); }).join(", ") + ")";
+          noteOnce("member-call", "a method call was translated as a dotted call; the callee must be a plain function at runtime");
+        }
+      } else {
+        out = stubExpr("computed or indirect calls are not in the v1 scope", "CallExpression");
+      }
+    } else if (node.type === "MemberExpression") {
+      if (calleeComputed(node)) {
+        if (isIroh) {
+          out = stubExpr("computed member access (arrays) has no equivalent in IrohScript v1", "MemberExpression");
+        } else {
+          out = expr(node.object, 7) + "(" + expr(node.property, 0) + ")";
+        }
+      } else {
+        out = expr(node.object, 7) + "." + node.property.name;
+      }
+    } else if (node.type === "ArrayExpression") {
+      out = stubExpr("array literals are only supported as a variable initializer for BASIC; use a variable declaration", "ArrayExpression");
+    } else if (node.type === "ConditionalExpression") {
+      out = stubExpr("the ?: operator has no equivalent in " + target, "ConditionalExpression");
+    } else if (node.type === "TemplateLiteral") {
+      out = stubExpr("template literals have no equivalent in " + target, "TemplateLiteral");
+    } else if (node.type === "UpdateExpression") {
+      out = stubExpr("++ / -- as a value has no equivalent in " + target + " (use it as a statement)", "UpdateExpression");
+    } else {
+      out = stubExpr("expression " + node.type + " is not in the v1 scope", node.type);
+    }
+    if (prec < (parentPrec || 0)) return "(" + out + ")";
+    return out;
+  }
+  function calleeComputed(node) { return !!node.computed; }
+  function isConsoleLog(node) {
+    return node.type === "CallExpression" && node.callee.type === "MemberExpression" && !node.callee.computed &&
+      node.callee.object.type === "Identifier" && node.callee.object.name === "console" &&
+      node.callee.property.name === "log";
+  }
+  function isProcessExit(node) {
+    return node.type === "CallExpression" && node.callee.type === "MemberExpression" && !node.callee.computed &&
+      node.callee.object.type === "Identifier" && node.callee.object.name === "process" &&
+      node.callee.property.name === "exit";
+  }
+  // Classic numeric for (the same pattern the Python/C++ emitter
+  // uses): for (let i = A; i <op> B; update). Returns null when the
+  // loop is not in that shape.
+  function forLoopPattern(node) {
+    // Classic numeric for: for (let i = A; i <op> B; update), or
+    // for (i = A; i <op> B; update) with i declared earlier (the
+    // BASIC leg emits the second form so the loop variable stays
+    // visible after the loop, the way BASIC scoping works).
+    let name = null;
+    let start = null;
+    if (node.init && node.init.type === "VariableDeclaration") {
+      if (node.init.declarations.length !== 1) return null;
+      let decl = node.init.declarations[0];
+      if (decl.id.type !== "Identifier" || !decl.init) return null;
+      name = decl.id.name;
+      start = decl.init;
+    } else if (node.init && node.init.type === "AssignmentExpression" && node.init.operator === "=" && node.init.left.type === "Identifier") {
+      name = node.init.left.name;
+      start = node.init.right;
+    } else return null;
+    if (!node.test || node.test.type !== "BinaryExpression") return null;
+    let test = node.test;
+    if (test.left.type !== "Identifier" || test.left.name !== name) return null;
+    if (["<", "<=", ">", ">="].indexOf(test.operator) === -1) return null;
+    let step = null;
+    let upd = node.update;
+    if (!upd) return null;
+    if (upd.type === "UpdateExpression" && upd.argument.type === "Identifier" && upd.argument.name === name) {
+      step = upd.operator === "++" ? 1 : -1;
+    } else if (upd.type === "AssignmentExpression" && upd.left.type === "Identifier" && upd.left.name === name) {
+      if (upd.operator === "+=" && upd.right.type === "Literal" && typeof upd.right.value === "number") step = upd.right.value;
+      else if (upd.operator === "-=" && upd.right.type === "Literal" && typeof upd.right.value === "number") step = -upd.right.value;
+      else return null;
+    } else return null;
+    return { name: name, start: start, op: test.operator, end: test.right, step: step };
+  }
+  function emitBody(block) {
+    if (!block || !block.body) return;
+    indentLevel += 1;
+    for (let ii = 0; ii < block.body.length; ++ii) stmt(block.body[ii]);
+    indentLevel -= 1;
+  }
+  function emitFunction(fnNode, fnName) {
+    counts.functions += 1;
+    let params = fnNode.params.map(function(p, idx) {
+      if (p.type !== "Identifier") return null;
+      if (isIroh) {
+        let t = paramType(fnName, idx, p);
+        return t ? p.name + " : " + t : p.name;
+      }
+      return p.name;
+    });
+    if (params.indexOf(null) !== -1) {
+      stubStmt("function '" + fnName + "' has non-identifier parameters, which are not in the v1 scope", "FunctionDeclaration");
+      return;
+    }
+    if (isIroh) {
+      emitLine("FUNCTION " + fnName + "(" + params.join(", ") + ")");
+      emitBody(fnNode.body);
+      emitLine("END FUNCTION");
+      return;
+    }
+    // BASIC: a function becomes a GOSUB subroutine, emitted at the
+    // end of the program (see run()). Its line number is assigned
+    // here so calls anywhere — including before the declaration, the
+    // way JS hoisting allows — resolve.
+    if (!(fnName in subLines)) {
+      subLines[fnName] = subLineBase;
+      subLineBase += 1000;
+    }
+    if (callsItself(fnNode, fnName)) {
+      markUnsupported(report, "FunctionDeclaration", "recursive function '" + fnName + "' cannot be a BASIC GOSUB subroutine (arguments and the return value share globals)");
+      subroutines.push({ node: fnNode, name: fnName, params: params, stub: true });
+      return;
+    }
+    subroutines.push({ node: fnNode, name: fnName, params: params });
+  }
+  let subroutines = [];
+  let subLines = {};
+  let subLineBase = 1000;
+  let currentSub = null;
+  function stmt(node) {
+    if (!node || typeof node.type !== "string") return;
+    if (node.type === "BlockStatement") {
+      for (let ii = 0; ii < node.body.length; ++ii) stmt(node.body[ii]);
+      return;
+    }
+    if (node.type === "EmptyStatement") return;
+    if (node.type === "VariableDeclaration") {
+      for (let ii = 0; ii < node.declarations.length; ++ii) {
+        let d = node.declarations[ii];
+        counts.variables += 1;
+        if (d.id.type !== "Identifier") {
+          stubStmt("destructuring declaration is not in the v1 scope", "VariableDeclaration");
+          continue;
+        }
+        if (d.init && d.init.type === "ArrowFunctionExpression") {
+          let fnNode = {
+            type: "FunctionDeclaration",
+            id: d.id,
+            params: d.init.params,
+            body: d.init.body.type === "BlockStatement"
+              ? d.init.body
+              : { type: "BlockStatement", body: [{ type: "ReturnStatement", argument: d.init.body }] },
+          };
+          emitFunction(fnNode, d.id.name);
+          continue;
+        }
+        if (!isIroh && d.init) {
+          let lifted = liftExpr(d.init);
+          emitLifts(lifted.lifts);
+          d.init = lifted.expr;
+        }
+        if (!isIroh && d.init && d.init.type === "ArrayExpression") {
+          let n = d.init.elements.length;
+          if (n === 0) {
+            stubStmt("an empty array has no BASIC DIM form", "ArrayExpression");
+            continue;
+          }
+          let hasHole = false;
+          for (let jj = 0; jj < n; ++jj) if (d.init.elements[jj] === null) hasHole = true;
+          if (hasHole) {
+            stubStmt("a hole in an array literal has no BASIC equivalent", "ArrayExpression");
+            continue;
+          }
+          emitLine("DIM " + d.id.name + "(" + (n - 1) + ")");
+          for (let jj = 0; jj < n; ++jj) {
+            emitLine(d.id.name + "(" + jj + ") = " + expr(d.init.elements[jj], 0));
+          }
+          declared[d.id.name] = true;
+          continue;
+        }
+        if (isIroh) {
+          let ann = d.init ? irohTypeOf(d.init) : null;
+          if (!ann && ctx.vars[d.id.name]) ann = irohTypeOfCpp(ctx.vars[d.id.name]);
+          let kw = node.kind === "const" ? "CONST " : "LET ";
+          emitLine(kw + d.id.name + (ann ? " : " + ann : "") + (d.init ? " = " + expr(d.init, 0) : ""));
+        } else {
+          emitLine("LET " + d.id.name + (d.init ? " = " + expr(d.init, 0) : " = 0"));
+        }
+        declared[d.id.name] = true;
+        if (d.init) {
+          let t = null;
+          try { t = inferType(d.init, ctx); } catch (e) { t = null; }
+          if (t) ctx.vars[d.id.name] = t;
+        }
+      }
+      return;
+    }
+    if (node.type === "FunctionDeclaration") {
+      emitFunction(node, node.id.name);
+      return;
+    }
+    if (node.type === "ReturnStatement") {
+      if (!isIroh && currentSub) {
+        if (node.argument) {
+          let lifted = liftExpr(node.argument);
+          emitLifts(lifted.lifts);
+          emitLine("LET __ret_" + currentSub + " = " + expr(lifted.expr, 0));
+        }
+        emitLine("RETURN");
+        return;
+      }
+      if (!isIroh && !currentSub) {
+        emitLine("END");
+        return;
+      }
+      emitLine(node.argument ? "RETURN " + expr(node.argument, 0) : "RETURN");
+      return;
+    }
+    if (node.type === "ExpressionStatement") {
+      let e = node.expression;
+      if (isConsoleLog(e)) {
+        counts.outputs += 1;
+        if (isIroh) {
+          if (e.arguments.length === 0) emitLine("PRINT \"\"");
+          else if (e.arguments.length === 1) emitLine("PRINT " + expr(e.arguments[0], 0));
+          else {
+            noteOnce("console-log-multi", "console.log with several arguments prints each on its own line in IrohScript (PRINT takes one value).");
+            for (let ii = 0; ii < e.arguments.length; ++ii) emitLine("PRINT " + expr(e.arguments[ii], 0));
+          }
+        } else {
+          let lifted = liftCalls(node);
+          emitLifts(lifted.lifts);
+          let le = lifted.node.expression;
+          let parts = [];
+          for (let ii = 0; ii < le.arguments.length; ++ii) {
+            parts.push(expr(le.arguments[ii], 0));
+            if (ii < le.arguments.length - 1) parts.push('""');
+          }
+          if (parts.length === 0) emitLine("PRINT");
+          else if (parts.length === 1) emitLine("PRINT " + parts[0]);
+          else emitLine("PRINT " + parts.join(" ; "));
+        }
+        return;
+      }
+      if (isProcessExit(e)) {
+        // process.exit(code): the program ends. BASIC has END for
+        // this (the exit code is dropped — BASIC END takes none).
+        // IrohScript has no program-end primitive, so it is a loud
+        // stub, not a silent `process.exit` that would fail later
+        // with an undeclared-name error.
+        if (!isIroh) { emitLine("END"); return; }
+        stubStmt("process.exit (ending the program) has no equivalent in IrohScript — IrohScript has no program-end primitive", "CallExpression");
+        return;
+      }
+      if (!isIroh) {
+        let lifted = liftCalls(node);
+        emitLifts(lifted.lifts);
+        stmtExpr(lifted.node.expression);
+        return;
+      }
+      stmtExpr(e);
+      return;
+    }
+    if (node.type === "IfStatement") {
+      counts.conditionals += 1;
+      if (isIroh) {
+        emitLine("IF " + expr(node.test, 0));
+        emitBody(node.consequent);
+        if (node.alternate) {
+          emitLine("ELSE");
+          if (node.alternate.type === "BlockStatement") emitBody(node.alternate);
+          else stmt(node.alternate);
+        }
+        emitLine("END IF");
+        return;
+      }
+      let lifted = liftExpr(node.test);
+      emitLifts(lifted.lifts);
+      let n = node;
+      let thenStr = inlineBranch(n.consequent);
+      let elseStr = n.alternate ? inlineBranch(n.alternate) : null;
+      if (thenStr === null || (n.alternate && elseStr === null)) {
+        stubStmt("an IF branch that cannot be written on one BASIC line (a loop, a return, a call, or a GOTO) is not in the v1 scope", "IfStatement");
+        return;
+      }
+      let line = "IF " + expr(lifted.expr, 0) + " THEN " + thenStr;
+      if (elseStr !== null) line += " ELSE " + elseStr;
+      emitLine(line);
+      return;
+    }
+    if (node.type === "ForStatement") {
+      if (isIroh) {
+        stubStmt("a for-loop has no equivalent in IrohScript v1 (LOOP has no defined exit rule)", "ForStatement");
+        return;
+      }
+      let pat = forLoopPattern(node);
+      if (!pat) {
+        stubStmt("only a classic numeric for-loop translates to BASIC FOR/NEXT", "ForStatement");
+        return;
+      }
+      counts.loops += 1;
+      let startNode = pat.start;
+      let endNode = pat.end;
+      let ls = liftExpr(pat.start);
+      emitLifts(ls.lifts);
+      startNode = ls.expr;
+      let le = liftExpr(pat.end);
+      emitLifts(le.lifts);
+      endNode = le.expr;
+      let endText;
+      if (pat.op === "<") endText = simpleExprText(endNode) + " - 1";
+      else if (pat.op === "<=") endText = expr(endNode, 0);
+      else if (pat.op === ">") endText = simpleExprText(endNode) + " + 1";
+      else endText = expr(endNode, 0);
+      let stepText = pat.step === 1 ? "" : " STEP " + String(pat.step);
+      emitLine("FOR " + pat.name + " = " + expr(startNode, 0) + " TO " + endText + stepText);
+      emitBody(node.body);
+      emitLine("NEXT " + pat.name);
+      return;
+    }
+    if (node.type === "WhileStatement" || node.type === "DoWhileStatement") {
+      stubStmt("a " + (node.type === "WhileStatement" ? "while" : "do-while") + " loop has no equivalent in " + target + " v1", node.type);
+      return;
+    }
+    if (node.type === "ClassDeclaration" || node.type === "LabeledStatement") {
+      stubStmt(node.type + " is not in the v1 scope", node.type);
+      return;
+    }
+    stubStmt("statement " + node.type + " is not in the v1 scope", node.type);
+  }
+  function simpleExprText(node) {
+    if (node.type === "Literal" || node.type === "Identifier") return expr(node, 0);
+    return "(" + expr(node, 0) + ")";
+  }
+  function stmtExpr(e) {
+    if (e.type === "AssignmentExpression") {
+      let target = e.left;
+      if (target.type !== "Identifier" && target.type !== "MemberExpression") {
+        stubStmt("assignment to a non-identifier target is not in the v1 scope", "AssignmentExpression");
+        return;
+      }
+      let name = target.type === "Identifier" ? target.name : expr(target, 0);
+      let right = e.right;
+      if (!isIroh) {
+        let lifted = liftExpr(e.right);
+        emitLifts(lifted.lifts);
+        right = lifted.expr;
+      }
+      if (e.operator === "=") {
+        if (isIroh && !declared[name] && target.type === "Identifier") {
+          let ann = irohTypeOf(right);
+          emitLine("LET " + name + (ann ? " : " + ann : "") + " = " + expr(right, 0));
+          declared[name] = true;
+        } else {
+          emitLine(name + " = " + expr(right, 0));
+        }
+        return;
+      }
+      let op = null;
+      if (e.operator === "+=") op = "+";
+      else if (e.operator === "-=") op = "-";
+      else if (e.operator === "*=") op = "*";
+      else if (e.operator === "/=") op = "/";
+      else if (e.operator === "%=") op = "%";
+      if (!op) {
+        stubStmt("assignment operator " + e.operator + " is not in the v1 scope", "AssignmentExpression");
+        return;
+      }
+      if (op === "%") {
+        assumeOnce("js-mod", "JavaScript % truncates toward zero; " + (isIroh ? "IrohScript" : "BASIC") + " % floors (Python-style); results differ when the left operand is negative", "IrohScript/BASIC % is Python-style floored modulo (bootstrap interpreter, basic.py); JavaScript % truncates toward zero");
+      }
+      emitLine(name + " = " + name + " " + op + " " + expr(right, 0));
+      return;
+    }
+    if (e.type === "UpdateExpression" && e.argument.type === "Identifier") {
+      let delta = e.operator === "++" ? "1" : "-1";
+      emitLine(e.argument.name + " = " + e.argument.name + " + " + delta);
+      return;
+    }
+    if (e.type === "CallExpression") {
+      emitLine(expr(e, 0));
+      return;
+    }
+    stubStmt("expression statement " + e.type + " is not in the v1 scope", e.type);
+  }
+  // BASIC only: replace every plain function call in a cloned statement
+  // with a temp, and return the GOSUB lifts to emit before it. Function
+  // bodies are never descended into — their calls belong to the
+  // subroutine, not to the statement that declares the function.
+  function liftCalls(node) {
+    let lifts = [];
+    let tempCounter = { n: 0 };
+    function walk(n) {
+      if (!n || typeof n !== "object") return n;
+      if (Array.isArray(n)) {
+        for (let ii = 0; ii < n.length; ++ii) n[ii] = walk(n[ii]);
+        return n;
+      }
+      if (n.type === "FunctionDeclaration" || n.type === "FunctionExpression" || n.type === "ArrowFunctionExpression") {
+        return n;
+      }
+      if (n.type === "CallExpression" && n.callee.type === "Identifier") {
+        for (let ii = 0; ii < n.arguments.length; ++ii) n.arguments[ii] = walk(n.arguments[ii]);
+        tempCounter.n += 1;
+        let temp = "__tmp" + tempCounter.n;
+        lifts.push({ fn: n.callee.name, args: n.arguments, temp: temp });
+        return { type: "Identifier", name: temp };
+      }
+      let keys = Object.keys(n);
+      for (let ii = 0; ii < keys.length; ++ii) {
+        let v = n[keys[ii]];
+        if (v && typeof v === "object") n[keys[ii]] = walk(v);
+      }
+      return n;
+    }
+    let cloned = JSON.parse(JSON.stringify(node));
+    let out = walk(cloned);
+    return { node: out, lifts: lifts };
+  }
+  // BASIC only: lift the calls out of one expression (not a whole
+  // statement — a call inside an IF branch or a loop body must stay
+  // where it executes, so those places lift just the expression they
+  // always evaluate). Returns { expr, lifts }.
+  function liftExpr(node) {
+    let wrapped = { type: "ExpressionStatement", expression: node };
+    let lifted = liftCalls(wrapped);
+    return { expr: lifted.node.expression, lifts: lifted.lifts };
+  }
+  function emitLifts(lifts) {
+    for (let ii = 0; ii < lifts.length; ++ii) {
+      let lift = lifts[ii];
+      if (!(lift.fn in subLines)) {
+        stubStmt("call to '" + lift.fn + "' cannot be a GOSUB subroutine (the function was not declared in this program)", "CallExpression");
+        continue;
+      }
+      for (let jj = 0; jj < lift.args.length; ++jj) {
+        emitLine("LET __arg" + jj + " = " + expr(lift.args[jj], 0));
+      }
+      emitLine("GOSUB " + subLines[lift.fn]);
+      emitLine("LET " + lift.temp + " = __ret_" + lift.fn);
+    }
+  }
+  // BASIC only: does this statement contain a plain function call?
+  // A call in an IF branch cannot be written on the one BASIC line
+  // (GOSUB is not an IF-part statement), so such a branch is a loud
+  // stub instead. Function bodies are not descended into.
+  function hasPlainCall(node) {
+    let found = false;
+    function walk(n) {
+      if (!n || typeof n !== "object" || found) return;
+      if (Array.isArray(n)) {
+        for (let ii = 0; ii < n.length; ++ii) walk(n[ii]);
+        return;
+      }
+      if (n.type === "FunctionDeclaration" || n.type === "FunctionExpression" || n.type === "ArrowFunctionExpression") {
+        return;
+      }
+      if (n.type === "CallExpression" && n.callee.type === "Identifier") {
+        found = true;
+        return;
+      }
+      let keys = Object.keys(n);
+      for (let ii = 0; ii < keys.length; ++ii) {
+        let v = n[keys[ii]];
+        if (v && typeof v === "object") walk(v);
+      }
+    }
+    walk(node);
+    return found;
+  }
+  // BASIC only: render one branch of an IF as a single line of
+  // :-separated statements. Returns null when a statement cannot be
+  // written on one line (a loop, a return, a GOTO).
+  function inlineBranch(node) {
+    let stmts = node.type === "BlockStatement" ? node.body : [node];
+    let saved = lines;
+    let parts = [];
+    for (let ii = 0; ii < stmts.length; ++ii) {
+      if (hasPlainCall(stmts[ii])) { lines = saved; return null; }
+      lines = [];
+      let before = report.unsupported.length;
+      stmt(stmts[ii]);
+      if (report.unsupported.length > before) {
+        report.unsupported.length = before;
+        lines = saved;
+        return null;
+      }
+      if (lines.length === 0) continue;
+      if (lines.length !== 1) { lines = saved; return null; }
+      parts.push(lines[0].trim());
+    }
+    lines = saved;
+    if (parts.length === 0) return "REM";
+    return parts.join(" : ");
+  }
+  function run(ast) {
+    let fns = [];
+    let rest = [];
+    for (let ii = 0; ii < ast.body.length; ++ii) {
+      if (ast.body[ii].type === "FunctionDeclaration") fns.push(ast.body[ii]);
+      else rest.push(ast.body[ii]);
+    }
+    if (isIroh) {
+      for (let ii = 0; ii < fns.length; ++ii) emitFunction(fns[ii], fns[ii].id.name);
+      if (fns.length > 0 && rest.length > 0) lines.push("");
+      for (let ii = 0; ii < rest.length; ++ii) stmt(rest[ii]);
+      return { text: lines.join("\n") + "\n", counts: counts };
+    }
+    // BASIC: emit the mainline, then the GOSUB subroutines (their
+    // line numbers were assigned as the functions were collected).
+    for (let ii = 0; ii < fns.length; ++ii) emitFunction(fns[ii], fns[ii].id.name);
+    for (let ii = 0; ii < rest.length; ++ii) stmt(rest[ii]);
+    // The mainline falls through into the subroutines without this:
+    // BASIC executes lines in order, so the program must stop before
+    // the first GOSUB target.
+    if (subroutines.length > 0) {
+      let last = "";
+      for (let ii = lines.length - 1; ii >= 0; --ii) {
+        if (lines[ii].trim() !== "") { last = lines[ii].trim(); break; }
+      }
+      if (last !== "END" && last !== "STOP") lines.push("END");
+    }
+    for (let ii = 0; ii < subroutines.length; ++ii) {
+      let sub = subroutines[ii];
+      let startLine = subLines[sub.name];
+      let saved = lines;
+      lines = [];
+      currentSub = sub.name;
+      if (sub.stub) {
+        emitLine("PRINT " + basicQuote("IrohRedux: recursive function '" + sub.name + "' cannot be a BASIC GOSUB subroutine"));
+        emitLine("END");
+      } else {
+        for (let jj = 0; jj < sub.params.length; ++jj) {
+          emitLine("LET " + sub.params[jj] + " = __arg" + jj);
+        }
+        emitBody(sub.node.body);
+      }
+      currentSub = null;
+      let bodyLines = lines;
+      lines = saved;
+      lines.push("");
+      for (let jj = 0; jj < bodyLines.length; ++jj) {
+        lines.push(String(startLine + jj * 10) + " " + bodyLines[jj].trim());
+      }
+    }
+    return { text: lines.join("\n") + "\n", counts: counts };
+  }
+  function callsItself(fnNode, fnName) {
+    let found = false;
+    function walk(n) {
+      if (!n || typeof n !== "object" || found) return;
+      if (Array.isArray(n)) {
+        for (let ii = 0; ii < n.length; ++ii) walk(n[ii]);
+        return;
+      }
+      if (n.type === "CallExpression" && n.callee.type === "Identifier" && n.callee.name === fnName) {
+        found = true;
+        return;
+      }
+      let keys = Object.keys(n);
+      for (let ii = 0; ii < keys.length; ++ii) {
+        let v = n[keys[ii]];
+        if (v && typeof v === "object") walk(v);
+      }
+    }
+    walk(fnNode.body);
+    return found;
+  }
+  return { run: run, counts: counts };
+}
+
 function translate(code, options) {
   options = options || {};
   let from = options.from || "javascript";
   let to = options.to;
-  if (to !== "python" && to !== "cpp" && to !== "javascript") {
-    throw new Error("Iroh.translate: unknown target '" + to + "' — use 'python', 'cpp' or 'javascript'");
+  let languages = ["javascript", "python", "cpp", "irohscript", "basic"];
+  if (languages.indexOf(to) === -1) {
+    throw new Error("Iroh.translate: unknown target '" + to + "' — use 'python', 'cpp', 'javascript', 'irohscript' or 'basic'");
   }
+  if (from === to) {
+    throw new Error("Iroh.translate: from and to are both '" + from + "'");
+  }
+  if (languages.indexOf(from) === -1) {
+    throw new Error("Iroh.translate: unknown source '" + from + "' — use 'javascript', 'python', 'cpp', 'irohscript' or 'basic'");
+  }
+  // Direct legs: JavaScript out of any source, or any target out of
+  // JavaScript.
   if (from === "javascript") {
-    if (to === "javascript") {
-      throw new Error("Iroh.translate: from and to are both 'javascript'");
-    }
     return translateFromJS(this, code, to, options);
   }
-  if (to !== "javascript") {
-    throw new Error("Iroh.translate: only JavaScript is a target for from='" + from + "' in v1");
+  if (to === "javascript") {
+    return translateToJS(this, code, from, options);
   }
-  if (from === "python") {
+  // Two-hop via JavaScript: the first leg produces JavaScript (which
+  // the second leg then traces for its types, exactly as the direct
+  // JavaScript leg does). The report says so, and the first leg's
+  // assumptions and notes ride along.
+  let first = translateToJS(this, code, from, options);
+  if (!first.report.ok) {
+    first.report.to = to;
+    first.report.notes.push("two-hop via JavaScript stopped at the first leg (" + from + " -> JavaScript)");
+    return first;
+  }
+  let out = translateFromJS(this, first.code, to, options);
+  out.report.from = from;
+  out.report.notes.push("Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is traced for its types, exactly as the direct JavaScript leg is).");
+  out.report.assumptions = first.report.assumptions.concat(out.report.assumptions);
+  out.report.notes = first.report.notes.concat(out.report.notes);
+  return out;
+}
+
+// Any source language -> JavaScript. The Python, IrohScript and
+// BASIC legs need python3 (via child_process); the C++ leg is pure
+// JS. `iroh` is only used for the error message's `this` — the legs
+// themselves do not trace.
+function translateToJS(iroh, code, from, options) {
+  if (from === "python" || from === "irohscript" || from === "basic") {
     let cp = getChildProcessSync();
     if (!cp) {
       throw new Error(
-        "Iroh.translate: Python -> JavaScript needs the Node.js CJS build with python3 on PATH — use Iroh.translateAsync() in ESM; it is not supported in a browser"
+        "Iroh.translate: " + from + " -> JavaScript needs the Node.js CJS build with python3 on PATH — use Iroh.translateAsync() in ESM; it is not supported in a browser"
       );
     }
-    return translateFromPython(code, cp);
+    if (from === "python") return translateFromPython(code, cp);
+    if (from === "irohscript") return translateFromIrohscript(code, cp, options);
+    return translateFromBasic(code, cp, options);
   }
   if (from === "cpp") {
     return translateFromCpp(code);
   }
-  throw new Error("Iroh.translate: unknown source '" + from + "' — use 'javascript', 'python' or 'cpp'");
+  throw new Error("Iroh.translate: unknown source '" + from + "'");
 }
 
 function translateAsync(code, options) {
   options = options || {};
   let iroh = this;
   let from = options.from || "javascript";
-  if (from !== "python") {
-    try {
-      return Promise.resolve(translate.call(iroh, code, options));
-    } catch (e) {
-      return Promise.reject(e);
-    }
+  let to = options.to;
+  if (from === "python" || from === "irohscript" || from === "basic") {
+    // Load child_process by dynamic import so this works in the ESM
+    // build too (no sync require there). The first leg runs with it;
+    // the rest is synchronous (the second hop traces JavaScript,
+    // which needs no child process).
+    return nodeImport$1("node:child_process").then(
+      function(cp) {
+        let first = null;
+        if (from === "python") first = translateFromPython(code, cp);
+        else if (from === "irohscript") first = translateFromIrohscript(code, cp, options);
+        else first = translateFromBasic(code, cp, options);
+        if (to === "javascript" || !to) return first;
+        if (!first.report.ok) {
+          first.report.to = to;
+          first.report.notes.push("two-hop via JavaScript stopped at the first leg (" + from + " -> JavaScript)");
+          return first;
+        }
+        let out = translateFromJS(iroh, first.code, to, options);
+        out.report.from = from;
+        out.report.notes.push("Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is traced for its types, exactly as the direct JavaScript leg is).");
+        out.report.assumptions = first.report.assumptions.concat(out.report.assumptions);
+        out.report.notes = first.report.notes.concat(out.report.notes);
+        return out;
+      },
+      function() {
+        throw new Error("Iroh.translateAsync: " + from + " -> JavaScript needs Node.js with python3 on PATH");
+      }
+    );
   }
-  // Python leg: load child_process by dynamic import so this works
-  // in the ESM build too (no sync require there).
-  return nodeImport$1("node:child_process").then(
-    function(cp) {
-      return translateFromPython(code, cp);
-    },
-    function() {
-      throw new Error("Iroh.translateAsync: Python -> JavaScript needs Node.js with python3 on PATH");
-    }
-  );
+  try {
+    return Promise.resolve(translate.call(iroh, code, options));
+  } catch (e) {
+    return Promise.reject(e);
+  }
 }
 
 
 var _translate = Object.freeze({
 	translate: translate,
 	translateAsync: translateAsync
+});
+
+// IrohScript -> JavaScript code generator: the compiler backend for
+// IrohRedux's own core (part 3 of the 1.0.1 rework). This is NOT the
+// translator (src/translate.js): the translator reports what it could
+// and could not translate and emits loud stubs for the rest; this
+// compiler either emits clean, runnable JavaScript or throws a clear
+// error naming the construct it cannot compile. The compiled output
+// is the real code IrohRedux runs — the first component compiled this
+// way is the perceptron's scoring core (irohscript/core/perceptron.iroh
+// -> src/neurons-irohscript.js).
+//
+// The frontend is the bootstrap compiler: source is compiled by
+// IrohCompiler (Python, via the shared bridge in
+// src/irohscript-bridge.js) and the AST JSON is walked here. No
+// hand-rolled IrohScript parser on the JS side.
+//
+// Semantics are the bootstrap's, Python-style (7/2 = 3.5, -5 % 3 = 1):
+// DIV emits plain JavaScript / (float division, the same as Python's)
+// and MOD emits __iroh_pymod (floored). If Andy ever calls C++-style
+// (truncated) division instead, the flip is that one helper function.
+// Division and modulo are the one open question from the MVP that
+// this compiler touches; everything else it emits is semantics-free
+// (names, struct fields, calls, arithmetic, comparisons).
+//
+// The emitted code is ES2015-only (no async/await, no for...of): it
+// lives in src/ and ships in the browser bundle, which buble
+// transpiles. It is deterministic: same source, same bytes, so the
+// checked-in generated file can be verified against a fresh compile
+// (see tests/irohscript-codegen.test.js, the drift check).
+//
+// In a browser there is no python3 and no require: the sync entry
+// throws a clear error pointing at the async entry, which works in
+// ESM Node via dynamic import (same split as the translator).
+
+function compileError(detail) {
+  return new Error("Iroh.compileIrohscript: " + detail);
+}
+
+// Default value for an IrohScript type (for LET with no initializer
+// and for STRUCT field defaults). Same table as the translator's:
+// Int/Float -> 0, String -> "", Bool -> false, Vector -> [], a struct
+// type -> a call to its factory function.
+function irohTypeDefault$1(typeName) {
+  if (typeName === "Int" || typeName === "Float") return "0";
+  if (typeName === "String") return '""';
+  if (typeName === "Bool") return "false";
+  if (typeName && typeName.indexOf("Vector") === 0) return "[]";
+  return null;
+}
+
+function makeCodegenEmitter() {
+  let lines = [];
+  let indentLevel = 0;
+  let needsPymod = false;
+  function indentStr() { return "  ".repeat(indentLevel); }
+  function emitLine(text) { lines.push(indentStr() + text); }
+  let BIN_PREC = { OR: 1, AND: 2, EQ: 3, NEQ: 3, LT: 3, LE: 3, GT: 3, GE: 3, ADD: 4, SUB: 4, MUL: 5, DIV: 5, MOD: 5 };
+  function exprPrec(node) {
+    if (!node || typeof node !== "object") return 7;
+    if (node.node === "BinOp") return BIN_PREC[node.op] || 1;
+    if (node.node === "UnaryOp") return 6;
+    return 7;
+  }
+  function expr(node, parentPrec) {
+    if (!node || typeof node !== "object") throw compileError("missing expression");
+    let prec = exprPrec(node);
+    let out = "";
+    if (node.node === "Literal") {
+      if (typeof node.value === "string") out = JSON.stringify(node.value);
+      else if (typeof node.value === "number" || typeof node.value === "boolean") out = String(node.value);
+      else if (node.value === null || node.value === void 0) out = "null";
+      else out = JSON.stringify(node.value);
+    } else if (node.node === "Name") {
+      out = node.name;
+    } else if (node.node === "BinOp") {
+      if (node.op === "MOD") {
+        needsPymod = true;
+        out = "__iroh_pymod(" + expr(node.left, 7) + ", " + expr(node.right, 7) + ")";
+      } else {
+        let map = { ADD: "+", SUB: "-", MUL: "*", DIV: "/", EQ: "===", NEQ: "!==", LT: "<", LE: "<=", GT: ">", GE: ">=", AND: "&&", OR: "||" };
+        if (!map[node.op]) throw compileError("binary operator '" + node.op + "' is not in the v1 scope");
+        out = expr(node.left, prec) + " " + map[node.op] + " " + expr(node.right, prec + 1);
+      }
+    } else if (node.node === "UnaryOp") {
+      out = (node.op === "NOT" ? "!" : "-") + expr(node.operand, 6);
+    } else if (node.node === "Call") {
+      out = expr(node.callee, 7) + "(" + node.args.map(function(a) { return expr(a, 0); }).join(", ") + ")";
+    } else if (node.node === "MemberAccess") {
+      out = expr(node.object, 7) + "." + node.member;
+    } else {
+      throw compileError("expression node '" + (node.node || "?") + "' is not in the v1 scope");
+    }
+    if (prec < (parentPrec || 0)) return "(" + out + ")";
+    return out;
+  }
+  function emitBlock(stmts) {
+    indentLevel += 1;
+    for (let ii = 0; ii < stmts.length; ++ii) stmt(stmts[ii]);
+    indentLevel -= 1;
+  }
+  function stmt(node) {
+    if (!node || typeof node.node !== "string") throw compileError("missing statement");
+    if (node.node === "Let" || node.node === "Const") {
+      let kw = node.node === "Const" ? "const " : "let ";
+      if (node.value === null || node.value === void 0) {
+        if (node.type) {
+          let dflt = irohTypeDefault$1(node.type);
+          if (dflt !== null) { emitLine(kw + node.name + " = " + dflt + ";"); return; }
+          emitLine(kw + node.name + " = " + node.type + "();");
+          return;
+        }
+        emitLine(kw + node.name + ";");
+        return;
+      }
+      emitLine(kw + node.name + " = " + expr(node.value, 0) + ";");
+      return;
+    }
+    if (node.node === "Assign") {
+      emitLine(expr(node.target, 0) + " = " + expr(node.value, 0) + ";");
+      return;
+    }
+    if (node.node === "Print") {
+      emitLine("console.log(" + expr(node.value, 0) + ");");
+      return;
+    }
+    if (node.node === "If") {
+      emitLine("if (" + expr(node.cond, 0) + ") {");
+      emitBlock(node.then);
+      if (node.else && node.else.length > 0) {
+        emitLine("} else {");
+        emitBlock(node.else);
+      }
+      emitLine("}");
+      return;
+    }
+    if (node.node === "FunctionDef") {
+      let params = node.params.map(function(p) { return p.name; }).join(", ");
+      emitLine("export function " + node.name + "(" + params + ") {");
+      emitBlock(node.body);
+      emitLine("}");
+      return;
+    }
+    if (node.node === "Return") {
+      emitLine(node.value ? "return " + expr(node.value, 0) + ";" : "return;");
+      return;
+    }
+    if (node.node === "StructDef") {
+      let fields = node.fields.map(function(f) {
+        let dflt = irohTypeDefault$1(f.type);
+        return f.name + ": " + (dflt !== null ? dflt : f.type + "()");
+      }).join(", ");
+      emitLine("export function " + node.name + "() { return { " + fields + " }; }");
+      return;
+    }
+    if (node.node === "EnumDef") {
+      let members = node.members.map(function(m) { return m + ": " + JSON.stringify(m); }).join(", ");
+      emitLine("export const " + node.name + " = { " + members + " };");
+      return;
+    }
+    if (node.node === "Call") {
+      emitLine(expr(node, 0) + ";");
+      return;
+    }
+    if (node.node === "Loop") {
+      throw compileError("LOOP has no defined exit condition in IrohScript 3.0 (spec section 6 shows the form but not the termination rule) — the compiler cannot emit a loop it cannot end");
+    }
+    if (node.node === "Action") {
+      throw compileError("ACTION is a program behaviour (record + print), not core library code — the compiler does not emit it");
+    }
+    if (node.node === "Intent") {
+      throw compileError("INTENT is a program behaviour (record in the intent graph), not core library code — the compiler does not emit it");
+    }
+    if (node.node === "Conditional") {
+      throw compileError("the legacy Conditional form ('enemy -> defend') is a program behaviour, not core library code — write an IF statement instead");
+    }
+    if (node.node === "Import") {
+      throw compileError("IMPORT '" + (node.name || "?") + "' has no runtime effect (namespaces are runtime extensions) — core code must not import what it cannot use");
+    }
+    throw compileError("statement node '" + node.node + "' is not in the v1 scope");
+  }
+  function run(ast) {
+    let stmts = ast.statements || [];
+    let defs = [];
+    let rest = [];
+    for (let ii = 0; ii < stmts.length; ++ii) {
+      if (stmts[ii].node === "FunctionDef" || stmts[ii].node === "StructDef" || stmts[ii].node === "EnumDef") defs.push(stmts[ii]);
+      else rest.push(stmts[ii]);
+    }
+    for (let ii = 0; ii < defs.length; ++ii) stmt(defs[ii]);
+    if (defs.length > 0 && rest.length > 0) lines.push("");
+    for (let ii = 0; ii < rest.length; ++ii) stmt(rest[ii]);
+    let header = [];
+    if (needsPymod) {
+      header.push("function __iroh_pymod(a, b) { return ((a % b) + b) % b; }");
+      header.push("");
+    }
+    return header.concat(lines).join("\n") + "\n";
+  }
+  return { run: run };
+}
+
+// Compile IrohScript source to a JavaScript module string. Throws on
+// a compile error in the source or on a construct the compiler cannot
+// emit. options.irohscriptHome names the directory holding the
+// irohscript package (the CLI and the build script pass the in-repo
+// copy); otherwise IROHSCRIPT_HOME, <cwd>/irohscript, or <cwd>.
+function compileIrohscript(source, options) {
+  let cp = getChildProcessSync();
+  if (!cp) {
+    throw new Error(
+      "Iroh.compileIrohscript: compiling IrohScript needs the Node.js CJS build with python3 on PATH — use Iroh.compileIrohscriptAsync() in ESM; it is not supported in a browser"
+    );
+  }
+  return compileWithChildProcess(source, options, cp);
+}
+
+// The async version: loads child_process by dynamic import so it
+// works in the ESM build too (no sync require there).
+function compileIrohscriptAsync(source, options) {
+  return nodeImport$1("node:child_process").then(
+    function(cp) {
+      return compileWithChildProcess(source, options, cp);
+    },
+    function() {
+      throw new Error("Iroh.compileIrohscriptAsync: compiling IrohScript needs Node.js with python3 on PATH");
+    }
+  );
+}
+
+function compileWithChildProcess(source, options, cp) {
+  let ast;
+  try {
+    ast = runIrohscriptPython(source, options, cp, IROHSCRIPT_AST_HELPER, "IrohScript");
+  } catch (e) {
+    // The shared bridge reports translator-flavoured errors; the
+    // compiler re-labels them so a failure names the compiler.
+    let message = e && e.message ? e.message : String(e);
+    if (message.indexOf("Iroh.translate: ") === 0) {
+      message = "Iroh.compileIrohscript: " + message.slice("Iroh.translate: ".length);
+    }
+    throw new Error(message);
+  }
+  let emitter = makeCodegenEmitter();
+  return emitter.run(ast);
+}
+
+
+var _codegen = Object.freeze({
+	compileIrohscript: compileIrohscript,
+	compileIrohscriptAsync: compileIrohscriptAsync
 });
 
 class Iroh {
@@ -12441,7 +15503,9 @@ extend(Iroh, _vectors);
 extend(Iroh, _scan);
 extend(Iroh, _live);
 extend(Iroh, _direct);
+extend(Iroh, _synth);
 extend(Iroh, _translate);
+extend(Iroh, _codegen);
 
 const iroh = new Iroh();
 

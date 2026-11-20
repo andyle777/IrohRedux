@@ -2,28 +2,127 @@
 
 <p align="center">
   <a href="https://github.com/andyle777/IrohRedux/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/version-1.0.1-orange.svg?style=flat-square" alt="Version 1.0.1" />
+  <img src="https://img.shields.io/badge/version-1.1.0-orange.svg?style=flat-square" alt="Version 1.1.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D%2018-339933.svg?style=flat-square" alt="Node >= 18" />
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-348%20passing-brightgreen.svg?style=flat-square" alt="348 tests passing" />
+  <img src="https://img.shields.io/badge/tests-649%20passing-brightgreen.svg?style=flat-square" alt="649 tests passing" />
 </p>
 
 <p align="center">
   <b>Watch your code run. Change it while it runs.</b><br/>
-  IrohRedux is a dynamic code analysis tool for JavaScript — record your code flow
-  in realtime, intercept runtime information, and manipulate program behaviour
-  on the fly. And now you don't even have to write JavaScript to use it.
-</p>
-
-<p align="center">
   <a href="//github.com/andyle777/IrohRedux/blob/master/GETTING_STARTED.md">Getting Started</a> ·
   <a href="//github.com/andyle777/IrohRedux/blob/master/API.md">API</a> ·
-  <a href="//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md">Changelog</a>
+  <a href="//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md">Changelog</a> ·
+  <a href="https://github.com/andyle777/IrohRedux/releases">Releases</a>
 </p>
 
 ---
+
+### What it is
+
+IrohRedux runs your program and tells you what actually happened — which
+functions were called with what, which branches were taken, what every
+variable held, moment by moment — then lets you change values mid-flight
+and watch the program react. It traces JavaScript, Python, C++,
+IrohScript and BASIC through one engine and one event format, analyzes
+the trace into findings (hot loops, deep recursion, one-sided branches,
+throwing paths), translates programs between all five languages, and can
+find the inputs that drive a program down each branch. No LLM, no
+network, no model — deterministic rules over a trace.
+
+### Releases
+
+Two releases, both on the
+[Releases page](https://github.com/andyle777/IrohRedux/releases):
+
+- **1.0.1 — the solid base.** The all-generations audit-and-patch pass
+  over 0.4.0–1.0.0: every known limitation re-read and re-probed, the
+  real bugs fixed (translator `%` and number formatting, director
+  member and scoped sets, `directAsync`/`directModule`, decorated
+  computed keys, Python per-assignment events). 348 tests (314 Node +
+  25 Python + 9 C++).
+- **1.1.0 — the new release.** The IrohScript foundation rework
+  (IrohScript and BASIC trace first-class, the five-language
+  translator, the IrohScript compiler with the perceptron core in
+  IrohScript), the input synthesiser on the live wire, and the redo
+  audit pass over the rework (five fresh bugs fixed, ES2026 probe fix
+  folded in). 649 tests (392 Node + 25 Python + 9 C++ + 223
+  IrohScript/BASIC Python).
+
+1.1.0 contains everything in 1.0.1. Take 1.0.1 if you want the audited
+base; take 1.1.0 if you want the five languages and the synthesiser.
+
+### Install — humans
+
+Download from the
+[Releases page](https://github.com/andyle777/IrohRedux/releases) — no
+Node install needed:
+
+- **Android:** the APK. Install it on your Android device.
+- **Windows, Linux, macOS:** the EXE for your system. Download, run.
+
+One honest limit: the script-language legs (Python, C++, IrohScript,
+BASIC) shell out to `python3`, so those need python3 on the machine.
+The JavaScript legs run fully standalone.
+
+Or install from source:
+
+```sh
+git clone https://github.com/andyle777/IrohRedux.git
+cd IrohRedux
+npm install
+npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
+npm test            # 649 tests: 392 Node + 25 Python + 9 C++ + 223 IrohScript/BASIC
+```
+
+The Python client installs with `pip install -e python/`; the C++ client is
+a single header — just `#include "iroh.hpp"`.
+
+### Use it as an AI
+
+Each release ships a **py / txt / json bundle** alongside the binaries:
+
+- **.py** — the Python client (`python/iroh`: `run`, `trace_python`,
+  `scan_python` and friends) and the native tracers
+  (`python/iroh/trace.py`, `irohscript/src/tracer.py`,
+  `irohscript/src/basic.py`). Import them or run them; the client
+  finds the CLI on its own, or point it at the packaged binary with
+  `IROH_CLI`.
+- **.txt** — the docs as plain text: README, API reference, changelog,
+  the IrohScript spec.
+- **.json** — machine-readable output: trace events (JSONL, one event
+  per line) and scan documents (`{ vectors, findings, scores,
+  summary }`).
+
+Drive the CLI and read the events straight from JSON:
+
+```python
+import json, subprocess
+
+proc = subprocess.run(["./iroh", "program.js", "--events", "CALL,IF"],
+                      capture_output=True, text=True)
+events = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+calls = [e for e in events if e["event"] == "FUNCTION_CALL"]
+print(calls[0]["name"], calls[0]["arguments"])  # factorial [3]
+```
+
+Or take the whole analysis in one document, no event flood:
+
+```python
+from iroh import scan
+
+doc = scan("let s = 0; for (let i = 0; i < 150; i++) { s += i; } s;")
+doc["findings"][0]["code"]        # "HOT_LOOP"
+doc["summary"]["neuron"]          # {"label": "hot", "score": 0.0259}
+```
+
+`--scan` is the same document from the CLI
+(`./iroh program.js --scan`), and `--live` streams findings as they
+fire instead of after the run. Every number in a scan carries its
+denominator; findings are capped at 200 and the dropped count is
+reported, never hidden.
 
 ### Why dynamic analysis?
 
@@ -113,14 +212,14 @@ top-level await directs it (via directModule() / directAsync()).
 `--direct` combines with `--analyze`, `--scan`, and `--live`; the
 analysis and scan lines follow the direct-summary.
 
-### One engine, three languages
+### One engine, five languages
 
 The engine is JavaScript, but the `iroh` CLI streams its trace events as
-JSON lines — one event per line — so Python and C++ speak the same protocol
-through thin clients. And since 0.9.0, Python and C++ programs trace
-natively through that same CLI, with the same event shape — so one
-analysis pipeline works on all three languages. No rewrites, no bindings
-to compile, no second engine.
+JSON lines — one event per line — so Python, C++, IrohScript and BASIC
+speak the same protocol through thin clients. And since 0.9.0, Python
+and C++ programs trace natively through that same CLI, with the same
+event shape — so one analysis pipeline works on all five languages. No
+rewrites, no bindings to compile, no second engine.
 
 ```mermaid
 flowchart LR
@@ -129,6 +228,10 @@ flowchart LR
   CLI --> PY["Python client<br/>python/iroh"]
   CLI --> CPP["C++ client<br/>cpp/iroh.hpp"]
   Engine --> LIB["JavaScript<br/>require('iroh')"]
+  IS["IrohScript program"] --> IST["IrohScript tracer<br/>irohscript/src/tracer.py"]
+  BAS["BASIC program"] --> BAST["BASIC tracer<br/>irohscript/src/basic.py"]
+  IST --> CLI
+  BAST --> CLI
 ```
 
 #### JavaScript — the engine itself
@@ -186,11 +289,13 @@ non-zero exit code, and async programs are awaited before the result line.
 Modules trace too: `.mjs` files are detected automatically, or pass
 `--module` — relative imports resolve against the traced file.
 
-Python and C++ trace natively through the same command (0.9.0):
+Python, C++, IrohScript and BASIC trace natively through the same command (0.9.0, 1.1.0 rework):
 `node cli/iroh.js program.py` or `program.cpp` — `--lang python|cpp`
-forces it, the extension infers it. `--analyze` and `--scan` work for all
-three languages; `--module` and `--direct` stay JavaScript-only. See the 0.9.0 section
-below for what each tracer sees and what it honestly cannot.
+forces it, the extension infers it — and `program.iroh` or `program.bas`,
+`--lang irohscript|basic` the same way. `--analyze`, `--scan` and `--live`
+work for all five languages; `--module` and `--direct` stay JavaScript-only.
+See the 0.9.0 section below for what each tracer sees and what it honestly
+cannot; the 1.1.0 rework section covers IrohScript and BASIC.
 
 #### Python — `from iroh import run` — and trace Python itself (0.9.0)
 
@@ -277,10 +382,24 @@ box). The CLI appends the same analysis with `--analyze`. See
 
 The same trace evidence also drives the hybrid translation engine —
 static AST plus the runtime types, values, and branch outcomes the trace
-saw. JavaScript goes to Python or C++; Python and C++ come back to
-JavaScript (static-only by design — the reverse legs translate from
-source alone; native Python/C++ tracers exist since 0.9.0, but the
-translation legs do not use them):
+saw. All five languages are now both sources and targets: JavaScript,
+Python, C++, IrohScript and BASIC. Direct legs are JavaScript out to
+any of the four (`to: "python" | "cpp" | "irohscript" | "basic"`) and
+any of the four back to JavaScript; the IrohScript and BASIC source
+legs are static-only by design (`staticOnly: true` — they translate
+from source alone, with their type annotations carrying the types).
+Every other pair — IrohScript to Python, BASIC to C++, Python to C++ —
+goes two-hop through JavaScript, and the report says so
+(`"Translated irohscript -> JavaScript -> python (two-hop: ...)"`).
+JavaScript functions become BASIC GOSUB subroutines (line numbers
+from 1000, arguments in `__arg0..`, return value in `__ret_<fn>`),
+IrohScript `ACTION`/`INTENT` become `__iroh_action`/`__iroh_intent`
+recorders, and the `%` difference is honest: IrohScript and BASIC
+modulo is floored, JavaScript's is truncated, so a JavaScript `%`
+going to either records an assumption. Recursive functions have no
+BASIC form, GOTO has no JavaScript form, and IrohScript LOOP has no
+exit rule — each is reported in `report.unsupported` and the emitted
+code raises at that point, loudly, never silently mistranslated:
 
 ```js
 const { code, report } = Iroh.translate(
@@ -296,12 +415,12 @@ Unsupported constructs are reported in `report.unsupported`, never
 silently mistranslated — the emitted code raises at that point, loudly.
 The CLI translates too: `node cli/iroh.js program.js --translate python`
 (one `{"type":"translation",...}` line, exit 1 when anything was
-unsupported), and `--from` is inferred from `.py` / `.cpp` files. The
-reverse legs stay static-only by design — native Python/C++ tracers
-exist since 0.9.0, but translation does not use them.
+unsupported), and `--from` is inferred from `.py` / `.cpp` / `.iroh` /
+`.bas` files. `--direct` stays JavaScript-only: the IrohScript and
+BASIC tracers run under `spawnSync`, so no directive can reach them
+(parity with Python and C++).
 
 ### Trace Python and C++ natively, and scan any trace (0.9.0)
-
 Python traces with `sys.settrace` plus AST instrumentation of loops,
 branches, and `except` handlers, so the same findings fire: a Python
 hot loop analyzes to `HOT_LOOP` (150 iterations, 151 tests), a caught
@@ -347,6 +466,54 @@ no model, no vector DB, no new dependencies. `Iroh.scanTrace(code)`,
 `Iroh.euclideanDistance(a, b)` are the library forms; identical traces
 have distance exactly 0. Same schema for JS, Python, and C++.
 
+### Trace IrohScript and BASIC natively (1.1.0)
+
+IrohScript is the project's own language (BASIC-first, spec in
+[`irohscript/`](irohscript/)), and BASIC is its named ingredient — both
+trace first-class through the same CLI, with the same event shape and
+the same findings:
+
+```sh
+node cli/iroh.js program.iroh --analyze   # or --scan, --live
+node cli/iroh.js program.bas --analyze    # or --scan, --live
+```
+
+IrohScript traces with hooks in its IRX interpreter
+(`irohscript/src/tracer.py`, stdlib only): function calls (with
+arguments and return values), IF tests, and assignments. A one-sided
+branch analyzes to `ONE_SIDED_BRANCH`, a 25-deep recursion to
+`DEEP_RECURSION`. BASIC traces with a small dedicated interpreter
+(`irohscript/src/basic.py`, stdlib only): FOR/NEXT loops, IF tests,
+GOSUB subroutines (as calls named `gosub@<line>`), assignments, and
+INPUT. A 150-iteration FOR loop analyzes to `HOT_LOOP` (150
+iterations, 151 tests), a never-entered one to
+`ZERO_ITERATION_LOOP`. Honest limits: IrohScript's LOOP has no
+defined exit rule in the spec, so executing one is an error, not a
+trace — `HOT_LOOP` and `ZERO_ITERATION_LOOP` can never fire for
+IrohScript until that rule is decided. BASIC's GOTO has no event
+category, so GOTO loops are invisible in the trace (FOR/NEXT is the
+observable loop); DIM and array reads have no events either. Both
+tracers run the program in-process with its PRINT output on stderr,
+and the result line is null, like Python. `--module` and `--direct`
+stay JavaScript-only; `--translate` now covers both languages (see
+above). The full lists are in the CHANGELOG.
+
+The rework's third part is the compiler: IrohScript is now the
+language the core itself is written in, starting with the perceptron's
+scoring core. `Iroh.compileIrohscript(source)` compiles IrohScript
+to a JavaScript module — clean output or a clear error, no report and
+no stubs — and the first component compiled that way is the neuron's
+decision (`irohscript/core/perceptron.iroh` →
+`src/neurons-irohscript.js`, regenerated with
+`npm run codegen:irohscript`): score = dot(weights, features) + bias,
+label "hot" when the score is >= 0. The existing tests prove the
+compiled code classifies exactly as the JavaScript it replaced. What
+stays in JavaScript for now, and why: feature extraction (it walks
+the event stream with a set) and training (it loops over samples) —
+IrohScript 3.0 has no bounded loop and no dictionary yet, so those
+cannot be written in the language. Division and modulo compile
+Python-style (7/2 = 3.5, -5 % 3 = 1), the bootstrap's semantics.
+
 ### Watch it live (0.9.0)
 
 Scan is analyze-after-the-fact. The live wire is analysis WHILE the
@@ -377,6 +544,43 @@ events give the same findings in the same order, twice. For Python
 and C++ the live lines print after the run, because the native tracers
 buffer their events; for JavaScript they stream as the program runs.
 
+### Synthesize inputs that drive each branch (1.1.0)
+
+The live wire can also *find* the inputs. Give it a function and
+some seeds, and the synthesiser generates concrete inputs that drive
+the function down each branch — boundary values for numeric
+comparisons, the observed constant for equality, the observed string
+for string equality — and reports, with denominators, what it
+covered and what it could not:
+
+```js
+const Iroh = require("iroh");
+let out = Iroh.synthesize(
+  "function classify(x) { if (x > 10) { return \"big\"; } return \"small\"; }",
+  { entry: "classify", seeds: [[5]] }
+);
+// out.coverage === { covered: 2, total: 2, value: 1, sites: 1, branches: [...] }
+// out.inputs === [{ args: [5], result: "small", via: "seed" },
+//                  { args: [11], result: "big", via: "solver" }]
+// out.runs === { used: 2, budget: 50 }; out.uncovered === []
+```
+
+```sh
+node cli/iroh.js program.js --synthesize --entry classify --seeds '[[5]]'
+```
+
+Each run streams on the live wire, and the live analyzer's
+`ONE_SIDED_BRANCH` findings are the synthesiser's target list: as
+new inputs flip branches, the findings update live. Progress streams
+through `onProgress` (`run` / `branch-covered` / `live-finding`
+events); `--live --synthesize` streams the same on the CLI. A branch
+the v1 solver cannot flip — a compound expression (`x * 2 > 10`), a
+condition over `Date.now()` — is reported in `out.uncovered` with
+its reason, never hidden and never faked. A non-terminating candidate
+is capped (default 10,000 true tests per loop), not a hang, and the
+capped test does not count as coverage. Scripts only, synchronous
+entry functions; shipped in 1.1.0.
+
 ### What you get
 
 - **Every event, live.** Calls, ifs, loops, assignments, allocations, awaits —
@@ -385,57 +589,40 @@ buffer their events; for JavaScript they stream as the program runs.
   return values, and variables while the program runs.
 - **Modern JavaScript.** ES2022, arrows, optional chaining, nullish
   coalescing, private fields, async/await — all traced, all tested.
-- **Three languages, one protocol.** JavaScript, Python, and C++ all consume
-  the same JSON event stream — and since 0.9.0, Python and C++ trace
-  natively (Python via `sys.settrace` + AST, C++ via
-  `-finstrument-functions`, function-level in v1), so one analysis
-  pipeline works on all three.
+- **Five languages, one protocol.** JavaScript, Python, C++, IrohScript
+  and BASIC all consume the same JSON event stream — and since 0.9.0,
+  Python and C++ trace natively (Python via `sys.settrace` + AST, C++
+  via `-finstrument-functions`, function-level in v1), and since 1.1.0
+  IrohScript and BASIC trace natively too, so one analysis pipeline
+  works on all five.
 - **Analysis, not just events.** Deterministic findings (hot loops, deep
   recursion, one-sided branches, throwing paths) plus a toolkit scorecard
   with denominators on every number — and a tiny inspectable perceptron
   that classifies a trace window hot vs normal.
 - **Scan mode for AI.** `--scan` (or `Iroh.scanTrace()`) turns trace →
   analyze → vector into ONE compact JSON document `{ vectors, findings,
-  scores, summary }` — bounded, deterministic, same schema in all three
+  scores, summary }` — bounded, deterministic, same schema in all five
   languages. Vectors are deterministic feature vectors, not LLM
   embeddings.
-- **Translation, both ways.** JavaScript to Python and C++, Python and C++
-  back to JavaScript — hybrid (AST + trace evidence) out of JavaScript,
-  static-only coming back, with an honest report of what translated, what
-  needed an assumption, and what could not be translated.
+- **Translation, all five ways.** Every language to every language —
+  direct legs out of JavaScript, two-hop through JavaScript for the
+  rest, with an honest report of what translated, what needed an
+  assumption, and what could not be translated.
 - **Direct the run.** An AI director reads live findings as they fire and
   changes the program mid-flight — set a variable, skip a call, stop the
   run — with a full audit log of what fired, what was directed, and what
   changed. The built-in runaway-loop guard throttles a hot loop (or stops
   it); `node cli/iroh.js program.js --direct` runs any script under it.
-- **No surprises.** 348 tests (314 Node + 25 Python + 9 C++), `npm test` runs
-  them all, plus a TypeScript type test (`npm run test:types`). Zero runtime
-  dependencies in the engine beyond Acorn, astring, and acorn-walk.
-
-### Installation
-
-```sh
-npm install iroh
-```
-
-Or clone and build from source:
-
-```sh
-git clone https://github.com/andyle777/IrohRedux.git
-cd IrohRedux
-npm install
-npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
-npm test            # 348 tests: 314 Node + 25 Python + 9 C++
-```
-
-The Python client installs with `pip install -e python/`; the C++ client is
-a single header — just `#include "iroh.hpp"`.
+- **No surprises.** 649 tests (392 Node + 25 Python + 9 C++ + 223
+  IrohScript/BASIC Python), `npm test` runs them all, plus a TypeScript
+  type test (`npm run test:types`). Zero runtime dependencies in the
+  engine beyond Acorn, astring, and acorn-walk.
 
 ### Learn more
 
 - [Getting started](//github.com/andyle777/IrohRedux/blob/master/GETTING_STARTED.md) — worked examples you can run locally.
 - [API](//github.com/andyle777/IrohRedux/blob/master/API.md) — the full listener and event reference, including `Iroh.assert` / `Iroh.log` and the `INSTR` / `CATEGORY` / `OP` label tables.
-- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, 0.7.0, 0.8.0, 0.9.0, 1.0.0, and 1.0.1.
+- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, 0.7.0, 0.8.0, 0.9.0, 1.0.0, 1.0.1, and 1.1.0.
 
 ---
 
@@ -445,7 +632,11 @@ a single header — just `#include "iroh.hpp"`.
 modern SDK, and the 0.7.0 modules, top-level await, and decorators, and
 the 0.8.0 analysis layer and translation engine, the 0.9.0 native
 Python/C++ tracers, vector refracting, scan mode, and live wire, the
-1.0.0 AI director and live code engine, and the 1.0.1 all-generations
+1.0.0 AI director and live code engine, the 1.0.1 all-generations
 audit-and-patch pass (translator number formatting, director member and
 scoped sets, directAsync/directModule, decorated computed keys and
-accessor fields, Python per-assignment events) are the fork's.*
+accessor fields, Python per-assignment events), the 1.1.0 IrohScript
+foundation rework (IrohScript and BASIC as first-class traced
+languages, the five-language translator, the IrohScript compiler
+with the perceptron core in IrohScript), and the 1.1.0 input
+synthesiser on the live wire are the fork's.*

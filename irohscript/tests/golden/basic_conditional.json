@@ -1,0 +1,96 @@
+{
+  "ast": {
+    "node": "Program",
+    "statements": [
+      {
+        "name": "enemy",
+        "node": "Let",
+        "type": "Bool",
+        "value": {
+          "node": "Literal",
+          "type": "Bool",
+          "value": true
+        }
+      },
+      {
+        "action": {
+          "node": "Literal",
+          "type": "String",
+          "value": "defend"
+        },
+        "condition": {
+          "name": "enemy",
+          "node": "Name"
+        },
+        "node": "Conditional"
+      }
+    ]
+  },
+  "ir": [
+    {
+      "op": "SET",
+      "target": "enemy",
+      "type": "Bool",
+      "value": {
+        "op": "LIT",
+        "type": "Bool",
+        "value": true
+      }
+    },
+    {
+      "cond": {
+        "name": "enemy",
+        "op": "LOAD"
+      },
+      "else": [],
+      "op": "IF",
+      "then": [
+        {
+          "op": "ACTION",
+          "value": {
+            "op": "LIT",
+            "type": "String",
+            "value": "defend"
+          }
+        }
+      ]
+    }
+  ],
+  "irx": {
+    "program": [
+      {
+        "opcode": "SET",
+        "register": "enemy",
+        "type": "Bool",
+        "value": {
+          "op": "LIT",
+          "type": "Bool",
+          "value": true
+        },
+        "version": "3.0"
+      },
+      {
+        "cond": {
+          "name": "enemy",
+          "op": "LOAD"
+        },
+        "else": [],
+        "opcode": "IF",
+        "then": [
+          {
+            "opcode": "ACTION",
+            "value": {
+              "op": "LIT",
+              "type": "String",
+              "value": "defend"
+            },
+            "version": "3.0"
+          }
+        ],
+        "version": "3.0"
+      }
+    ],
+    "version": "3.0"
+  },
+  "source": "LET enemy : Bool = TRUE\nIF enemy\n ACTION defend\nEND IF"
+}

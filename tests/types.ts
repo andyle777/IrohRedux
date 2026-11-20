@@ -25,6 +25,13 @@ import type {
   Director,
   DirectorContext,
   LoopInfo,
+  SynthesizeResult,
+  SynthesizeOptions,
+  SynthesizeProgressEvent,
+  SynthesizedInput,
+  Branch,
+  BranchCoverage,
+  UncoveredBranch,
   TranslateResult,
 } from "../index";
 
@@ -198,6 +205,34 @@ void updates;
 const translated: TranslateResult = Iroh.translate("console.log(1 + 2);", { to: "python" });
 const translatedCode: string = translated.code;
 void translatedCode;
+
+// Input synthesiser: inputs that drive a function down each branch.
+const synthOpts: SynthesizeOptions = {
+  entry: "classify",
+  seeds: [[5]],
+  maxRuns: 50,
+  onProgress: (ev: SynthesizeProgressEvent) => {
+    if (ev.type === "run") {
+      const args: unknown[] = ev.args;
+      void args;
+    }
+  },
+};
+const synthesized: SynthesizeResult = Iroh.synthesize(
+  "function classify(x) { if (x > 10) { return \"big\"; } return \"small\"; }",
+  synthOpts
+);
+const synthCoverage: BranchCoverage = synthesized.coverage;
+const synthCovered: number = synthCoverage.covered;
+void synthCovered;
+const synthTotal: number = synthCoverage.total;
+void synthTotal;
+const synthBranches: Branch[] = synthesized.coverage.branches;
+void synthBranches;
+const synthUncovered: UncoveredBranch[] = synthesized.uncovered;
+void synthUncovered;
+const synthInputs: SynthesizedInput[] = synthesized.inputs;
+void synthInputs;
 const reportOk: boolean = translated.report.ok;
 void reportOk;
 const staticOnly: boolean = translated.report.staticOnly;

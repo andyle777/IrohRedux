@@ -1,11 +1,11 @@
-// Hybrid translation engine for IrohRedux 0.8.0 — JavaScript ->
-// Python / C++, Python -> JavaScript, C++ -> JavaScript.
+// Hybrid translation engine for IrohRedux — JavaScript <-> Python /
+// C++ / IrohScript / BASIC.
 //
 //   Iroh.translate(code, { from, to })      -> { code, report } (sync)
 //   Iroh.translateAsync(code, { from, to }) -> Promise of the same
 //
 // `from` defaults to "javascript"; `to` is "python" | "cpp" |
-// "javascript". The JavaScript-out leg is hybrid: the AST (static)
+// "javascript" | "irohscript" | "basic". The JavaScript-out leg is hybrid: the AST (static)
 // plus trace evidence (dynamic — the program is run through the
 // tracer first and the events resolve what static analysis can't:
 // runtime types, values, which branches fired). The reverse legs
@@ -38,6 +38,7 @@
 // import).
 
 import { parse } from "./utils";
+import { runIrohscriptPython, IROHSCRIPT_AST_HELPER, getChildProcessSync, nodeImport } from "./irohscript-bridge";
 
 // ------------------------------------------------------------------
 // Report + shared helpers
@@ -298,7 +299,7 @@ function makeJSEmitter(target, report, env, hints) {
   let isPy = target === "python";
   let lines = [];
   let indentLevel = 0;
-  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false };
+  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, cstdlib: false, sysexit: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false };
   let noted = {};
   function noteOnce(key, text) {
     if (!noted[key]) {
@@ -738,6 +739,21 @@ function makeJSEmitter(target, report, env, hints) {
       let prop = node.callee.computed
         ? null
         : (node.callee.property.name !== void 0 ? node.callee.property.name : node.callee.property.value);
+      // process.exit(code): the program ends. It only ever reaches
+      // this emitter from a BASIC END/STOP (the BASIC leg emits it)
+      // or from user JS calling it directly. Python gets sys.exit
+      // (with an import), C++ gets std::exit (with <cstdlib>) — both
+      // end the program in any context, so code after the call stays
+      // unreachable exactly as in the source. No arg means code 0.
+      if (node.callee.object.type === "Identifier" && node.callee.object.name === "process" && prop === "exit") {
+        let code = node.arguments.length > 0 ? expr(node.arguments[0], 16) : "0";
+        if (isPy) {
+          needs.sysexit = true;
+          return "sys.exit(" + code + ")";
+        }
+        needs.cstdlib = true;
+        return "std::exit(" + code + ")";
+      }
       let obj = expr(node.callee.object, 15);
       if (prop === "push") {
         let args = node.arguments.map(function(a) { return expr(a, 16); }).join(", ");
@@ -1123,26 +1139,37 @@ function makeJSEmitter(target, report, env, hints) {
   }
 
   function forLoopPattern(node) {
-    // Classic numeric for: for (let i = A; i <op> B; update)
-    if (!node.init || node.init.type !== "VariableDeclaration") return null;
-    if (node.init.declarations.length !== 1) return null;
-    let decl = node.init.declarations[0];
-    if (decl.id.type !== "Identifier" || !decl.init) return null;
+    // Classic numeric for: for (let i = A; i <op> B; update), or
+    // for (i = A; i <op> B; update) with i declared earlier (the
+    // BASIC leg emits the second form so the loop variable stays
+    // visible after the loop, the way BASIC scoping works).
+    let name = null;
+    let start = null;
+    if (node.init && node.init.type === "VariableDeclaration") {
+      if (node.init.declarations.length !== 1) return null;
+      let decl = node.init.declarations[0];
+      if (decl.id.type !== "Identifier" || !decl.init) return null;
+      name = decl.id.name;
+      start = decl.init;
+    } else if (node.init && node.init.type === "AssignmentExpression" && node.init.operator === "=" && node.init.left.type === "Identifier") {
+      name = node.init.left.name;
+      start = node.init.right;
+    } else return null;
     if (!node.test || node.test.type !== "BinaryExpression") return null;
     let test = node.test;
-    if (test.left.type !== "Identifier" || test.left.name !== decl.id.name) return null;
+    if (test.left.type !== "Identifier" || test.left.name !== name) return null;
     if (["<", "<=", ">", ">="].indexOf(test.operator) === -1) return null;
     let step = null;
     let upd = node.update;
     if (!upd) return null;
-    if (upd.type === "UpdateExpression" && upd.argument.type === "Identifier" && upd.argument.name === decl.id.name) {
+    if (upd.type === "UpdateExpression" && upd.argument.type === "Identifier" && upd.argument.name === name) {
       step = upd.operator === "++" ? 1 : -1;
-    } else if (upd.type === "AssignmentExpression" && upd.left.type === "Identifier" && upd.left.name === decl.id.name) {
+    } else if (upd.type === "AssignmentExpression" && upd.left.type === "Identifier" && upd.left.name === name) {
       if (upd.operator === "+=" && upd.right.type === "Literal" && typeof upd.right.value === "number") step = upd.right.value;
       else if (upd.operator === "-=" && upd.right.type === "Literal" && typeof upd.right.value === "number") step = -upd.right.value;
       else return null;
     } else return null;
-    return { name: decl.id.name, start: decl.init, op: test.operator, end: test.right, step: step };
+    return { name: name, start: start, op: test.operator, end: test.right, step: step };
   }
 
   function stmt(node) {
@@ -1566,6 +1593,7 @@ function makeJSEmitter(target, report, env, hints) {
       let header = [];
       if (needs.math) header.push("import math");
       if (needs.random) header.push("import random");
+      if (needs.sysexit) header.push("import sys");
       if (needs.jsmod) {
         // JS % is the truncated remainder; Python % is floored.
         // int(a / b) truncates toward zero, so this keeps ints int
@@ -1652,6 +1680,7 @@ function makeJSEmitter(target, report, env, hints) {
     if (needs.cmath) header.push("#include <cmath>");
     if (needs.algorithm) header.push("#include <algorithm>");
     if (needs.stdexcept) header.push("#include <stdexcept>");
+    if (needs.cstdlib) header.push("#include <cstdlib>");
     if (needs.vectorHelper) {
       header.push("");
       header.push("template <typename T>");
@@ -1676,7 +1705,11 @@ function makeJSEmitter(target, report, env, hints) {
       // zeros; -6 < k <= 0 writes "0." with -k zeros; otherwise
       // exponential with a bare exponent ("1e+21", "1e-7").
       header.push("");
-      header.push("#include <cmath>");
+      // __iroh_jsnum uses std::isnan / std::isinf, so it needs
+      // <cmath> — but only if the main header did not already emit it
+      // (a program that both uses Math and prints a Number used to get
+      // the include twice).
+      if (!needs.cmath) header.push("#include <cmath>");
       header.push("#include <cstdio>");
       header.push("#include <sstream>");
       header.push("std::string __iroh_jsnum(double v) {");
@@ -1765,23 +1798,52 @@ function translateFromJS(iroh, code, to, options) {
   // runs natively (the instrumenter does not rewrite it — Iroh.log
   // is only the fixtures' explicit print), so the global
   // console.log is swapped, not just Iroh.log.
+  // process.exit is stubbed too, for the same reason: a translated
+  // BASIC program ends with process.exit(0) (its END), and the
+  // evidence trace runs the program in-process — without the stub,
+  // translating a BASIC program with END killed the host process
+  // silently (exit 0, no output, no error). The stub throws a
+  // sentinel instead; trace() attaches the events gathered before
+  // the END to the thrown error, so the evidence is kept and the
+  // program ending is not mistaken for a failure. (In a browser
+  // there is no process to stub, and a process.exit in the traced
+  // code falls through to the evidence-unavailable path.)
   let events = [];
   let originalLog = iroh.log;
   let originalConsoleLog = typeof console !== "undefined" ? console.log : null;
+  let originalExit = (typeof process !== "undefined" && process && typeof process.exit === "function") ? process.exit : null;
   iroh.log = function() {};
   if (originalConsoleLog) console.log = function() {};
+  if (originalExit) {
+    process.exit = function(code) {
+      let err = new Error("__iroh_end");
+      err.__iroh_end = true;
+      err.__iroh_exit_code = code;
+      throw err;
+    };
+  }
   try {
     events = iroh.trace(code).events;
   } catch (e) {
-    report.notes.push(
-      "Dynamic trace evidence unavailable (" + (e.message || String(e)) + "); types come from static inference or hints only."
-    );
+    if (e && e.__iroh_end) {
+      events = e.events || [];
+    } else {
+      report.notes.push(
+        "Dynamic trace evidence unavailable (" + (e.message || String(e)) + "); types come from static inference or hints only."
+      );
+    }
   } finally {
     iroh.log = originalLog;
     if (originalConsoleLog) console.log = originalConsoleLog;
+    if (originalExit) process.exit = originalExit;
   }
   let env = buildTraceEnv(events);
-  let emitter = makeJSEmitter(to, report, env, options.types || null);
+  let emitter;
+  if (to === "irohscript" || to === "basic") {
+    emitter = makeIrohJSEmitter(to, report, env, options.types || null);
+  } else {
+    emitter = makeJSEmitter(to, report, env, options.types || null);
+  }
   let out = emitter.run(ast);
   let c = out.counts;
   if (c.functions > 0) {
@@ -1822,10 +1884,17 @@ function translateFromJS(iroh, code, to, options) {
     if (!env.called[fnNames[ii]]) uncalled.push(fnNames[ii]);
   }
   if (uncalled.length > 0) {
-    report.notes.push(
-      "Function(s) never called in the trace (" + uncalled.join(", ") +
-      "): C++ parameter types for them came from a type hint, or the function was reported unsupported."
-    );
+    if (to === "cpp") {
+      report.notes.push(
+        "Function(s) never called in the trace (" + uncalled.join(", ") +
+        "): C++ parameter types for them came from a type hint, or the function was reported unsupported."
+      );
+    } else {
+      report.notes.push(
+        "Function(s) never called in the trace (" + uncalled.join(", ") +
+        "): parameter types for them came from a type hint, or were omitted."
+      );
+    }
   }
   return { code: out.text, report: report };
 }
@@ -1855,26 +1924,7 @@ const PYTHON_AST_HELPER = [
   "sys.stdout.write(json.dumps(conv(tree)))",
 ].join("\n");
 
-function getChildProcessSync() {
-  // `require` is the CJS bundle's module require; in the ESM and
-  // browser bundles it is undefined, so this safely returns null
-  // there (the Python leg then throws a clear error — see
-  // translateAsync for the ESM path).
-  if (typeof require === "function") {
-    try {
-      return require("node:child_process");
-    } catch (e) {
-      return null;
-    }
-  }
-  return null;
-}
 
-// Dynamic import() without writing `import()` literally in src/:
-// buble cannot parse import() syntax (same pattern as setup.js).
-function nodeImport(specifier) {
-  return new Function("s", "return import(s);")(specifier);
-}
 
 function runPythonAst(code, childProcess) {
   let stdout;
@@ -3435,56 +3485,1425 @@ function translateFromCpp(code) {
 // Public entry points
 // ------------------------------------------------------------------
 
+// ------------------------------------------------------------------
+// IrohScript and BASIC (1.0.1 rework, part 2) — the translator learns
+// the two new languages, both directions, and --translate accepts
+// them. The design follows the 0.8.0 engine's rules: unsupported
+// constructs are reported with a loud throwing stub, never silently
+// mistranslated; every assumption cites its evidence.
+//
+// Legs:
+//   IrohScript -> JavaScript: the IrohScript AST (from the bootstrap
+//     compiler, via python3) is walked statically — the source's own
+//     type annotations carry the types, so no trace is needed
+//     (staticOnly: true).
+//   BASIC -> JavaScript: the BASIC parse tree (from basic.py, via
+//     python3) is walked statically (staticOnly: true). GOSUB
+//     subroutines become functions; GOTO is not in the v1 scope and
+//     is a loud stub (the pc-dispatch transform is the follow-up).
+//   JavaScript -> IrohScript / BASIC: the JS emitter below walks the
+//     Acorn AST with trace evidence, the way the Python/C++ legs do
+//     (hybrid, staticOnly: false). IrohScript has no for-loop and no
+//     arrays in v1, BASIC has no while loop and no real functions —
+//     what cannot be expressed is a loud stub, not a guess.
+//   Anything -> Python / C++ from IrohScript or BASIC, and
+//     Python / C++ -> IrohScript or BASIC, go two-hop via JavaScript
+//     (the JS leg in the middle is traced for its types, exactly as
+//     the direct JS -> Python/C++ leg is). The report says so.
+//   --direct stays JavaScript-only: the script tracers (Python, C++,
+//     IrohScript, BASIC) run under spawnSync, so no directive can
+//     reach them mid-run — the same limit Python/C++ already have.
+//     Parity, not a gap introduced here.
+// ------------------------------------------------------------------
+
+
+
+
+// stdlib-only Python helper: reads BASIC source on stdin, parses it
+// with basic.py's own parser, writes the parse tree as JSON on
+// stdout (tuples become lists). No hand-rolled BASIC parser here.
+const BASIC_AST_HELPER = [
+  "import json, sys",
+  "sys.path.insert(0, sys.argv[1] + '/src')",
+  "from basic import parse_program",
+  "def conv(v):",
+  "    if isinstance(v, tuple):",
+  "        return [conv(x) for x in v]",
+  "    if isinstance(v, list):",
+  "        return [conv(x) for x in v]",
+  "    return v",
+  "src = sys.stdin.read()",
+  "try:",
+  "    prog = parse_program(src)",
+  "except Exception as exc:",
+  "    sys.stderr.write('BasicError: %s\\n' % (exc,))",
+  "    sys.exit(1)",
+  "sys.stdout.write(json.dumps(conv(prog)))",
+].join("\n");
+
+// Default value for an IrohScript type (for LET with no initializer
+// and for STRUCT field defaults). null means "a constructor call".
+function irohTypeDefault(typeName) {
+  if (typeName === "Int" || typeName === "Float") return "0";
+  if (typeName === "String") return '""';
+  if (typeName === "Bool") return "false";
+  if (typeName && typeName.indexOf("Vector") === 0) return "[]";
+  return null;
+}
+
+// IrohScript AST (JSON, node-tagged) -> JavaScript. Static-only: the
+// source's type annotations carry the types, and the AST keeps the
+// source's structure (Let/If/FunctionDef/Conditional/Action/Intent).
+function makeIrohAstJSEmitter(report) {
+  let lines = [];
+  let indentLevel = 0;
+  let needs = { pymod: false, action: false, intent: false };
+  let counts = { functions: 0, loops: 0, conditionals: 0, variables: 0, outputs: 0 };
+  let noted = {};
+  function indentStr() { return "  ".repeat(indentLevel); }
+  function emitLine(text) { lines.push(indentStr() + text); }
+  function noteOnce(key, text) {
+    if (!noted[key]) { noted[key] = true; report.notes.push(text); }
+  }
+  function stubStmt(detail, construct) {
+    markUnsupported(report, construct, detail);
+    emitLine("throw new Error(" + JSON.stringify("IrohRedux: " + detail) + ");");
+  }
+  let BIN_PREC = { OR: 1, AND: 2, EQ: 3, NEQ: 3, LT: 3, LE: 3, GT: 3, GE: 3, ADD: 4, SUB: 4, MUL: 5, DIV: 5, MOD: 5 };
+  function exprPrec(node) {
+    if (!node || typeof node !== "object") return 7;
+    if (node.node === "BinOp") return BIN_PREC[node.op] || 1;
+    if (node.node === "UnaryOp") return 6;
+    return 7;
+  }
+  function expr(node, parentPrec) {
+    if (!node || typeof node !== "object") return "undefined";
+    let prec = exprPrec(node);
+    let out = "";
+    if (node.node === "Literal") {
+      if (typeof node.value === "string") out = JSON.stringify(node.value);
+      else if (typeof node.value === "number" || typeof node.value === "boolean") out = String(node.value);
+      else if (node.value === null || node.value === void 0) out = "null";
+      else out = JSON.stringify(node.value);
+    } else if (node.node === "Name") {
+      out = node.name;
+    } else if (node.node === "BinOp") {
+      if (node.op === "MOD") {
+        needs.pymod = true;
+        out = "__iroh_pymod(" + expr(node.left, 7) + ", " + expr(node.right, 7) + ")";
+      } else {
+        let map = { ADD: "+", SUB: "-", MUL: "*", DIV: "/", EQ: "===", NEQ: "!==", LT: "<", LE: "<=", GT: ">", GE: ">=", AND: "&&", OR: "||" };
+        out = expr(node.left, prec) + " " + (map[node.op] || node.op) + " " + expr(node.right, prec + 1);
+      }
+    } else if (node.node === "UnaryOp") {
+      out = (node.op === "NOT" ? "!" : "-") + expr(node.operand, 6);
+    } else if (node.node === "Call") {
+      out = expr(node.callee, 7) + "(" + node.args.map(function(a) { return expr(a, 0); }).join(", ") + ")";
+    } else if (node.node === "MemberAccess") {
+      out = expr(node.object, 7) + "." + node.member;
+    } else {
+      markUnsupported(report, node.node || "expression", "expression node '" + (node.node || "?") + "' is not in the v1 scope");
+      out = "(function() { throw new Error(" + JSON.stringify("IrohRedux: expression '" + (node.node || "?") + "' is not in the v1 scope") + "); })()";
+    }
+    if (prec < (parentPrec || 0)) return "(" + out + ")";
+    return out;
+  }
+  function emitBlock(stmts) {
+    indentLevel += 1;
+    for (let ii = 0; ii < stmts.length; ++ii) stmt(stmts[ii]);
+    indentLevel -= 1;
+  }
+  function stmt(node) {
+    if (!node || typeof node.node !== "string") return;
+    if (node.node === "Let" || node.node === "Const") {
+      counts.variables += 1;
+      let kw = node.node === "Const" ? "const " : "let ";
+      if (node.value === null || node.value === void 0) {
+        if (node.type) {
+          let dflt = irohTypeDefault(node.type);
+          if (dflt !== null) { emitLine(kw + node.name + " = " + dflt + ";"); return; }
+          emitLine(kw + node.name + " = " + node.type + "();");
+          return;
+        }
+        emitLine(kw + node.name + ";");
+        return;
+      }
+      emitLine(kw + node.name + " = " + expr(node.value, 0) + ";");
+      return;
+    }
+    if (node.node === "Assign") {
+      emitLine(expr(node.target, 0) + " = " + expr(node.value, 0) + ";");
+      return;
+    }
+    if (node.node === "Print") {
+      counts.outputs += 1;
+      emitLine("console.log(" + expr(node.value, 0) + ");");
+      return;
+    }
+    if (node.node === "Action") {
+      needs.action = true;
+      emitLine("__iroh_action(" + expr(node.value, 0) + ");");
+      return;
+    }
+    if (node.node === "If") {
+      counts.conditionals += 1;
+      emitLine("if (" + expr(node.cond, 0) + ") {");
+      emitBlock(node.then);
+      if (node.else && node.else.length > 0) {
+        emitLine("} else {");
+        emitBlock(node.else);
+      }
+      emitLine("}");
+      return;
+    }
+    if (node.node === "Conditional") {
+      counts.conditionals += 1;
+      needs.action = true;
+      emitLine("if (" + expr(node.condition, 0) + ") {");
+      indentLevel += 1;
+      emitLine("__iroh_action(" + expr(node.action, 0) + ");");
+      indentLevel -= 1;
+      emitLine("}");
+      return;
+    }
+    if (node.node === "Loop") {
+      stubStmt("IrohScript LOOP has no defined exit condition in IrohScript 3.0 (spec section 6 shows the form but not the termination rule)", "Loop");
+      return;
+    }
+    if (node.node === "FunctionDef") {
+      counts.functions += 1;
+      let params = node.params.map(function(p) { return p.name; }).join(", ");
+      emitLine("function " + node.name + "(" + params + ") {");
+      emitBlock(node.body);
+      emitLine("}");
+      return;
+    }
+    if (node.node === "Return") {
+      emitLine(node.value ? "return " + expr(node.value, 0) + ";" : "return;");
+      return;
+    }
+    if (node.node === "StructDef") {
+      let fields = node.fields.map(function(f) {
+        let dflt = irohTypeDefault(f.type);
+        return f.name + ": " + (dflt !== null ? dflt : f.type + "()");
+      }).join(", ");
+      emitLine("function " + node.name + "() { return { " + fields + " }; }");
+      return;
+    }
+    if (node.node === "EnumDef") {
+      let members = node.members.map(function(m) { return m + ": " + JSON.stringify(m); }).join(", ");
+      emitLine("var " + node.name + " = { " + members + " };");
+      return;
+    }
+    if (node.node === "Import") {
+      noteOnce("import-" + node.name, "IMPORT '" + node.name + "' has no runtime effect (namespaces are runtime extensions); the import was dropped.");
+      return;
+    }
+    if (node.node === "Intent") {
+      needs.intent = true;
+      emitLine("__iroh_intent(" + expr(node.value, 0) + ");");
+      return;
+    }
+    if (node.node === "Call") {
+      emitLine(expr(node, 0) + ";");
+      return;
+    }
+    stubStmt("statement node '" + node.node + "' is not in the v1 scope", node.node);
+  }
+  function run(ast) {
+    let stmts = ast.statements || [];
+    let fns = [];
+    let rest = [];
+    for (let ii = 0; ii < stmts.length; ++ii) {
+      if (stmts[ii].node === "FunctionDef") fns.push(stmts[ii]);
+      else rest.push(stmts[ii]);
+    }
+    for (let ii = 0; ii < fns.length; ++ii) stmt(fns[ii]);
+    if (fns.length > 0 && rest.length > 0) lines.push("");
+    for (let ii = 0; ii < rest.length; ++ii) stmt(rest[ii]);
+    let header = [];
+    if (needs.pymod) {
+      header.push("function __iroh_pymod(a, b) { return ((a % b) + b) % b; }");
+      header.push("");
+    }
+    if (needs.action) {
+      header.push("var __iroh_actions = [];");
+      header.push("function __iroh_action(v) { __iroh_actions.push(v); console.log(v); }");
+      header.push("");
+    }
+    if (needs.intent) {
+      header.push("var __iroh_intents = [];");
+      header.push("function __iroh_intent(v) { __iroh_intents.push(v); }");
+      header.push("");
+    }
+    return { text: header.concat(lines).join("\n") + "\n", counts: counts };
+  }
+  return { run: run, counts: counts };
+}
+
+// BASIC parse tree (JSON lists, from basic.py) -> JavaScript.
+// Static-only. The program is flattened into slots in line order;
+// GOSUB subroutines become hoisted functions, FOR/NEXT becomes a
+// for loop, GOTO is not in the v1 scope (the pc-dispatch transform
+// is the follow-up) and is a loud stub.
+function makeBasicJSEmitter(report) {
+  let lines = [];
+  let indentLevel = 0;
+  let needs = { pymod: false, input: false, dim: false };
+  let counts = { functions: 0, loops: 0, conditionals: 0, variables: 0, outputs: 0 };
+  let declared = {};
+  let dimmed = {};
+  let noted = {};
+  let subTargets = [];
+  let stepCounter = 0;
+  function indentStr() { return "  ".repeat(indentLevel); }
+  function emitLine(text) { lines.push(indentStr() + text); }
+  function noteOnce(key, text) {
+    if (!noted[key]) { noted[key] = true; report.notes.push(text); }
+  }
+  function stubStmt(detail, construct) {
+    markUnsupported(report, construct, detail);
+    emitLine("throw new Error(" + JSON.stringify("IrohRedux: " + detail) + ");");
+  }
+  let BIN_PREC = { OR: 1, AND: 2, "=": 3, "<>": 3, "<": 3, "<=": 3, ">": 3, ">=": 3, "+": 4, "-": 4, "*": 5, "/": 5, "%": 5 };
+  function exprPrec(node) {
+    if (!node || !Array.isArray(node)) return 7;
+    if (node[0] === "bin") return BIN_PREC[node[1]] || 1;
+    if (node[0] === "un") return 6;
+    return 7;
+  }
+  function expr(node, parentPrec) {
+    if (!node || !Array.isArray(node)) return "undefined";
+    let prec = exprPrec(node);
+    let out = "";
+    if (node[0] === "num" || node[0] === "str") {
+      out = JSON.stringify(node[1]);
+    } else if (node[0] === "var") {
+      out = node[1];
+    } else if (node[0] === "arr") {
+      if (!dimmed[node[1]]) {
+        markUnsupported(report, "ArrayExpression", "array '" + node[1] + "' is used without DIM");
+        out = "(function() { throw new Error(" + JSON.stringify("IrohRedux: array '" + node[1] + "' is used without DIM") + "); })()";
+      } else {
+        out = node[1];
+        for (let ii = 0; ii < node[2].length; ++ii) out += "[" + expr(node[2][ii], 0) + "]";
+      }
+    } else if (node[0] === "bin") {
+      let op = node[1];
+      if (op === "%") {
+        needs.pymod = true;
+        out = "__iroh_pymod(" + expr(node[2], 7) + ", " + expr(node[3], 7) + ")";
+      } else {
+        let map = { "=": "===", "<>": "!==", AND: "&&", OR: "||" };
+        let jsOp = map[op] || op;
+        out = expr(node[2], prec) + " " + jsOp + " " + expr(node[3], prec + 1);
+      }
+    } else if (node[0] === "un") {
+      out = (node[1] === "NOT" ? "!" : "-") + expr(node[2], 6);
+    } else {
+      markUnsupported(report, "expression", "expression '" + node[0] + "' is not in the v1 scope");
+      out = "(function() { throw new Error(" + JSON.stringify("IrohRedux: expression '" + node[0] + "' is not in the v1 scope") + "); })()";
+    }
+    if (prec < (parentPrec || 0)) return "(" + out + ")";
+    return out;
+  }
+  function emitPrint(items) {
+    counts.outputs += 1;
+    if (!items || items.length === 0) { emitLine("console.log();"); return; }
+    let parts = [];
+    let trailing = false;
+    for (let ii = 0; ii < items.length; ++ii) {
+      let item = items[ii];
+      let sep = item.length > 1 ? item[1] : null;
+      parts.push(expr(item[0], 0));
+      if (sep === ";") { parts.push('""'); trailing = true; }
+      else if (sep === ",") {
+        noteOnce("print-zone", "PRINT with ',' moves to the next print zone (14 columns); translated as a tab.");
+        parts.push('"\\t"');
+        trailing = true;
+      } else {
+        trailing = false;
+      }
+    }
+    let joined = parts.join(" + ");
+    if (trailing) {
+      noteOnce("print-trailing", "PRINT with a trailing separator writes without a newline (process.stdout.write, Node-only).");
+      emitLine("process.stdout.write(" + joined + ");");
+    } else {
+      emitLine("console.log(" + joined + ");");
+    }
+  }
+  // Emit a sequence of BASIC statements (a flat slot range, or one
+  // IF branch list). `inSub` is true inside a GOSUB subroutine body;
+  // `isFlat` is true when `items` is the program's flat slot array
+  // (so subroutine ranges are skipped there, never inside a branch).
+  function emitSeq(items, from, to, subRanges, inSub, isFlat) {
+    let ii = from;
+    while (ii < to) {
+      if (isFlat) {
+        let skipped = false;
+        for (let kk = 0; kk < subTargets.length; ++kk) {
+          let range = subRanges[subTargets[kk]];
+          if (range && ii >= range.start && ii < range.end) { ii = range.end; skipped = true; break; }
+        }
+        if (skipped) continue;
+      }
+      let s = items[ii].stmt;
+      let kind = s[0];
+      if (kind === "rem") { ii += 1; continue; }
+      if (kind === "let") {
+        counts.variables += 1;
+        if (!declared[s[1]]) { declared[s[1]] = true; emitLine("let " + s[1] + " = " + expr(s[2], 0) + ";"); }
+        else emitLine(s[1] + " = " + expr(s[2], 0) + ";");
+        ii += 1;
+        continue;
+      }
+      if (kind === "setelem") {
+        if (!dimmed[s[1]]) {
+          stubStmt("array '" + s[1] + "' is assigned without DIM", "ArrayExpression");
+          ii += 1;
+          continue;
+        }
+        let target = s[1];
+        for (let jj = 0; jj < s[2].length; ++jj) target += "[" + expr(s[2][jj], 0) + "]";
+        emitLine(target + " = " + expr(s[3], 0) + ";");
+        ii += 1;
+        continue;
+      }
+      if (kind === "dim") {
+        dimmed[s[1]] = true;
+        needs.dim = true;
+        let fill = s[1].charAt(s[1].length - 1) === "$" ? '""' : "0";
+        let sizes = s[2].map(function(e) { return expr(e, 0); }).join(", ");
+        if (!declared[s[1]]) { declared[s[1]] = true; emitLine("let " + s[1] + " = __basic_dim([" + sizes + "], " + fill + ");"); }
+        else emitLine(s[1] + " = __basic_dim([" + sizes + "], " + fill + ");");
+        ii += 1;
+        continue;
+      }
+      if (kind === "print") { emitPrint(s[1]); ii += 1; continue; }
+      if (kind === "input") {
+        needs.input = true;
+        for (let jj = 0; jj < s[2].length; ++jj) {
+          let name = s[2][jj];
+          let prompt = jj === 0 ? s[1] : null;
+          let call = "__basic_input(" + (prompt === null ? "null" : JSON.stringify(prompt)) + ")";
+          if (name.charAt(name.length - 1) === "$") {
+            if (!declared[name]) { declared[name] = true; emitLine("let " + name + " = " + call + ";"); }
+            else emitLine(name + " = " + call + ";");
+          } else {
+            if (!declared[name]) { declared[name] = true; emitLine("let " + name + " = Number(" + call + ");"); }
+            else emitLine(name + " = Number(" + call + ");");
+          }
+        }
+        noteOnce("input-lines", "INPUT reads one line per variable; a comma-separated line is not split (BASIC reads several values from one line).");
+        ii += 1;
+        continue;
+      }
+      if (kind === "if") {
+        counts.conditionals += 1;
+        emitLine("if (" + expr(s[1], 0) + ") {");
+        indentLevel += 1;
+        emitStmtList(s[2], subRanges, inSub);
+        indentLevel -= 1;
+        if (s[3] && s[3].length > 0) {
+          emitLine("} else {");
+          indentLevel += 1;
+          emitStmtList(s[3], subRanges, inSub);
+          indentLevel -= 1;
+        }
+        emitLine("}");
+        ii += 1;
+        continue;
+      }
+      if (kind === "for") {
+        counts.loops += 1;
+        let depth = 1;
+        let nextIdx = -1;
+        for (let jj = ii + 1; jj < to; ++jj) {
+          if (items[jj].stmt[0] === "for") depth += 1;
+          if (items[jj].stmt[0] === "next") {
+            depth -= 1;
+            if (depth === 0) { nextIdx = jj; break; }
+          }
+        }
+        if (nextIdx === -1) {
+          stubStmt("FOR '" + s[1] + "' has no matching NEXT in the v1 scope", "ForStatement");
+          ii += 1;
+          continue;
+        }
+        let varName = s[1];
+        if (!declared[varName]) { declared[varName] = true; emitLine("let " + varName + ";"); }
+        let stepExpr = s[4] === null || s[4] === void 0 ? "1" : expr(s[4], 0);
+        let stepVal = s[4] === null || s[4] === void 0 ? 1 : (s[4][0] === "num" ? s[4][1] : null);
+        let stepIsLiteral = stepVal !== null;
+        let stepName = null;
+        let test;
+        if (stepIsLiteral && stepVal >= 0) test = varName + " <= " + expr(s[3], 0);
+        else if (stepIsLiteral) test = varName + " >= " + expr(s[3], 0);
+        else {
+          stepCounter += 1;
+          stepName = "__basic_step_" + stepCounter;
+          test = "(" + stepName + " >= 0 ? " + varName + " <= " + expr(s[3], 0) + " : " + varName + " >= " + expr(s[3], 0) + ")";
+        }
+        if (!stepIsLiteral) emitLine("let " + stepName + " = " + stepExpr + ";");
+        emitLine("for (" + varName + " = " + expr(s[2], 0) + "; " + test + "; " + varName + " += " + (stepIsLiteral ? stepExpr : stepName) + ") {");
+        indentLevel += 1;
+        emitSeq(items, ii + 1, nextIdx, subRanges, inSub, isFlat);
+        indentLevel -= 1;
+        emitLine("}");
+        ii = nextIdx + 1;
+        continue;
+      }
+      if (kind === "next") {
+        stubStmt("NEXT without a matching FOR", "ForStatement");
+        ii += 1;
+        continue;
+      }
+      if (kind === "gosub") {
+        if (!(s[1] in subRanges)) {
+          stubStmt("GOSUB target line " + s[1] + " does not exist", "GOSUB");
+        } else {
+          emitLine("__gosub_" + s[1] + "();");
+        }
+        ii += 1;
+        continue;
+      }
+      if (kind === "goto") {
+        stubStmt("GOTO line " + s[1] + " is not in the v1 scope (the pc-dispatch transform is the follow-up)", "GOTO");
+        ii += 1;
+        continue;
+      }
+      if (kind === "return") {
+        if (inSub) emitLine("return;");
+        else stubStmt("RETURN outside a GOSUB subroutine", "RETURN");
+        ii += 1;
+        continue;
+      }
+      if (kind === "end" || kind === "stop") {
+        emitLine("process.exit(0);");
+        ii += 1;
+        continue;
+      }
+      stubStmt("statement '" + kind + "' is not in the v1 scope", kind);
+      ii += 1;
+    }
+    return ii;
+  }
+  function emitStmtList(stmts, subRanges, inSub) {
+    let items = [];
+    for (let ii = 0; ii < stmts.length; ++ii) items.push({ stmt: stmts[ii] });
+    emitSeq(items, 0, items.length, subRanges, inSub, false);
+  }
+  function run(prog) {
+    let flat = [];
+    let lineMap = {};
+    for (let ii = 0; ii < prog.length; ++ii) {
+      let lineNo = prog[ii][0];
+      let stmts = prog[ii][2] || [];
+      if (lineNo !== null && lineNo !== void 0 && !(lineNo in lineMap)) lineMap[lineNo] = flat.length;
+      for (let jj = 0; jj < stmts.length; ++jj) flat.push({ stmt: stmts[jj], line: lineNo });
+    }
+    let subRanges = {};
+    let gosubTargets = [];
+    for (let ii = 0; ii < flat.length; ++ii) {
+      if (flat[ii].stmt[0] === "gosub") {
+        let target = flat[ii].stmt[1];
+        if (gosubTargets.indexOf(target) === -1) gosubTargets.push(target);
+      }
+    }
+    for (let ii = 0; ii < gosubTargets.length; ++ii) {
+      let target = gosubTargets[ii];
+      let start = lineMap[target];
+      if (start === void 0) continue;
+      let end = flat.length;
+      for (let jj = start; jj < flat.length; ++jj) {
+        if (flat[jj].stmt[0] === "return") { end = jj + 1; break; }
+        if (flat[jj].stmt[0] === "end" || flat[jj].stmt[0] === "stop") { end = jj; break; }
+      }
+      subRanges[target] = { start: start, end: end };
+      counts.functions += 1;
+    }
+    for (let ii = 0; ii < gosubTargets.length; ++ii) {
+      let target = gosubTargets[ii];
+      let range = subRanges[target];
+      if (!range) continue;
+      emitLine("function __gosub_" + target + "() {");
+      indentLevel += 1;
+      emitSeq(flat, range.start, range.end, subRanges, true, false);
+      indentLevel -= 1;
+      emitLine("}");
+    }
+    if (gosubTargets.length > 0) lines.push("");
+    subTargets = gosubTargets;
+    // Mainline: one pass over the flat slots; emitSeq skips the
+    // subroutine ranges itself.
+    emitSeq(flat, 0, flat.length, subRanges, false, true);
+    let header = [];
+    if (needs.pymod) {
+      header.push("function __iroh_pymod(a, b) { return ((a % b) + b) % b; }");
+      header.push("");
+    }
+    if (needs.dim) {
+      header.push("function __basic_dim(sizes, fill) {");
+      header.push("  if (sizes.length === 0) return fill;");
+      header.push("  var arr = new Array(sizes[0] + 1);");
+      header.push("  for (var i = 0; i < arr.length; ++i) arr[i] = __basic_dim(sizes.slice(1), fill);");
+      header.push("  return arr;");
+      header.push("}");
+      header.push("");
+    }
+    if (needs.input) {
+      header.push("var __basic_input_lines = null;");
+      header.push("var __basic_input_at = 0;");
+      header.push("function __basic_input(prompt) {");
+      header.push("  if (prompt) process.stdout.write(prompt);");
+      header.push("  if (__basic_input_lines === null) {");
+      header.push("    __basic_input_lines = require(\"fs\").readFileSync(0, \"utf8\").split(\"\\n\");");
+      header.push("  }");
+      header.push("  var line = __basic_input_at < __basic_input_lines.length ? __basic_input_lines[__basic_input_at++] : \"\";");
+      header.push("  return line;");
+      header.push("}");
+      header.push("");
+      noteOnce("input-node", "INPUT in translated JavaScript reads stdin with require(\"fs\") (Node-only).");
+    }
+    return { text: header.concat(lines).join("\n") + "\n", counts: counts };
+  }
+  return { run: run, counts: counts };
+}
+
+function translateFromIrohscript(code, childProcess, options) {
+  let report = newReport("irohscript", "javascript", true);
+  let ast = runIrohscriptPython(code, options, childProcess, IROHSCRIPT_AST_HELPER, "IrohScript");
+  let emitter = makeIrohAstJSEmitter(report);
+  let out = emitter.run(ast);
+  finishSourceLeg(report, out.counts);
+  return { code: out.text, report: report };
+}
+
+function translateFromBasic(code, childProcess, options) {
+  let report = newReport("basic", "javascript", true);
+  let prog = runIrohscriptPython(code, options, childProcess, BASIC_AST_HELPER, "BASIC");
+  let emitter = makeBasicJSEmitter(report);
+  let out = emitter.run(prog);
+  finishSourceLeg(report, out.counts);
+  return { code: out.text, report: report };
+}
+
+// Shared report tail for the static-only source legs: the same
+// "clean" entries translateFromJS writes, so every leg reports the
+// same way.
+function finishSourceLeg(report, c) {
+  if (c.functions > 0) {
+    report.clean.push({ construct: "functions", count: c.functions, detail: "function declarations translated" });
+  }
+  if (c.variables > 0) {
+    report.clean.push({ construct: "variables", count: c.variables, detail: "variable declarations translated" });
+  }
+  if (c.loops > 0) {
+    report.clean.push({ construct: "loops", count: c.loops, detail: "for loops translated" });
+  }
+  if (c.conditionals > 0) {
+    report.clean.push({ construct: "conditionals", count: c.conditionals, detail: "if statements translated" });
+  }
+  if (c.outputs > 0) {
+    report.clean.push({ construct: "console-output", count: c.outputs, detail: "print statements translated" });
+  }
+}
+
+// Map a C++ type (the spelling buildTraceEnv / inferType produce)
+// to the IrohScript type name. null means "no annotation".
+function irohTypeOfCpp(cppType) {
+  if (!cppType) return null;
+  if (cppType === "int") return "Int";
+  if (cppType === "double") return "Float";
+  if (cppType === "std::string") return "String";
+  if (cppType === "bool") return "Bool";
+  let m = /^std::vector<(.+)>$/.exec(cppType);
+  if (m) {
+    let inner = irohTypeOfCpp(m[1]);
+    return inner ? "Vector<" + inner + ">" : null;
+  }
+  return null;
+}
+
+// JavaScript AST (Acorn) -> IrohScript or BASIC. Hybrid like the
+// Python/C++ legs: the caller traces the program first and env
+// carries the evidence. v1 scope is the same as the other legs
+// (functions, arithmetic, loops, conditionals, arrays, strings,
+// console output) minus what the target language cannot express:
+// IrohScript has no for-loop and no arrays; BASIC has no while loop
+// and no real functions (they become GOSUB subroutines). What cannot
+// be expressed is a loud stub, not a guess.
+function makeIrohJSEmitter(target, report, env, hints) {
+  let isIroh = target === "irohscript";
+  let lines = [];
+  let indentLevel = 0;
+  let counts = { functions: 0, loops: 0, conditionals: 0, variables: 0, outputs: 0 };
+  let declared = {};
+  let noted = {};
+  let ctx = { vars: {} };
+  for (let k in env.vars) ctx.vars[k] = env.vars[k].type;
+  if (hints && hints.variables) {
+    for (let k in hints.variables) ctx.vars[k] = hints.variables[k];
+  }
+  function indentStr() { return "  ".repeat(indentLevel); }
+  function emitLine(text) { lines.push(indentStr() + text); }
+  function noteOnce(key, text) {
+    if (!noted[key]) { noted[key] = true; report.notes.push(text); }
+  }
+  function assumeOnce(key, what, evidence) {
+    if (!noted[key]) {
+      noted[key] = true;
+      recordAssumption(report, what, evidence);
+    }
+  }
+  function stubStmt(detail, construct) {
+    markUnsupported(report, construct, detail);
+    if (isIroh) emitLine("__iroh_unsupported(" + JSON.stringify(detail) + ");");
+    else {
+      emitLine("PRINT " + basicQuote("IrohRedux: " + detail));
+      emitLine("END");
+    }
+  }
+  function stubExpr(detail, construct) {
+    markUnsupported(report, construct, detail);
+    if (isIroh) return "__iroh_unsupported(" + JSON.stringify(detail) + ")";
+    return "(1 / 0)";
+  }
+  function basicQuote(s) {
+    return '"' + String(s).replace(/"/g, '""') + '"';
+  }
+  function irohTypeOf(node) {
+    let t = null;
+    try { t = inferType(node, ctx); } catch (e) { t = null; }
+    return irohTypeOfCpp(t);
+  }
+  function paramType(fnName, idx, node) {
+    if (hints && hints.functions && hints.functions[fnName] && hints.functions[fnName].params) {
+      let p = hints.functions[fnName].params[idx];
+      if (p) return irohTypeOfCpp(p);
+    }
+    let f = env.funcs && env.funcs[fnName];
+    if (f && f.args && idx < f.args.length) return irohTypeOfCpp(cppTypeOfValue(f.args[idx]));
+    if (node) return irohTypeOf(node);
+    return null;
+  }
+  function expr(node, parentPrec) {
+    if (!node || typeof node.type !== "string") return "undefined";
+    let prec = precedence(node);
+    let out = "";
+    if (node.type === "Literal") {
+      if (typeof node.value === "string") out = isIroh ? JSON.stringify(node.value) : basicQuote(node.value);
+      else if (typeof node.value === "number") out = String(node.value);
+      else if (typeof node.value === "boolean") out = isIroh ? (node.value ? "True" : "False") : (node.value ? "-1" : "0");
+      else if (node.value === null) {
+        out = stubExpr("null has no equivalent in " + target, "Literal");
+      } else {
+        out = JSON.stringify(node.value);
+      }
+    } else if (node.type === "Identifier") {
+      out = node.name;
+    } else if (node.type === "BinaryExpression" || node.type === "LogicalExpression") {
+      let op = node.operator;
+      if (op === "%") {
+        assumeOnce("js-mod", "JavaScript % truncates toward zero; " + (isIroh ? "IrohScript" : "BASIC") + " % floors (Python-style); results differ when the left operand is negative", "IrohScript/BASIC % is Python-style floored modulo (bootstrap interpreter, basic.py); JavaScript % truncates toward zero");
+        out = expr(node.left, prec) + " % " + expr(node.right, prec + 1);
+      } else if (op === "**") {
+        out = stubExpr("the ** operator has no equivalent in " + target, "BinaryExpression");
+      } else if (op === "==" || op === "!=") {
+        assumeOnce("loose-eq", "JavaScript loose equality (==/!=) is translated as strict equality (===/!==); values of different types compare differently", "no loose-equality operator exists in " + target);
+        let jsOp = op === "==" ? (isIroh ? "==" : "=") : (isIroh ? "!=" : "<>");
+        out = expr(node.left, prec) + " " + jsOp + " " + expr(node.right, prec + 1);
+      } else if (op === "===" || op === "!==") {
+        let jsOp = op === "===" ? (isIroh ? "==" : "=") : (isIroh ? "!=" : "<>");
+        out = expr(node.left, prec) + " " + jsOp + " " + expr(node.right, prec + 1);
+      } else if (op === "&&" || op === "||") {
+        let jsOp = op === "&&" ? "AND" : "OR";
+        out = expr(node.left, prec) + " " + jsOp + " " + expr(node.right, prec + 1);
+      } else if (op === "instanceof" || op === "in") {
+        out = stubExpr("the " + op + " operator has no equivalent in " + target, "BinaryExpression");
+      } else {
+        out = expr(node.left, prec) + " " + op + " " + expr(node.right, prec + 1);
+      }
+    } else if (node.type === "UnaryExpression") {
+      if (node.operator === "!") out = "NOT " + expr(node.argument, 6);
+      else if (node.operator === "-") out = "-" + expr(node.argument, 6);
+      else {
+        out = stubExpr("unary " + node.operator + " has no equivalent in " + target, "UnaryExpression");
+      }
+    } else if (node.type === "CallExpression") {
+      let callee = node.callee;
+      if (callee.type === "MemberExpression" && !callee.computed && callee.object.type === "Identifier" && callee.object.name === "console" && callee.property.name === "log") {
+        out = stubExpr("console.log as a value (not a statement) has no equivalent in " + target, "CallExpression");
+      } else if (callee.type === "Identifier") {
+        out = callee.name + "(" + node.arguments.map(function(a) { return expr(a, 0); }).join(", ") + ")";
+      } else if (callee.type === "MemberExpression" && !callee.computed) {
+        if (!isIroh) {
+          out = stubExpr("method calls have no equivalent in BASIC", "CallExpression");
+        } else {
+          out = expr(callee.object, 7) + "." + callee.property.name + "(" + node.arguments.map(function(a) { return expr(a, 0); }).join(", ") + ")";
+          noteOnce("member-call", "a method call was translated as a dotted call; the callee must be a plain function at runtime");
+        }
+      } else {
+        out = stubExpr("computed or indirect calls are not in the v1 scope", "CallExpression");
+      }
+    } else if (node.type === "MemberExpression") {
+      if (calleeComputed(node)) {
+        if (isIroh) {
+          out = stubExpr("computed member access (arrays) has no equivalent in IrohScript v1", "MemberExpression");
+        } else {
+          out = expr(node.object, 7) + "(" + expr(node.property, 0) + ")";
+        }
+      } else {
+        out = expr(node.object, 7) + "." + node.property.name;
+      }
+    } else if (node.type === "ArrayExpression") {
+      out = stubExpr("array literals are only supported as a variable initializer for BASIC; use a variable declaration", "ArrayExpression");
+    } else if (node.type === "ConditionalExpression") {
+      out = stubExpr("the ?: operator has no equivalent in " + target, "ConditionalExpression");
+    } else if (node.type === "TemplateLiteral") {
+      out = stubExpr("template literals have no equivalent in " + target, "TemplateLiteral");
+    } else if (node.type === "UpdateExpression") {
+      out = stubExpr("++ / -- as a value has no equivalent in " + target + " (use it as a statement)", "UpdateExpression");
+    } else {
+      out = stubExpr("expression " + node.type + " is not in the v1 scope", node.type);
+    }
+    if (prec < (parentPrec || 0)) return "(" + out + ")";
+    return out;
+  }
+  function calleeComputed(node) { return !!node.computed; }
+  function isConsoleLog(node) {
+    return node.type === "CallExpression" && node.callee.type === "MemberExpression" && !node.callee.computed &&
+      node.callee.object.type === "Identifier" && node.callee.object.name === "console" &&
+      node.callee.property.name === "log";
+  }
+  function isProcessExit(node) {
+    return node.type === "CallExpression" && node.callee.type === "MemberExpression" && !node.callee.computed &&
+      node.callee.object.type === "Identifier" && node.callee.object.name === "process" &&
+      node.callee.property.name === "exit";
+  }
+  // Classic numeric for (the same pattern the Python/C++ emitter
+  // uses): for (let i = A; i <op> B; update). Returns null when the
+  // loop is not in that shape.
+  function forLoopPattern(node) {
+    // Classic numeric for: for (let i = A; i <op> B; update), or
+    // for (i = A; i <op> B; update) with i declared earlier (the
+    // BASIC leg emits the second form so the loop variable stays
+    // visible after the loop, the way BASIC scoping works).
+    let name = null;
+    let start = null;
+    if (node.init && node.init.type === "VariableDeclaration") {
+      if (node.init.declarations.length !== 1) return null;
+      let decl = node.init.declarations[0];
+      if (decl.id.type !== "Identifier" || !decl.init) return null;
+      name = decl.id.name;
+      start = decl.init;
+    } else if (node.init && node.init.type === "AssignmentExpression" && node.init.operator === "=" && node.init.left.type === "Identifier") {
+      name = node.init.left.name;
+      start = node.init.right;
+    } else return null;
+    if (!node.test || node.test.type !== "BinaryExpression") return null;
+    let test = node.test;
+    if (test.left.type !== "Identifier" || test.left.name !== name) return null;
+    if (["<", "<=", ">", ">="].indexOf(test.operator) === -1) return null;
+    let step = null;
+    let upd = node.update;
+    if (!upd) return null;
+    if (upd.type === "UpdateExpression" && upd.argument.type === "Identifier" && upd.argument.name === name) {
+      step = upd.operator === "++" ? 1 : -1;
+    } else if (upd.type === "AssignmentExpression" && upd.left.type === "Identifier" && upd.left.name === name) {
+      if (upd.operator === "+=" && upd.right.type === "Literal" && typeof upd.right.value === "number") step = upd.right.value;
+      else if (upd.operator === "-=" && upd.right.type === "Literal" && typeof upd.right.value === "number") step = -upd.right.value;
+      else return null;
+    } else return null;
+    return { name: name, start: start, op: test.operator, end: test.right, step: step };
+  }
+  function emitBody(block) {
+    if (!block || !block.body) return;
+    indentLevel += 1;
+    for (let ii = 0; ii < block.body.length; ++ii) stmt(block.body[ii]);
+    indentLevel -= 1;
+  }
+  function emitFunction(fnNode, fnName) {
+    counts.functions += 1;
+    let params = fnNode.params.map(function(p, idx) {
+      if (p.type !== "Identifier") return null;
+      if (isIroh) {
+        let t = paramType(fnName, idx, p);
+        return t ? p.name + " : " + t : p.name;
+      }
+      return p.name;
+    });
+    if (params.indexOf(null) !== -1) {
+      stubStmt("function '" + fnName + "' has non-identifier parameters, which are not in the v1 scope", "FunctionDeclaration");
+      return;
+    }
+    if (isIroh) {
+      emitLine("FUNCTION " + fnName + "(" + params.join(", ") + ")");
+      emitBody(fnNode.body);
+      emitLine("END FUNCTION");
+      return;
+    }
+    // BASIC: a function becomes a GOSUB subroutine, emitted at the
+    // end of the program (see run()). Its line number is assigned
+    // here so calls anywhere — including before the declaration, the
+    // way JS hoisting allows — resolve.
+    if (!(fnName in subLines)) {
+      subLines[fnName] = subLineBase;
+      subLineBase += 1000;
+    }
+    if (callsItself(fnNode, fnName)) {
+      markUnsupported(report, "FunctionDeclaration", "recursive function '" + fnName + "' cannot be a BASIC GOSUB subroutine (arguments and the return value share globals)");
+      subroutines.push({ node: fnNode, name: fnName, params: params, stub: true });
+      return;
+    }
+    subroutines.push({ node: fnNode, name: fnName, params: params });
+  }
+  let subroutines = [];
+  let subLines = {};
+  let subLineBase = 1000;
+  let currentSub = null;
+  function stmt(node) {
+    if (!node || typeof node.type !== "string") return;
+    if (node.type === "BlockStatement") {
+      for (let ii = 0; ii < node.body.length; ++ii) stmt(node.body[ii]);
+      return;
+    }
+    if (node.type === "EmptyStatement") return;
+    if (node.type === "VariableDeclaration") {
+      for (let ii = 0; ii < node.declarations.length; ++ii) {
+        let d = node.declarations[ii];
+        counts.variables += 1;
+        if (d.id.type !== "Identifier") {
+          stubStmt("destructuring declaration is not in the v1 scope", "VariableDeclaration");
+          continue;
+        }
+        if (d.init && d.init.type === "ArrowFunctionExpression") {
+          let fnNode = {
+            type: "FunctionDeclaration",
+            id: d.id,
+            params: d.init.params,
+            body: d.init.body.type === "BlockStatement"
+              ? d.init.body
+              : { type: "BlockStatement", body: [{ type: "ReturnStatement", argument: d.init.body }] },
+          };
+          emitFunction(fnNode, d.id.name);
+          continue;
+        }
+        if (!isIroh && d.init) {
+          let lifted = liftExpr(d.init);
+          emitLifts(lifted.lifts);
+          d.init = lifted.expr;
+        }
+        if (!isIroh && d.init && d.init.type === "ArrayExpression") {
+          let n = d.init.elements.length;
+          if (n === 0) {
+            stubStmt("an empty array has no BASIC DIM form", "ArrayExpression");
+            continue;
+          }
+          let hasHole = false;
+          for (let jj = 0; jj < n; ++jj) if (d.init.elements[jj] === null) hasHole = true;
+          if (hasHole) {
+            stubStmt("a hole in an array literal has no BASIC equivalent", "ArrayExpression");
+            continue;
+          }
+          emitLine("DIM " + d.id.name + "(" + (n - 1) + ")");
+          for (let jj = 0; jj < n; ++jj) {
+            emitLine(d.id.name + "(" + jj + ") = " + expr(d.init.elements[jj], 0));
+          }
+          declared[d.id.name] = true;
+          continue;
+        }
+        if (isIroh) {
+          let ann = d.init ? irohTypeOf(d.init) : null;
+          if (!ann && ctx.vars[d.id.name]) ann = irohTypeOfCpp(ctx.vars[d.id.name]);
+          let kw = node.kind === "const" ? "CONST " : "LET ";
+          emitLine(kw + d.id.name + (ann ? " : " + ann : "") + (d.init ? " = " + expr(d.init, 0) : ""));
+        } else {
+          emitLine("LET " + d.id.name + (d.init ? " = " + expr(d.init, 0) : " = 0"));
+        }
+        declared[d.id.name] = true;
+        if (d.init) {
+          let t = null;
+          try { t = inferType(d.init, ctx); } catch (e) { t = null; }
+          if (t) ctx.vars[d.id.name] = t;
+        }
+      }
+      return;
+    }
+    if (node.type === "FunctionDeclaration") {
+      emitFunction(node, node.id.name);
+      return;
+    }
+    if (node.type === "ReturnStatement") {
+      if (!isIroh && currentSub) {
+        if (node.argument) {
+          let lifted = liftExpr(node.argument);
+          emitLifts(lifted.lifts);
+          emitLine("LET __ret_" + currentSub + " = " + expr(lifted.expr, 0));
+        }
+        emitLine("RETURN");
+        return;
+      }
+      if (!isIroh && !currentSub) {
+        emitLine("END");
+        return;
+      }
+      emitLine(node.argument ? "RETURN " + expr(node.argument, 0) : "RETURN");
+      return;
+    }
+    if (node.type === "ExpressionStatement") {
+      let e = node.expression;
+      if (isConsoleLog(e)) {
+        counts.outputs += 1;
+        if (isIroh) {
+          if (e.arguments.length === 0) emitLine("PRINT \"\"");
+          else if (e.arguments.length === 1) emitLine("PRINT " + expr(e.arguments[0], 0));
+          else {
+            noteOnce("console-log-multi", "console.log with several arguments prints each on its own line in IrohScript (PRINT takes one value).");
+            for (let ii = 0; ii < e.arguments.length; ++ii) emitLine("PRINT " + expr(e.arguments[ii], 0));
+          }
+        } else {
+          let lifted = liftCalls(node);
+          emitLifts(lifted.lifts);
+          let le = lifted.node.expression;
+          let parts = [];
+          for (let ii = 0; ii < le.arguments.length; ++ii) {
+            parts.push(expr(le.arguments[ii], 0));
+            if (ii < le.arguments.length - 1) parts.push('""');
+          }
+          if (parts.length === 0) emitLine("PRINT");
+          else if (parts.length === 1) emitLine("PRINT " + parts[0]);
+          else emitLine("PRINT " + parts.join(" ; "));
+        }
+        return;
+      }
+      if (isProcessExit(e)) {
+        // process.exit(code): the program ends. BASIC has END for
+        // this (the exit code is dropped — BASIC END takes none).
+        // IrohScript has no program-end primitive, so it is a loud
+        // stub, not a silent `process.exit` that would fail later
+        // with an undeclared-name error.
+        if (!isIroh) { emitLine("END"); return; }
+        stubStmt("process.exit (ending the program) has no equivalent in IrohScript — IrohScript has no program-end primitive", "CallExpression");
+        return;
+      }
+      if (!isIroh) {
+        let lifted = liftCalls(node);
+        emitLifts(lifted.lifts);
+        stmtExpr(lifted.node.expression);
+        return;
+      }
+      stmtExpr(e);
+      return;
+    }
+    if (node.type === "IfStatement") {
+      counts.conditionals += 1;
+      if (isIroh) {
+        emitLine("IF " + expr(node.test, 0));
+        emitBody(node.consequent);
+        if (node.alternate) {
+          emitLine("ELSE");
+          if (node.alternate.type === "BlockStatement") emitBody(node.alternate);
+          else stmt(node.alternate);
+        }
+        emitLine("END IF");
+        return;
+      }
+      let lifted = liftExpr(node.test);
+      emitLifts(lifted.lifts);
+      let n = node;
+      let thenStr = inlineBranch(n.consequent);
+      let elseStr = n.alternate ? inlineBranch(n.alternate) : null;
+      if (thenStr === null || (n.alternate && elseStr === null)) {
+        stubStmt("an IF branch that cannot be written on one BASIC line (a loop, a return, a call, or a GOTO) is not in the v1 scope", "IfStatement");
+        return;
+      }
+      let line = "IF " + expr(lifted.expr, 0) + " THEN " + thenStr;
+      if (elseStr !== null) line += " ELSE " + elseStr;
+      emitLine(line);
+      return;
+    }
+    if (node.type === "ForStatement") {
+      if (isIroh) {
+        stubStmt("a for-loop has no equivalent in IrohScript v1 (LOOP has no defined exit rule)", "ForStatement");
+        return;
+      }
+      let pat = forLoopPattern(node);
+      if (!pat) {
+        stubStmt("only a classic numeric for-loop translates to BASIC FOR/NEXT", "ForStatement");
+        return;
+      }
+      counts.loops += 1;
+      let startNode = pat.start;
+      let endNode = pat.end;
+      let ls = liftExpr(pat.start);
+      emitLifts(ls.lifts);
+      startNode = ls.expr;
+      let le = liftExpr(pat.end);
+      emitLifts(le.lifts);
+      endNode = le.expr;
+      let endText;
+      if (pat.op === "<") endText = simpleExprText(endNode) + " - 1";
+      else if (pat.op === "<=") endText = expr(endNode, 0);
+      else if (pat.op === ">") endText = simpleExprText(endNode) + " + 1";
+      else endText = expr(endNode, 0);
+      let stepText = pat.step === 1 ? "" : " STEP " + String(pat.step);
+      emitLine("FOR " + pat.name + " = " + expr(startNode, 0) + " TO " + endText + stepText);
+      emitBody(node.body);
+      emitLine("NEXT " + pat.name);
+      return;
+    }
+    if (node.type === "WhileStatement" || node.type === "DoWhileStatement") {
+      stubStmt("a " + (node.type === "WhileStatement" ? "while" : "do-while") + " loop has no equivalent in " + target + " v1", node.type);
+      return;
+    }
+    if (node.type === "ClassDeclaration" || node.type === "LabeledStatement") {
+      stubStmt(node.type + " is not in the v1 scope", node.type);
+      return;
+    }
+    stubStmt("statement " + node.type + " is not in the v1 scope", node.type);
+  }
+  function simpleExprText(node) {
+    if (node.type === "Literal" || node.type === "Identifier") return expr(node, 0);
+    return "(" + expr(node, 0) + ")";
+  }
+  function stmtExpr(e) {
+    if (e.type === "AssignmentExpression") {
+      let target = e.left;
+      if (target.type !== "Identifier" && target.type !== "MemberExpression") {
+        stubStmt("assignment to a non-identifier target is not in the v1 scope", "AssignmentExpression");
+        return;
+      }
+      let name = target.type === "Identifier" ? target.name : expr(target, 0);
+      let right = e.right;
+      if (!isIroh) {
+        let lifted = liftExpr(e.right);
+        emitLifts(lifted.lifts);
+        right = lifted.expr;
+      }
+      if (e.operator === "=") {
+        if (isIroh && !declared[name] && target.type === "Identifier") {
+          let ann = irohTypeOf(right);
+          emitLine("LET " + name + (ann ? " : " + ann : "") + " = " + expr(right, 0));
+          declared[name] = true;
+        } else {
+          emitLine(name + " = " + expr(right, 0));
+        }
+        return;
+      }
+      let op = null;
+      if (e.operator === "+=") op = "+";
+      else if (e.operator === "-=") op = "-";
+      else if (e.operator === "*=") op = "*";
+      else if (e.operator === "/=") op = "/";
+      else if (e.operator === "%=") op = "%";
+      if (!op) {
+        stubStmt("assignment operator " + e.operator + " is not in the v1 scope", "AssignmentExpression");
+        return;
+      }
+      if (op === "%") {
+        assumeOnce("js-mod", "JavaScript % truncates toward zero; " + (isIroh ? "IrohScript" : "BASIC") + " % floors (Python-style); results differ when the left operand is negative", "IrohScript/BASIC % is Python-style floored modulo (bootstrap interpreter, basic.py); JavaScript % truncates toward zero");
+      }
+      emitLine(name + " = " + name + " " + op + " " + expr(right, 0));
+      return;
+    }
+    if (e.type === "UpdateExpression" && e.argument.type === "Identifier") {
+      let delta = e.operator === "++" ? "1" : "-1";
+      emitLine(e.argument.name + " = " + e.argument.name + " + " + delta);
+      return;
+    }
+    if (e.type === "CallExpression") {
+      emitLine(expr(e, 0));
+      return;
+    }
+    stubStmt("expression statement " + e.type + " is not in the v1 scope", e.type);
+  }
+  // BASIC only: replace every plain function call in a cloned statement
+  // with a temp, and return the GOSUB lifts to emit before it. Function
+  // bodies are never descended into — their calls belong to the
+  // subroutine, not to the statement that declares the function.
+  function liftCalls(node) {
+    let lifts = [];
+    let tempCounter = { n: 0 };
+    function walk(n) {
+      if (!n || typeof n !== "object") return n;
+      if (Array.isArray(n)) {
+        for (let ii = 0; ii < n.length; ++ii) n[ii] = walk(n[ii]);
+        return n;
+      }
+      if (n.type === "FunctionDeclaration" || n.type === "FunctionExpression" || n.type === "ArrowFunctionExpression") {
+        return n;
+      }
+      if (n.type === "CallExpression" && n.callee.type === "Identifier") {
+        for (let ii = 0; ii < n.arguments.length; ++ii) n.arguments[ii] = walk(n.arguments[ii]);
+        tempCounter.n += 1;
+        let temp = "__tmp" + tempCounter.n;
+        lifts.push({ fn: n.callee.name, args: n.arguments, temp: temp });
+        return { type: "Identifier", name: temp };
+      }
+      let keys = Object.keys(n);
+      for (let ii = 0; ii < keys.length; ++ii) {
+        let v = n[keys[ii]];
+        if (v && typeof v === "object") n[keys[ii]] = walk(v);
+      }
+      return n;
+    }
+    let cloned = JSON.parse(JSON.stringify(node));
+    let out = walk(cloned);
+    return { node: out, lifts: lifts };
+  }
+  // BASIC only: lift the calls out of one expression (not a whole
+  // statement — a call inside an IF branch or a loop body must stay
+  // where it executes, so those places lift just the expression they
+  // always evaluate). Returns { expr, lifts }.
+  function liftExpr(node) {
+    let wrapped = { type: "ExpressionStatement", expression: node };
+    let lifted = liftCalls(wrapped);
+    return { expr: lifted.node.expression, lifts: lifted.lifts };
+  }
+  function emitLifts(lifts) {
+    for (let ii = 0; ii < lifts.length; ++ii) {
+      let lift = lifts[ii];
+      if (!(lift.fn in subLines)) {
+        stubStmt("call to '" + lift.fn + "' cannot be a GOSUB subroutine (the function was not declared in this program)", "CallExpression");
+        continue;
+      }
+      for (let jj = 0; jj < lift.args.length; ++jj) {
+        emitLine("LET __arg" + jj + " = " + expr(lift.args[jj], 0));
+      }
+      emitLine("GOSUB " + subLines[lift.fn]);
+      emitLine("LET " + lift.temp + " = __ret_" + lift.fn);
+    }
+  }
+  // BASIC only: does this statement contain a plain function call?
+  // A call in an IF branch cannot be written on the one BASIC line
+  // (GOSUB is not an IF-part statement), so such a branch is a loud
+  // stub instead. Function bodies are not descended into.
+  function hasPlainCall(node) {
+    let found = false;
+    function walk(n) {
+      if (!n || typeof n !== "object" || found) return;
+      if (Array.isArray(n)) {
+        for (let ii = 0; ii < n.length; ++ii) walk(n[ii]);
+        return;
+      }
+      if (n.type === "FunctionDeclaration" || n.type === "FunctionExpression" || n.type === "ArrowFunctionExpression") {
+        return;
+      }
+      if (n.type === "CallExpression" && n.callee.type === "Identifier") {
+        found = true;
+        return;
+      }
+      let keys = Object.keys(n);
+      for (let ii = 0; ii < keys.length; ++ii) {
+        let v = n[keys[ii]];
+        if (v && typeof v === "object") walk(v);
+      }
+    }
+    walk(node);
+    return found;
+  }
+  // BASIC only: render one branch of an IF as a single line of
+  // :-separated statements. Returns null when a statement cannot be
+  // written on one line (a loop, a return, a GOTO).
+  function inlineBranch(node) {
+    let stmts = node.type === "BlockStatement" ? node.body : [node];
+    let saved = lines;
+    let parts = [];
+    for (let ii = 0; ii < stmts.length; ++ii) {
+      if (hasPlainCall(stmts[ii])) { lines = saved; return null; }
+      lines = [];
+      let before = report.unsupported.length;
+      stmt(stmts[ii]);
+      if (report.unsupported.length > before) {
+        report.unsupported.length = before;
+        lines = saved;
+        return null;
+      }
+      if (lines.length === 0) continue;
+      if (lines.length !== 1) { lines = saved; return null; }
+      parts.push(lines[0].trim());
+    }
+    lines = saved;
+    if (parts.length === 0) return "REM";
+    return parts.join(" : ");
+  }
+  function run(ast) {
+    let fns = [];
+    let rest = [];
+    for (let ii = 0; ii < ast.body.length; ++ii) {
+      if (ast.body[ii].type === "FunctionDeclaration") fns.push(ast.body[ii]);
+      else rest.push(ast.body[ii]);
+    }
+    if (isIroh) {
+      for (let ii = 0; ii < fns.length; ++ii) emitFunction(fns[ii], fns[ii].id.name);
+      if (fns.length > 0 && rest.length > 0) lines.push("");
+      for (let ii = 0; ii < rest.length; ++ii) stmt(rest[ii]);
+      return { text: lines.join("\n") + "\n", counts: counts };
+    }
+    // BASIC: emit the mainline, then the GOSUB subroutines (their
+    // line numbers were assigned as the functions were collected).
+    for (let ii = 0; ii < fns.length; ++ii) emitFunction(fns[ii], fns[ii].id.name);
+    for (let ii = 0; ii < rest.length; ++ii) stmt(rest[ii]);
+    // The mainline falls through into the subroutines without this:
+    // BASIC executes lines in order, so the program must stop before
+    // the first GOSUB target.
+    if (subroutines.length > 0) {
+      let last = "";
+      for (let ii = lines.length - 1; ii >= 0; --ii) {
+        if (lines[ii].trim() !== "") { last = lines[ii].trim(); break; }
+      }
+      if (last !== "END" && last !== "STOP") lines.push("END");
+    }
+    for (let ii = 0; ii < subroutines.length; ++ii) {
+      let sub = subroutines[ii];
+      let startLine = subLines[sub.name];
+      let saved = lines;
+      lines = [];
+      currentSub = sub.name;
+      if (sub.stub) {
+        emitLine("PRINT " + basicQuote("IrohRedux: recursive function '" + sub.name + "' cannot be a BASIC GOSUB subroutine"));
+        emitLine("END");
+      } else {
+        for (let jj = 0; jj < sub.params.length; ++jj) {
+          emitLine("LET " + sub.params[jj] + " = __arg" + jj);
+        }
+        emitBody(sub.node.body);
+      }
+      currentSub = null;
+      let bodyLines = lines;
+      lines = saved;
+      lines.push("");
+      for (let jj = 0; jj < bodyLines.length; ++jj) {
+        lines.push(String(startLine + jj * 10) + " " + bodyLines[jj].trim());
+      }
+    }
+    return { text: lines.join("\n") + "\n", counts: counts };
+  }
+  function callsItself(fnNode, fnName) {
+    let found = false;
+    function walk(n) {
+      if (!n || typeof n !== "object" || found) return;
+      if (Array.isArray(n)) {
+        for (let ii = 0; ii < n.length; ++ii) walk(n[ii]);
+        return;
+      }
+      if (n.type === "CallExpression" && n.callee.type === "Identifier" && n.callee.name === fnName) {
+        found = true;
+        return;
+      }
+      let keys = Object.keys(n);
+      for (let ii = 0; ii < keys.length; ++ii) {
+        let v = n[keys[ii]];
+        if (v && typeof v === "object") walk(v);
+      }
+    }
+    walk(fnNode.body);
+    return found;
+  }
+  return { run: run, counts: counts };
+}
+
 export function translate(code, options) {
   options = options || {};
   let from = options.from || "javascript";
   let to = options.to;
-  if (to !== "python" && to !== "cpp" && to !== "javascript") {
-    throw new Error("Iroh.translate: unknown target '" + to + "' — use 'python', 'cpp' or 'javascript'");
+  let languages = ["javascript", "python", "cpp", "irohscript", "basic"];
+  if (languages.indexOf(to) === -1) {
+    throw new Error("Iroh.translate: unknown target '" + to + "' — use 'python', 'cpp', 'javascript', 'irohscript' or 'basic'");
   }
+  if (from === to) {
+    throw new Error("Iroh.translate: from and to are both '" + from + "'");
+  }
+  if (languages.indexOf(from) === -1) {
+    throw new Error("Iroh.translate: unknown source '" + from + "' — use 'javascript', 'python', 'cpp', 'irohscript' or 'basic'");
+  }
+  // Direct legs: JavaScript out of any source, or any target out of
+  // JavaScript.
   if (from === "javascript") {
-    if (to === "javascript") {
-      throw new Error("Iroh.translate: from and to are both 'javascript'");
-    }
     return translateFromJS(this, code, to, options);
   }
-  if (to !== "javascript") {
-    throw new Error("Iroh.translate: only JavaScript is a target for from='" + from + "' in v1");
+  if (to === "javascript") {
+    return translateToJS(this, code, from, options);
   }
-  if (from === "python") {
+  // Two-hop via JavaScript: the first leg produces JavaScript (which
+  // the second leg then traces for its types, exactly as the direct
+  // JavaScript leg does). The report says so, and the first leg's
+  // assumptions and notes ride along.
+  let first = translateToJS(this, code, from, options);
+  if (!first.report.ok) {
+    first.report.to = to;
+    first.report.notes.push("two-hop via JavaScript stopped at the first leg (" + from + " -> JavaScript)");
+    return first;
+  }
+  let out = translateFromJS(this, first.code, to, options);
+  out.report.from = from;
+  out.report.notes.push("Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is traced for its types, exactly as the direct JavaScript leg is).");
+  out.report.assumptions = first.report.assumptions.concat(out.report.assumptions);
+  out.report.notes = first.report.notes.concat(out.report.notes);
+  return out;
+}
+
+// Any source language -> JavaScript. The Python, IrohScript and
+// BASIC legs need python3 (via child_process); the C++ leg is pure
+// JS. `iroh` is only used for the error message's `this` — the legs
+// themselves do not trace.
+function translateToJS(iroh, code, from, options) {
+  if (from === "python" || from === "irohscript" || from === "basic") {
     let cp = getChildProcessSync();
     if (!cp) {
       throw new Error(
-        "Iroh.translate: Python -> JavaScript needs the Node.js CJS build with python3 on PATH — use Iroh.translateAsync() in ESM; it is not supported in a browser"
+        "Iroh.translate: " + from + " -> JavaScript needs the Node.js CJS build with python3 on PATH — use Iroh.translateAsync() in ESM; it is not supported in a browser"
       );
     }
-    return translateFromPython(code, cp);
+    if (from === "python") return translateFromPython(code, cp);
+    if (from === "irohscript") return translateFromIrohscript(code, cp, options);
+    return translateFromBasic(code, cp, options);
   }
   if (from === "cpp") {
     return translateFromCpp(code);
   }
-  throw new Error("Iroh.translate: unknown source '" + from + "' — use 'javascript', 'python' or 'cpp'");
+  throw new Error("Iroh.translate: unknown source '" + from + "'");
 }
 
 export function translateAsync(code, options) {
   options = options || {};
   let iroh = this;
   let from = options.from || "javascript";
-  if (from !== "python") {
-    try {
-      return Promise.resolve(translate.call(iroh, code, options));
-    } catch (e) {
-      return Promise.reject(e);
-    }
+  let to = options.to;
+  if (from === "python" || from === "irohscript" || from === "basic") {
+    // Load child_process by dynamic import so this works in the ESM
+    // build too (no sync require there). The first leg runs with it;
+    // the rest is synchronous (the second hop traces JavaScript,
+    // which needs no child process).
+    return nodeImport("node:child_process").then(
+      function(cp) {
+        let first = null;
+        if (from === "python") first = translateFromPython(code, cp);
+        else if (from === "irohscript") first = translateFromIrohscript(code, cp, options);
+        else first = translateFromBasic(code, cp, options);
+        if (to === "javascript" || !to) return first;
+        if (!first.report.ok) {
+          first.report.to = to;
+          first.report.notes.push("two-hop via JavaScript stopped at the first leg (" + from + " -> JavaScript)");
+          return first;
+        }
+        let out = translateFromJS(iroh, first.code, to, options);
+        out.report.from = from;
+        out.report.notes.push("Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is traced for its types, exactly as the direct JavaScript leg is).");
+        out.report.assumptions = first.report.assumptions.concat(out.report.assumptions);
+        out.report.notes = first.report.notes.concat(out.report.notes);
+        return out;
+      },
+      function() {
+        throw new Error("Iroh.translateAsync: " + from + " -> JavaScript needs Node.js with python3 on PATH");
+      }
+    );
   }
-  // Python leg: load child_process by dynamic import so this works
-  // in the ESM build too (no sync require there).
-  return nodeImport("node:child_process").then(
-    function(cp) {
-      return translateFromPython(code, cp);
-    },
-    function() {
-      throw new Error("Iroh.translateAsync: Python -> JavaScript needs Node.js with python3 on PATH");
-    }
-  );
+  try {
+    return Promise.resolve(translate.call(iroh, code, options));
+  } catch (e) {
+    return Promise.reject(e);
+  }
 }

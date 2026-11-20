@@ -24,6 +24,22 @@ export function uBranchHash() {
   return ubidx++;
 };
 
+// Reset the patch counters at the start of a patch run (Stage.patch).
+// They are module-level counters, so without this the hashes, temp
+// variable names and $$ANON_ names in one trace depend on how many
+// traces this process has already run — the same program traced twice
+// in one process got different event hashes, and analyze() embeds
+// those hashes in its findings, so its output was not byte-stable
+// across calls in one process. Patching is synchronous, so no two
+// patch runs can interleave and collide; every counter is consumed
+// only inside one patch run (hashes, temp vars, anonymous-function
+// names, frame and patcher uids), so resetting per run is safe.
+export function resetPatchCounters() {
+  utvidx = 1;
+  uidx = 1;
+  ubidx = 1;
+};
+
 export function parse(input, options) {
   // Same default as helpers.parse: Acorn 8 requires ecmaVersion.
   // "latest" + allowHashBang: see helpers.parse.

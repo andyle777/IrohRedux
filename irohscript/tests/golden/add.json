@@ -1,0 +1,195 @@
+{
+  "ast": {
+    "node": "Program",
+    "statements": [
+      {
+        "body": [
+          {
+            "node": "Return",
+            "value": {
+              "left": {
+                "name": "a",
+                "node": "Name"
+              },
+              "node": "BinOp",
+              "op": "ADD",
+              "right": {
+                "name": "b",
+                "node": "Name"
+              }
+            }
+          }
+        ],
+        "name": "Add",
+        "node": "FunctionDef",
+        "params": [
+          {
+            "name": "a",
+            "type": null
+          },
+          {
+            "name": "b",
+            "type": null
+          }
+        ]
+      },
+      {
+        "name": "result",
+        "node": "Let",
+        "type": null,
+        "value": {
+          "args": [
+            {
+              "node": "Literal",
+              "type": "Int",
+              "value": 10
+            },
+            {
+              "node": "Literal",
+              "type": "Int",
+              "value": 20
+            }
+          ],
+          "callee": {
+            "name": "Add",
+            "node": "Name"
+          },
+          "node": "Call"
+        }
+      },
+      {
+        "node": "Print",
+        "value": {
+          "name": "result",
+          "node": "Name"
+        }
+      }
+    ]
+  },
+  "ir": [
+    {
+      "body": [
+        {
+          "op": "RETURN",
+          "value": {
+            "left": {
+              "name": "a",
+              "op": "LOAD"
+            },
+            "op": "ADD",
+            "right": {
+              "name": "b",
+              "op": "LOAD"
+            }
+          }
+        }
+      ],
+      "name": "Add",
+      "op": "FUNCDEF",
+      "params": [
+        {
+          "name": "a",
+          "type": null
+        },
+        {
+          "name": "b",
+          "type": null
+        }
+      ]
+    },
+    {
+      "op": "SET",
+      "target": "result",
+      "value": {
+        "args": [
+          {
+            "op": "LIT",
+            "type": "Int",
+            "value": 10
+          },
+          {
+            "op": "LIT",
+            "type": "Int",
+            "value": 20
+          }
+        ],
+        "name": "Add",
+        "op": "CALL"
+      }
+    },
+    {
+      "op": "PRINT",
+      "value": {
+        "name": "result",
+        "op": "LOAD"
+      }
+    }
+  ],
+  "irx": {
+    "program": [
+      {
+        "body": [
+          {
+            "opcode": "RETURN",
+            "value": {
+              "left": {
+                "name": "a",
+                "op": "LOAD"
+              },
+              "op": "ADD",
+              "right": {
+                "name": "b",
+                "op": "LOAD"
+              }
+            },
+            "version": "3.0"
+          }
+        ],
+        "name": "Add",
+        "opcode": "FUNCDEF",
+        "params": [
+          {
+            "name": "a",
+            "type": null
+          },
+          {
+            "name": "b",
+            "type": null
+          }
+        ],
+        "version": "3.0"
+      },
+      {
+        "opcode": "SET",
+        "register": "result",
+        "value": {
+          "args": [
+            {
+              "op": "LIT",
+              "type": "Int",
+              "value": 10
+            },
+            {
+              "op": "LIT",
+              "type": "Int",
+              "value": 20
+            }
+          ],
+          "name": "Add",
+          "op": "CALL"
+        },
+        "version": "3.0"
+      },
+      {
+        "opcode": "PRINT",
+        "value": {
+          "name": "result",
+          "op": "LOAD"
+        },
+        "version": "3.0"
+      }
+    ],
+    "version": "3.0"
+  },
+  "source": "FUNCTION Add(a, b)\n RETURN a + b\nEND FUNCTION\nLET result = Add(10, 20)\nPRINT result"
+}

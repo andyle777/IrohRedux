@@ -1,0 +1,226 @@
+{
+  "ast": {
+    "node": "Program",
+    "statements": [
+      {
+        "fields": [
+          {
+            "name": "Trust",
+            "type": "Float"
+          },
+          {
+            "name": "Curiosity",
+            "type": "Float"
+          },
+          {
+            "name": "Stability",
+            "type": "Float"
+          }
+        ],
+        "name": "AgentState",
+        "node": "StructDef"
+      },
+      {
+        "members": [
+          "ACTIVE",
+          "PAUSED",
+          "ARCHIVED"
+        ],
+        "name": "BranchState",
+        "node": "EnumDef"
+      },
+      {
+        "name": "State",
+        "node": "Let",
+        "type": "AgentState",
+        "value": null
+      },
+      {
+        "node": "Assign",
+        "target": {
+          "member": "Trust",
+          "node": "MemberAccess",
+          "object": {
+            "name": "State",
+            "node": "Name"
+          }
+        },
+        "value": {
+          "node": "Literal",
+          "type": "Float",
+          "value": 0.72
+        }
+      },
+      {
+        "node": "Print",
+        "value": {
+          "member": "Trust",
+          "node": "MemberAccess",
+          "object": {
+            "name": "State",
+            "node": "Name"
+          }
+        }
+      },
+      {
+        "node": "Print",
+        "value": {
+          "member": "ACTIVE",
+          "node": "MemberAccess",
+          "object": {
+            "name": "BranchState",
+            "node": "Name"
+          }
+        }
+      }
+    ]
+  },
+  "ir": [
+    {
+      "fields": [
+        {
+          "name": "Trust",
+          "type": "Float"
+        },
+        {
+          "name": "Curiosity",
+          "type": "Float"
+        },
+        {
+          "name": "Stability",
+          "type": "Float"
+        }
+      ],
+      "name": "AgentState",
+      "op": "STRUCTDEF"
+    },
+    {
+      "members": [
+        "ACTIVE",
+        "PAUSED",
+        "ARCHIVED"
+      ],
+      "name": "BranchState",
+      "op": "ENUMDEF"
+    },
+    {
+      "op": "DEFAULT",
+      "target": "State",
+      "type": "AgentState"
+    },
+    {
+      "field": "Trust",
+      "object": {
+        "name": "State",
+        "op": "LOAD"
+      },
+      "op": "SETFIELD",
+      "value": {
+        "op": "LIT",
+        "type": "Float",
+        "value": 0.72
+      }
+    },
+    {
+      "op": "PRINT",
+      "value": {
+        "member": "Trust",
+        "object": {
+          "name": "State",
+          "op": "LOAD"
+        },
+        "op": "GET"
+      }
+    },
+    {
+      "op": "PRINT",
+      "value": {
+        "member": "ACTIVE",
+        "object": {
+          "name": "BranchState",
+          "op": "LOAD"
+        },
+        "op": "GET"
+      }
+    }
+  ],
+  "irx": {
+    "program": [
+      {
+        "fields": [
+          {
+            "name": "Trust",
+            "type": "Float"
+          },
+          {
+            "name": "Curiosity",
+            "type": "Float"
+          },
+          {
+            "name": "Stability",
+            "type": "Float"
+          }
+        ],
+        "name": "AgentState",
+        "opcode": "STRUCTDEF",
+        "version": "3.0"
+      },
+      {
+        "members": [
+          "ACTIVE",
+          "PAUSED",
+          "ARCHIVED"
+        ],
+        "name": "BranchState",
+        "opcode": "ENUMDEF",
+        "version": "3.0"
+      },
+      {
+        "opcode": "DEFAULT",
+        "register": "State",
+        "type": "AgentState",
+        "version": "3.0"
+      },
+      {
+        "field": "Trust",
+        "object": {
+          "name": "State",
+          "op": "LOAD"
+        },
+        "opcode": "SETFIELD",
+        "value": {
+          "op": "LIT",
+          "type": "Float",
+          "value": 0.72
+        },
+        "version": "3.0"
+      },
+      {
+        "opcode": "PRINT",
+        "value": {
+          "member": "Trust",
+          "object": {
+            "name": "State",
+            "op": "LOAD"
+          },
+          "op": "GET"
+        },
+        "version": "3.0"
+      },
+      {
+        "opcode": "PRINT",
+        "value": {
+          "member": "ACTIVE",
+          "object": {
+            "name": "BranchState",
+            "op": "LOAD"
+          },
+          "op": "GET"
+        },
+        "version": "3.0"
+      }
+    ],
+    "version": "3.0"
+  },
+  "source": "STRUCT AgentState\n Trust : Float\n Curiosity : Float\n Stability : Float\nEND STRUCT\nENUM BranchState\n ACTIVE\n PAUSED\n ARCHIVED\nEND ENUM\nLET State : AgentState\nState.Trust = 0.72\nPRINT State.Trust\nPRINT BranchState.ACTIVE"
+}

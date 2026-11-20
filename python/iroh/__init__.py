@@ -33,7 +33,7 @@ from pathlib import Path
 
 __all__ = ["run", "trace_file", "trace_python", "trace_python_file",
            "scan", "scan_python", "scan_python_file", "TraceError", "find_cli"]
-__version__ = "1.0.1"
+__version__ = "1.1.0"
 
 
 class TraceError(Exception):

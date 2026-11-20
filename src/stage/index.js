@@ -6,7 +6,7 @@ import {
   CLEAN_DEBUG_INJECTION
 } from "../cfg";
 
-import { uid } from "../utils";
+import { uid, resetPatchCounters } from "../utils";
 import {
   parse,
   generate,
@@ -343,6 +343,11 @@ Stage.prototype.getFrameByHashFrom = function(frm, hash) {
 };
 
 Stage.prototype.patch = function(input) {
+  // Fresh counters per patch run: the hash, temp-var and anonymous-
+  // function counters are module-level, so without this the same
+  // program patched twice in one process gets different hashes and
+  // different generated names (see resetPatchCounters in utils.js).
+  resetPatchCounters();
   let patcher = new Patcher(this);
   // Parse at the newest language level Acorn supports ("latest": ES2025
   // RegExp modifiers, `using` declarations, import attributes) plus

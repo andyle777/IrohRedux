@@ -1,5 +1,333 @@
 # Changelog
 
+## 1.1.0 — IrohScript foundation rework + input synthesiser (20 Nov 2026)
+
+1.1.0 is the rework and the synthesiser together. IrohScript — the
+project's own language (BASIC-first, spec in
+[`irohscript/`](irohscript/)) — and BASIC, its named ingredient, trace
+first-class through the CLI, with the same JSONL event shape and the
+same `analyze()` / `scan()` / live findings as JavaScript, Python and
+C++; the translator covers all five languages as source and target;
+the IrohScript compiler turns the language into the core's own
+implementation language, starting with the perceptron; and the live
+wire can now find the inputs that drive a program down each branch.
+The suite is now 649 tests (392 Node + 25 Python + 9 C++ + 223
+IrohScript/BASIC Python).
+
+### Redo — audit-and-patch pass over the rework (20 Nov 2026)
+
+A second pass over the rework above, ordered after the 1.1.0 rebuild:
+five fresh bugs found by probing the new surfaces, each with a
+regression test, plus the ES2026 probe fix folded in (it had been
+waiting in its own worktree).
+
+- `DEBUG_OP_NEW` error masking, same family as the ES2026
+  `DEBUG_FUNCTION_CALL` fix: `new null()` threw an Iroh-internal
+  "Cannot read properties of null (reading 'name')" and `new 5()`
+  threw "event.ctor is not a constructor". Both now throw
+  `TypeError: <callee> is not a constructor`, matching untraced code,
+  with no `OP_NEW` event for a construction that cannot happen.
+- Duplicate `#include <cmath>` in emitted C++: a program using Math
+  and printing a Number got the include twice. The `__iroh_jsnum`
+  helper's include is now conditional.
+- Process-stateful event hashes: the patch counters (branch hashes,
+  temp-variable names, `$$ANON_` names) were module-level, so the
+  same program traced twice in one process got different hashes —
+  and `analyze()` embeds them in its findings. The counters now
+  reset at the start of every `Stage.patch`, so trace and analyze
+  output are byte-identical across calls in one process.
+- Nested struct assignment: the bootstrap parser gated member
+  assignment to one level (`o.inner.x = 3` was a parse error) and
+  the interpreter defaulted struct-typed fields to `None`. The
+  parser now consumes the full member chain (the checker, IR and
+  interpreter already handled nested targets), and `_default_struct`
+  builds struct fields recursively.
+- Translating a BASIC program with `END` killed the host process:
+  the BASIC leg emits `process.exit(0)`, and the evidence trace in
+  the second hop ran it in-process — silent exit 0, no output, no
+  error. The evidence run now stubs `process.exit` to a sentinel
+  (evidence gathered before the `END` is kept), and the emitters
+  translate it as program end: `sys.exit` in Python, `std::exit`
+  in C++, `END` in BASIC. IrohScript has no program-end primitive,
+  so that leg stays a loud stub.
+- ES2026 fold: the three features Node 24 already has
+  (`Array.fromAsync`, `JSON.rawJSON` + parse source text,
+  `Error.isError`) trace correctly, and calls to methods the runtime
+  lacks (`Uint8Array.fromBase64`, `Map` upserts, `Iterator.concat`,
+  `Math.sumPrecise`) throw the natural `TypeError` instead of an
+  Iroh-internal one.
+
+### IrohScript tracer (`irohscript/src/tracer.py`, `src/trace.py`)
+
+- The Level 0 Python bootstrap from Andy's home directory is copied
+  into the repo as [`irohscript/`](irohscript/) (`src/`, `tests/`,
+  `examples/`, the README and the spec) — the repo's foundation. The
+  home directory remains the language's home for now; the duplication
+  and the question of a single canonical home are open questions for
+  Andy, not settled here by deleting anything.
+- `TracingInterpreter` subclasses the IRX interpreter and hooks what
+  the analyzer reads: FUNCTION_CALL / FUNCTION_ENTER /
+  FUNCTION_CALL_END / FUNCTION_LEAVE (arguments, return value, call
+  depth as `indent`), IF_TEST (the Bool value), ASSIGN (the
+  post-assignment value, op `=` for SET, `const` for CONST, `=` with
+  `object` `<Type>.<field>` for SETFIELD). PRINT/ACTION output goes to
+  stderr; the result line is null, like Python.
+- Hashes are CRC32 of kind:file:path, where the path is the
+  instruction's index path through the IRX tree — IRX carries no
+  source positions, and the path is deterministic because compilation
+  is deterministic (spec section 30). A function body always traces
+  under its definition path, never the call site, so one branch is
+  one site no matter how many callers it has. Verified: hashes are
+  identical across repeated runs.
+- CLI: `node cli/iroh.js program.iroh` (`--lang irohscript`, inferred
+  from `.iroh`); `--analyze`, `--scan` and `--live` work. Probed:
+  `Add(10, 20)` traces to call `[10, 20]` / return `30`; a
+  two-call one-sided branch analyzes to `ONE_SIDED_BRANCH`; a
+  25-deep recursion analyzes to `DEEP_RECURSION` (maxDepth 25).
+  `--direct` and `--translate` are usage errors (exit 2): the trace
+  is buffered, and the translator covers JavaScript/Python/C++ only.
+- What it does NOT see (stated, not hidden): LOOP has no defined
+  exit rule in the spec, so executing one raises a clear error naming
+  it as an open design question — there is no LOOP_TEST to emit, and
+  HOT_LOOP / ZERO_ITERATION_LOOP can never fire for IrohScript until
+  the rule is decided. INTENT records in the IrohCore graph but has
+  no event category, so it is invisible in the trace. A call that
+  raises emits CALL / ENTER but no CALL_END / LEAVE.
+- Semantics used (the bootstrap's current behavior, documented):
+  Python-style division (`7 / 2 = 3.5`) and floored modulo
+  (`-5 % 3 = 1`); strict Int→Float (no coercion); LOOP raises. None
+  of these were invented here — each is listed in the project README
+  as an open design question for Andy.
+
+### BASIC tracer (`irohscript/src/basic.py`, `src/basic_trace.py`)
+
+- A small dedicated interpreter, not a reuse of the IrohScript
+  parser: classic BASIC needs a program counter (GOTO/GOSUB jump to
+  line numbers, FOR/NEXT keeps a loop stack), which the IrohScript
+  tree-walk IRX interpreter cannot express — there is no jump in IRX,
+  and its LOOP has no exit rule. It shares the tracer event helpers
+  (`irohscript/src/traceutil.py`: CRC32 site hashes, the JSON-safe
+  value projection, the `--events` filter, the CLI entry) with the
+  IrohScript tracer.
+- v1 subset (documented in the module): line numbers (optional),
+  `:` separators, REM, `?` for PRINT, LET/bare assignment, PRINT
+  with `;` and `,` separators, INPUT (optional prompt string), DIM
+  and arrays (any number of dimensions), IF/THEN/ELSE (single-line,
+  and IF/THEN `<line>` as a jump), FOR/NEXT with STEP (nested),
+  GOTO, GOSUB/RETURN, END/STOP. Expressions: numbers, strings, `$`
+  names, array reads, parentheses, `+ - * / % = <> < > <= >= AND OR
+  NOT`. Division and `%` are Python-style, like IrohScript.
+- The tracer hooks FOR tests/entries (LOOP_TEST once per test, one
+  final false test; LOOP_ENTER once), IF tests, GOSUB subroutines
+  (FUNCTION_CALLs named `gosub@<line>`, with call depth), and
+  assignments (LET, INPUT, FOR variable, array element writes).
+  Probed: a 150-iteration FOR loop analyzes to `HOT_LOOP` (150
+  iterations, 151 tests); a never-entered FOR loop to
+  `ZERO_ITERATION_LOOP`; GOSUB traces as `gosub@100` at depth 0;
+  INPUT reads from the inherited stdin. CLI: `node cli/iroh.js
+  program.bas` (`--lang basic`, inferred from `.bas`).
+- What it does NOT see (stated, not hidden): GOTO has no event
+  category, so GOTO loops are invisible in the trace — FOR/NEXT is
+  the observable loop. DIM and array reads have no events. A GOSUB
+  that raises leaves its CALL unclosed. DATA/READ, WHILE/WEND,
+  DEF FN, ON GOTO/GOSUB, built-in functions, file I/O, PRINT zones
+  (`,` separates with one space) and INPUT reprompting are not in v1:
+  each is a clear error naming the construct, never silently skipped.
+  FOR, GOTO and GOSUB inside an IF THEN/ELSE part are a v1 parse
+  error. Undeclared numerics read as 0, `$` variables as `""`.
+
+### Translator and running of code (part 2: `src/translate.js`, `cli/iroh.js`, `index.d.ts`)
+
+- `Iroh.translate()` now takes all five languages as source and as
+  target (`TranslateFrom` / `TranslateTo`: `"javascript" | "python" |
+  "cpp" | "irohscript" | "basic"`). Direct legs: JavaScript out to
+  any of the four, and any of the four back to JavaScript. Every
+  other pair goes two-hop through JavaScript and the report's notes
+  say so — IrohScript to Python, BASIC to C++, and Python to C++
+  (which was a usage error before: "only JavaScript is a target").
+  The two-hop first leg runs with the same trace evidence the direct
+  JavaScript leg uses.
+- IrohScript to JavaScript (`translateFromIrohscript`): the source is
+  compiled by the bootstrap `IrohCompiler` through an embedded
+  stdlib-only helper run under `python3` (same shape as the Python
+  AST helper); the AST is walked to JavaScript. Static-only
+  (`staticOnly: true`): the type annotations carry the types, so no
+  evidence trace runs. `options.irohscriptHome` names the directory
+  holding the `irohscript` package — the CLI passes the in-repo
+  copy. Probed: `Add(10, 20)` round-trips to 30; legacy
+  `enemy -> defend` prints `defend`; `LOOP` is a loud stub (no exit
+  rule); a compile error throws.
+- BASIC to JavaScript (`translateFromBasic`): the in-repo
+  `src/basic.py` parser (run under `python3`) emits the parse tree
+  as JSON; the tree is walked to JavaScript. Static-only too. FOR
+  becomes a numeric `for` with the loop variable declared outside
+  the loop (BASIC scoping: the variable stays visible after NEXT).
+  Probed: `add` / GOSUB round-trips to 30; the 150-iteration hot
+  loop to 11325; INPUT reads stdin (`"name? hi Ada"`).
+- JavaScript to IrohScript (`makeIrohJSEmitter`, target
+  `"irohscript"`): functions become `FUNCTION name(params: Type)`
+  with types from the evidence trace (uncalled functions get
+  `Int` defaults and a note), `ACTION` becomes a `__iroh_action`
+  recorder call, `INTENT` a `__iroh_intent` recorder. Booleans are
+  `True` / `False`; `%` records an assumption (floored in
+  IrohScript, truncated in JavaScript). Probed: `add(2, 3)` to
+  IrohScript runs and prints 30.
+- JavaScript to BASIC (`makeIrohJSEmitter`, target `"basic"`):
+  functions become GOSUB subroutines (line numbers from 1000, step
+  1000 per function; arguments in `__arg0..`, return value in
+  `__ret_<fn>`; calls lifted to temporaries where the expression is
+  always evaluated). `END` is emitted before the subroutines so the
+  mainline cannot fall through into them. Probed: `add` prints 30;
+  a `for` loop prints 10; arrays use DIM.
+- Loud where there is no form: recursive functions to BASIC, GOTO to
+  JavaScript, IrohScript LOOP to JavaScript, `for` to IrohScript,
+  `while` to BASIC, and calls inside IF branches to BASIC (GOSUB is
+  not an IF-part statement) are all `report.unsupported` with the
+  emitted code raising at that point — never silently mistranslated.
+  BASIC stubs are `(1 / 0)` expressions that print and END;
+  IrohScript stubs call undefined `__iroh_unsupported(...)`.
+- Two fixes to the existing engine, found while wiring the new legs:
+  `translateAsync` now honours `to` for the Python, IrohScript and
+  BASIC legs (it ignored `to` and always returned JavaScript); and
+  `forLoopPattern` accepts `for (i = A; ...)` with `i` declared
+  earlier, not just `for (let i = A; ...)` — the BASIC leg emits the
+  first form, and the Python leg could not read it back (BASIC to
+  Python two-hop failed on it).
+- CLI: `--translate` no longer rejects IrohScript or BASIC sources;
+  `--from` is inferred from `.iroh` / `.bas` as well as `.py` /
+  `.cpp`. `--direct` stays JavaScript-only (the script tracers run
+  under `spawnSync`, so no directive can reach them — parity with
+  Python and C++). Usage text says so.
+- Tests: `tests/translate-irohscript.test.js` (24 tests) covers every
+  leg above plus the two-hop round-trips, `translateAsync`, and the
+  CLI for `.iroh` / `.bas` / `.js`. One part-1 test changed: the
+  IrohScript `--translate` rejection is now a success case.
+
+### Core rewrite, first component (part 3: `src/irohscript-codegen.js`, `src/irohscript-bridge.js`, `irohscript/core/perceptron.iroh`)
+
+- `Iroh.compileIrohscript(source, options)` + `compileIrohscriptAsync`
+  (new): the compiler backend. The bootstrap compiler (Python) is the
+  frontend — source is compiled to AST JSON, then walked here to a
+  JavaScript module string. Either clean, runnable ES2015 output or a
+  clear error naming the construct: LOOP, ACTION, INTENT, the legacy
+  Conditional form and IMPORT all throw (a compiler, unlike the
+  translator, has no report and no stubs). Structs become exported
+  factory functions, enums string-valued objects, top-level functions
+  exported. Division/modulo are Python-style, the bootstrap's
+  semantics: DIV emits plain `/`, MOD a floored `__iroh_pymod`
+  helper. The division question (Python-style vs C++ truncated) is
+  still Andy's to call; the flip is that one helper, and this slice
+  uses no division or modulo at all.
+- The shared Python bridge (`src/irohscript-bridge.js`) holds the
+  pieces the translator and the compiler both need
+  (`runIrohscriptPython`, the AST helper, `getChildProcessSync`,
+  `nodeImport`), moved verbatim out of `src/translate.js`. It is not
+  imported by `src/index.js`, so none of it leaks onto the public
+  Iroh object. The translator's behaviour is unchanged (its 115
+  translate tests pass after the move).
+- First core component rewritten in IrohScript: the perceptron's
+  scoring core (`irohscript/core/perceptron.iroh`, 3 functions:
+  `PredictScore`, `PredictLabel`, `Predict`, over `Features` /
+  `Weights` / `Result` structs). The weights stay parameters — the
+  trained constants live in `src/neurons.js`, not in the IrohScript.
+  Compiled output is checked in as `src/neurons-irohscript.js`
+  (regenerate with `npm run codegen:irohscript`, which builds, compiles
+  through the dist bundle, writes the file, and rebuilds). `src/neurons.js`
+  now calls the compiled `PredictScore`/`PredictLabel`; the
+  four-decimal rounding and the label-off-the-rounded-score rule stay
+  exactly as before (a raw -0.00001 still rounds to -0 and reads
+  "hot"). Verified: the compiled perceptron agrees with the JavaScript
+  one on five feature vectors, and `analyzeTrace` of the 150-iteration
+  loop still finds HOT_LOOP with neuron score 0.0259, label "hot".
+- What stays in JavaScript, and why: `extractFeatures` (walks the
+  event stream with a set of seen pairs) and `train()` (loops over
+  samples) — IrohScript 3.0 has no bounded loop (LOOP has no exit
+  rule) and no dictionary, so neither can be written in the language
+  yet. Those are language gaps for Andy, not this slice's choice.
+- Tests: `tests/irohscript-codegen.test.js` (9 tests): compile-and-run,
+  the perceptron probe vector (0.101335, "hot"), agreement with the
+  JavaScript perceptron, the wired-in neuron, floored modulo
+  (`-5 % 3 = 1`), the four throwing constructs, the async path, and a
+  drift check that fails if `src/neurons-irohscript.js` differs from
+  a fresh compile. `.d.ts` carries `compileIrohscript` /
+  `compileIrohscriptAsync` + `CompileIrohscriptOptions`.
+
+
+The live wire can now *find* the inputs. `Iroh.synthesize(code,
+{ entry })` generates concrete inputs that drive a named entry
+function down each branch, and reports, with denominators on every
+number, what it covered and what it could not.
+
+### `Iroh.synthesize(code, options)` (new `src/synth.js`)
+
+- Concolic-style, no SMT solver: run the function with the seed
+  inputs under trace, collect branch conditions and outcomes from the
+  trace events, then solve/perturb inputs to flip each uncovered
+  branch. The live analyzer's `ONE_SIDED_BRANCH` findings are the
+  target list — every run streams through a per-run `liveAnalyzer`
+  (findings fire mid-run), and the aggregate analyzer's
+  `ONE_SIDED_BRANCH` findings are the final targets, keyed by the
+  branch site's source position (instrumenter hashes are per-Stage,
+  so cross-run aggregation keys by position, not hash). Only
+  `ONE_SIDED_BRANCH` is taken from the aggregate — other findings
+  would conflate separate runs. Findings in the report are deduped by
+  code + branch site + message, so one loop never entered in two runs
+  reports one `ZERO_ITERATION_LOOP`, not one per run.
+- v1 solver: numeric comparison → boundary value (`x > 10` → 11 and
+  10); equality → the observed constant (`x === 7` → 7); string
+  equality → the observed string; ranges combine bounds; `&&` / `||`
+  target each side; `!` flips; bare parameter → 1 / 0;
+  `param.length` vs a numeric literal → a string of that length;
+  loop counter with a known start value reads as that value on the
+  first test; switch case → the discriminant value, default → a
+  value matching no case literal. Seeds + guided mutation as
+  fallback. Iterate until coverage stops improving or the budget
+  (default 50 runs, seeds included) is hit.
+- Returns `{ entry, inputs, coverage, runs, uncovered, findings,
+  summary }`: `coverage` is arms covered / arms total with every
+  branch site (`branches`, each with `arms`, `covered`, per-arm
+  `reasons`); `runs` is used / budget; `uncovered` lists every arm
+  left uncovered WITH its reason; `findings` is the per-run live
+  findings plus the aggregate `ONE_SIDED_BRANCH` findings with their
+  branch attached. Progress streams through `onProgress` as `run`
+  (with `newlyCovered`), `branch-covered` and `live-finding` events.
+- Loop cap: each run allows `loopCap` true tests per loop (default
+  10000); the next test is flipped to false (the same mechanism as
+  the director's loop-test flip) and the run is marked `capped` —
+  and the flipped test does NOT count as coverage. A non-terminating
+  candidate is a capped run, not a hang.
+- Honest limits, stated in the report, not hidden: the solver handles
+  direct parameter-vs-literal comparisons only. Compound expressions
+  (`x * 2 > 10`), comparisons between two parameters, and conditions
+  over external or nondeterministic values (`Date.now()`,
+  `Math.random`, `new Date`) are reported uncovered with the reason.
+  Scripts only, synchronous entry functions — modules, top-level
+  await and async entries are rejected; seeds must be JSON values.
+  The program runs, so its side effects happen.
+
+### CLI `--synthesize` (new in `cli/iroh.js`)
+
+- `node cli/iroh.js program.js --synthesize --entry <name>` prints
+  `synth-run` / `synth-branch` / `synth-summary` JSON lines —
+  generated inputs, coverage with denominators, uncovered branches
+  with reasons. `--live --synthesize` adds `live-finding` lines as
+  they fire. `--seeds '<json>'`, `--max-runs <n>`. Rejects
+  `--module` / `--direct` / `--events` combinations and a missing
+  `--entry` with exit 2.
+
+### Verification
+
+- 15 new tests in `tests/synth.test.js` (failing before: 0 pass /
+  12 fail on the first 12, 10 with "synthesize is not a function").
+  Rebuilt on the reworked 1.0.1 (tracers, five-language translator,
+  IrohScript compiler): full suite 649 tests (392 Node + 25 Python +
+  9 C++ + 223 IrohScript/BASIC Python), all passing; types green
+  (`npm run test:types`); `npm run browser` and `npm run dist` both
+  exit 0. Hand probes: if/else `x > 10` both arms (11 synthesized);
+  string equality ("admin"); while and for loops; `.length` solver
+  ("aaaa" from seed "ab"); a 4-site function at 7/8 arms with the
+  compound branch reported uncovered; CLI end-to-end and
+  `--live --synthesize` streaming.
 ## 1.0.1 — All-generations audit-and-patch pass (20 Nov 2026)
 
 Every known limitation from 0.4.0 through 1.0.0, re-read and re-probed.

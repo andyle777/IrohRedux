@@ -1,0 +1,17 @@
+STRUCT AgentState
+    Trust : Float
+    Curiosity : Float
+    Stability : Float
+END STRUCT
+
+ENUM BranchState
+    ACTIVE
+    PAUSED
+    ARCHIVED
+END ENUM
+
+LET State : AgentState
+State.Trust = 0.72
+
+PRINT State.Trust
+PRINT BranchState.ACTIVE

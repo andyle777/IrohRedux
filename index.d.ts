@@ -570,10 +570,148 @@ export interface RunawayGuardOptions {
   action?: "throttle" | "stop";
 }
 
+// --- Input synthesiser (src/synth.js, CLI --synthesize) ---------------------
+
+/** One arm of a branch: true/false for if/loop/ternary, matched for a switch case. */
+export interface BranchArm {
+  /** "true" | "false" (if/loop/ternary) or "matched" (switch case/default). */
+  arm: string;
+  /** How many times this arm was observed across all runs. */
+  observed: number;
+  /** True once the arm was observed at least once. */
+  covered: boolean;
+  /** The run index that first covered it (null when never covered). */
+  coveredBy: number | null;
+}
+
+/** One branch site: a condition evaluation point in the program. */
+export interface Branch {
+  /** "if:<test start>" | "loop:<test start>" | "ternary:<test start>" | "case:<test start>" | "default:<case start>". */
+  id: string;
+  /** "if" | "loop" | "ternary" | "case". */
+  kind: string;
+  /** The condition's source text ("switch discriminant === 1" for a case). */
+  condition: string;
+  /** The enclosing statement's source text (truncated to 200 chars). */
+  statement: string;
+  /** The condition's source span. */
+  location: { start: number; end: number };
+  /** One entry per arm (two for if/loop/ternary, one for a switch case). */
+  arms: BranchArm[];
+  /** True when every arm was observed at least once. */
+  covered: boolean;
+  /** Why each uncovered arm was not covered (null when covered). */
+  reasons: Record<string, string | null>;
+}
+
+/** Branch coverage, arms covered / arms total, denominators on every number. */
+export interface BranchCoverage {
+  /** Arms observed at least once. */
+  covered: number;
+  /** Arms total (two per if/loop/ternary site, one per switch case). */
+  total: number;
+  /** covered / total, rounded to 4 decimals (1 when there are no branches). */
+  value: number;
+  /** Branch sites (distinct condition evaluation points). */
+  sites: number;
+  /** Every site, in first-seen order. */
+  branches: Branch[];
+}
+
+/** One input actually run, in run order. */
+export interface SynthesizedInput {
+  /** The arguments passed to the entry function. */
+  args: unknown[];
+  /** The run index (0-based). */
+  run: number;
+  /** The entry function's return value for these inputs (JSON-safe). */
+  result: unknown;
+  /** The error message when the run threw (null when it completed). */
+  error: string | null;
+  /** True when the run hit the loop cap and a loop test was flipped. */
+  capped: boolean;
+  /** "branch:arm" pairs this run first covered. */
+  covers: string[];
+  /** "seed" | "solver" | "mutation" — where the input came from. */
+  via: string;
+}
+
+/** A branch left uncovered, with the reason it was not covered. */
+export interface UncoveredBranch {
+  id: string;
+  kind: string;
+  condition: string;
+  statement: string;
+  location: { start: number; end: number };
+  /** The uncovered arm ("true" | "false" | "matched"). */
+  arm: string;
+  /** Why the solver could not flip it (or that the budget ran out). */
+  reason: string;
+  /** How many times the arm was observed (0 by definition). */
+  observed: number;
+}
+
+/** A progress event streamed through onProgress while synthesizing. */
+export type SynthesizeProgressEvent =
+  | {
+      type: "run";
+      run: number;
+      args: unknown[];
+      result: unknown;
+      error: string | null;
+      capped: boolean;
+      newlyCovered: Array<{ branch: string; arm: string }>;
+    }
+  | { type: "branch-covered"; branch: string; arm: string; run: number; args: unknown[] }
+  | { type: "live-finding"; run: number; finding: LiveFinding };
+
+export interface SynthesizeOptions {
+  /** The name of the function under test (a top-level function in the code). Required. */
+  entry: string;
+  /** Seed argument arrays (default: one call with no arguments). */
+  seeds?: unknown[][];
+  /** Total run budget, seeds included (default 50). */
+  maxRuns?: number;
+  /** True tests allowed per loop per run before the test is flipped (default 10000). */
+  loopCap?: number;
+  /** Called as runs complete and arms are covered; live findings stream here too. */
+  onProgress?: (event: SynthesizeProgressEvent) => void;
+  /** Thresholds for the live analyzers (see AnalyzeOptions). */
+  analyze?: AnalyzeOptions;
+  /** Passed to the Stage (ecmaVersion, allowHashBang). */
+  stageOptions?: StageOptions;
+}
+
+/** The synthesis report: inputs, coverage, runs, uncovered branches, findings. */
+export interface SynthesizeResult {
+  /** The entry function, as given. */
+  entry: string;
+  /** Every input actually run, in run order (seeds first). */
+  inputs: SynthesizedInput[];
+  /** Branch coverage: arms covered / arms total, with every site. */
+  coverage: BranchCoverage;
+  /** Runs used / run budget. */
+  runs: { used: number; budget: number };
+  /** Every arm left uncovered, with its reason. */
+  uncovered: UncoveredBranch[];
+  /** Live findings: per-run findings (deduped) plus the final aggregate ONE_SIDED_BRANCH findings. */
+  findings: AnalysisFinding[];
+  summary: {
+    branchesCovered: number;
+    branchesTotal: number;
+    sites: number;
+    inputsRun: number;
+    inputsSynthesized: number;
+    runsUsed: number;
+    runsBudget: number;
+    uncoveredBranches: number;
+  };
+}
+
 // --- 0.8.0: hybrid translation engine (src/translate.js) -----------------
 
-export type TranslateFrom = "javascript" | "python" | "cpp";
-export type TranslateTo = "python" | "cpp" | "javascript";
+export type TranslateFrom = "javascript" | "python" | "cpp" | "irohscript" | "basic";
+export type TranslateTo = "python" | "cpp" | "javascript" | "irohscript" | "basic";
 
 export interface TranslateTypeHints {
   functions?: Record<string, { params?: string[]; returns?: string }>;
@@ -590,6 +728,20 @@ export interface TranslateOptions {
    * { functions: { add: { params: ["int", "int"], returns: "int" } } }.
    */
   types?: TranslateTypeHints;
+  /**
+   * Where the IrohScript sources live (the repo's irohscript/
+   * directory). Defaults to IROHSCRIPT_HOME, then <cwd>/irohscript.
+   * Only needed for the irohscript and basic legs.
+   */
+  irohscriptHome?: string;
+}
+
+export interface CompileIrohscriptOptions {
+  /**
+   * Where the IrohScript sources live (the repo's irohscript/
+   * directory). Defaults to IROHSCRIPT_HOME, then <cwd>/irohscript.
+   */
+  irohscriptHome?: string;
 }
 
 export interface TranslateReport {
@@ -806,6 +958,27 @@ export interface IrohAPI {
   runawayGuard(options?: RunawayGuardOptions): Director;
 
   /**
+   * Input synthesiser: generate concrete inputs that drive the entry
+   * function down each branch, on the live wire. Runs the function
+   * with the seed inputs under trace, reads the live analyzer's
+   * ONE_SIDED_BRANCH findings as the target list, and solves for
+   * inputs that flip each uncovered branch — boundary values for
+   * numeric comparisons, the observed constant for equality, the
+   * observed string for string equality, each side of && / ||, 1 / 0
+   * for a bare parameter, .length against a numeric literal, and the
+   * discriminant value for a switch case — with seeds plus guided
+   * mutation as fallback. A branch the solver cannot flip is reported
+   * in `uncovered` with its reason, never hidden. Each run is capped
+   * at `loopCap` true tests per loop (default 10000): the next test
+   * is flipped to false and the run is marked capped, and the flipped
+   * test does not count as coverage. Scripts only, synchronous entry
+   * functions — modules, top-level await and async entries are
+   * rejected; seeds must be JSON values. The program runs, so its
+   * side effects happen.
+   */
+  synthesize(code: string, options: SynthesizeOptions): SynthesizeResult;
+
+  /**
    * Hybrid translation engine (0.8.0): JavaScript -> Python / C++
    * (static AST + trace evidence), Python -> JavaScript and C++ ->
    * JavaScript (static-only — the reverse legs translate from source
@@ -823,6 +996,24 @@ export interface IrohAPI {
    * the CJS build's require for that leg).
    */
   translateAsync(code: string, options: TranslateOptions): Promise<TranslateResult>;
+
+  /**
+   * Compile IrohScript source to a JavaScript module string (the
+   * compiler backend, part 3 of the 1.0.1 rework). Either emits clean,
+   * runnable ES2015 JavaScript or throws a clear error naming the
+   * construct it cannot compile — there is no report and no stub.
+   * Division/modulo are Python-style (7/2 = 3.5, -5 % 3 = 1).
+   * options.irohscriptHome names the directory holding the
+   * irohscript package; otherwise IROHSCRIPT_HOME, <cwd>/irohscript,
+   * or <cwd>. Needs the Node.js CJS build with python3 on PATH.
+   */
+  compileIrohscript(source: string, options?: CompileIrohscriptOptions): string;
+  /**
+   * Async version of compileIrohscript(). In the ESM build, the
+   * Python leg loads child_process by dynamic import (the sync
+   * version needs the CJS build's require for that leg).
+   */
+  compileIrohscriptAsync(source: string, options?: CompileIrohscriptOptions): Promise<string>;
 
   /** Turn a live RuntimeEvent into a plain, JSON-safe object. */
   eventToJSON(event: RuntimeEvent, trigger: Trigger): TraceEvent;

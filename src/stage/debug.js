@@ -281,6 +281,22 @@ export function DEBUG_FUNCTION_CALL(hash, ctx, object, call, args) {
     root = object;
     proto = null;
   };
+  // A callee that is not a function (e.g. a method the runtime does
+  // not have yet, like Math.sumPrecise on Node 24) must fail exactly
+  // like untraced code: `TypeError: <callee> is not a function`.
+  // Reading root.name first would mask it with an Iroh-internal
+  // "Cannot read properties of undefined (reading 'name')" (or, for a
+  // non-function value like 1, "before.call.apply is not a function").
+  // No CALL event fires: like an optional call that never happens, a
+  // call that cannot happen is not an event. The callee source text
+  // comes from the original input, so the message matches the engine's.
+  if (typeof root !== "function") {
+    let calleeSource = null;
+    if (node && node.callee && typeof node.callee.start === "number" && typeof node.callee.end === "number" && typeof this.input === "string") {
+      calleeSource = this.input.slice(node.callee.start, node.callee.end);
+    }
+    throw new TypeError((calleeSource || "callee") + " is not a function");
+  }
   name = root.name;
 
   // external functions are traced as sloppy
@@ -497,6 +513,24 @@ export function DEBUG_VAR_INIT(hash, name, value) {
 
 // #NEW
 export function DEBUG_OP_NEW(hash, ctor, args) {
+  // A constructor that is not a function (e.g. `new null()`,
+  // `new 5()`) must fail exactly like untraced code: `TypeError:
+  // <callee> is not a constructor`. Reading ctor.name first would
+  // mask it with an Iroh-internal "Cannot read properties of null
+  // (reading 'name')" (or, for a non-function value like 5,
+  // "event.ctor is not a constructor"). No OP_NEW event fires: like
+  // a call that cannot happen, a construction that cannot happen is
+  // not an event. The callee source text comes from the original
+  // input, so the message matches the engine's. (Same family as the
+  // DEBUG_FUNCTION_CALL fix in the ES2026 probe.)
+  if (typeof ctor !== "function") {
+    let node = this.nodes[hash] ? this.nodes[hash].node : null;
+    let ctorSource = null;
+    if (node && node.callee && typeof node.callee.start === "number" && typeof node.callee.end === "number" && typeof this.input === "string") {
+      ctorSource = this.input.slice(node.callee.start, node.callee.end);
+    }
+    throw new TypeError((ctorSource || "ctor") + " is not a constructor");
+  }
 
   // API
   let event = this.createEvent(INSTR.OP_NEW);
