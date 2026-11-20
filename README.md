@@ -38,9 +38,12 @@ inputs that drive a program down each branch.
 
 No LLM. No network. Deterministic rules over a trace.
 
-The original Iroh 0.3.0 (2018) lives in `original-iroh/`, preserved
-untouched. IrohRedux is the fork that builds on it. The core idea is
-Felix Maier's.
+The original Iroh 0.3.0 (2018) source lives in `original-iroh/`.
+Its historical source is preserved; its build tooling is updated to
+Rollup 4.68.7 and compatible plugins, patched for the Rollup path
+traversal and DOM-clobbering advisories
+(GHSA-mw96-cpmx-2vgc and GHSA-gcx4-mw62-g8wm). IrohRedux is the fork
+that builds on it. The core idea is Felix Maier's.
 
 ## Install
 
