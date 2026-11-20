@@ -175,3 +175,43 @@ test("CLI --direct runs a .mjs module file", () => {
     fs.unlinkSync(tmp);
   }
 });
+
+test("CLI --max-events stops a runaway with an error line and the partial events", () => {
+  let { proc, lines } = runCli("let i = 0; while (true) { i++; } i;", ["--max-events", "100"]);
+  assert.notEqual(proc.status, 0);
+  let err = lines.find((l) => l.type === "error");
+  assert.ok(err, "an error line is printed");
+  assert.match(err.message, /maxEvents \(100\)/);
+  // Exactly maxEvents stream: the event that trips the cap is recorded
+  // in the error's events but never reaches onEvent, so it is not
+  // printed. (The API test checks the recorded count instead.)
+  let events = lines.filter((l) => l.type === "event");
+  assert.equal(events.length, 100);
+});
+
+test("CLI --max-events with a bad value is a usage error", () => {
+  let { proc } = runCli("let x = 1; x;", ["--max-events", "zero"]);
+  assert.equal(proc.status, 2);
+});
+
+test("CLI --verify passes when two traces agree", () => {
+  let { proc, lines } = runCli(
+    "let s = 0; for (let i = 0; i < 150; i++) s += i; s;",
+    ["--verify"]
+  );
+  assert.equal(proc.status, 0);
+  let verify = lines.find((l) => l.type === "verify");
+  assert.ok(verify, "a verify line is printed");
+  assert.equal(verify.ok, true);
+  assert.ok(verify.events > 0);
+});
+
+test("CLI --verify with a non-JavaScript language is a usage error", () => {
+  let { proc } = runCli("x = 1\n", ["--lang", "python", "--verify"]);
+  assert.equal(proc.status, 2);
+});
+
+test("CLI --verify with --direct is a usage error", () => {
+  let { proc } = runCli("let x = 1; x;", ["--direct", "--verify"]);
+  assert.equal(proc.status, 2);
+});

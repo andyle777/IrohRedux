@@ -1,5 +1,63 @@
 # Changelog
 
+## 1.1.1 — patch: trace memory release (20 Nov 2026)
+
+1.1.1 is a patch on 1.1.0, stability first: no new languages, no event-shape
+change, no breaking changes. The headline is the trace memory release
+(M1): every finished trace now releases its Stage — listeners detached,
+stage removed from `Iroh.stages` — in `trace()`, `traceAsync()`,
+`traceModule()` (via the import cleanup), `direct()` / `directAsync()` /
+`directModule()` (finish paths), and `synthesize()` (all candidate runs,
+once the findings are built). Before this fix every Stage stayed
+registered forever and its listener closures kept the whole recorded
+trace alive: measured 137.0 bytes/event by slope, 100% of the delta
+retained after the caller dropped the result. Measured after the fix:
+a 500,013-event trace leaves a 472,976-byte residual heap after drop +
+forced GC (bound 3 MB) — down from ~68 MB retained. The synthesiser
+keeps its stages during a run (site lookups read them per run) and
+releases them at the end; `translate()` / `scan()` / `analyze()` inherit
+the fix through `trace()`. Three regression tests (`tests/memory.test.js`
++ `tests/memory-probe.cjs`).
+
+The rest of the patch, in plan order:
+
+- M4 — `options.maxEvents`: an opt-in cap on recorded events
+  (`trace()` / `traceAsync()` / `traceModule()`, plus CLI
+  `--max-events N`, JavaScript legs only). No timeout exists by design,
+  so this is the patch answer to a runaway: once the cap is passed the
+  listener throws, the run stops, and the error carries the partial
+  events (same shape as the director's stop). A program that catches
+  every thrown value can defeat the stop the same way it defeats a
+  director stop. A bad value is a clear error before the run.
+- M3 — generator tolerance: `analyze()` (and `scan()`, which carries
+  the summary through) treats a `FUNCTION_ENTER` still open at the end
+  of a trace as closed, with a note — `summary.unclosedFrames`
+  `{ count, frames, note }`, null when nothing is open. Probed: a
+  generator closed early gives ENTER=1, LEAVE=0 and the frame is
+  named; a completed generator and a plain function report null.
+- M6 — `translate()` `options.evidence: "none"`: skip the evidence
+  trace entirely (static-only), for programs with side effects or
+  when the caller does not want the program executed. The report says
+  the evidence was skipped by request; a bad value is a clear error.
+  The two-hop note says the middle JavaScript is NOT traced when the
+  option is set. `translateAsync()` honours it too.
+- M5 — BASIC `WHILE`/`WEND` (nested), in the interpreter and the
+  tracer: one `LOOP_TEST` per iteration plus the final false test, one
+  `LOOP_ENTER`, kind `"While"` (the loop hooks now take a kind, so
+  FOR stays `"For"`). `WEND` without `WHILE` and `WHILE` without
+  `WEND` are clear errors; WHILE is not allowed in an IF THEN/ELSE
+  part, like FOR. The old "WHILE/WEND is not in the v1 subset" test
+  is replaced by real loop tests.
+- A2 — CLI `--verify`: traces a JavaScript program twice (silently
+  the second time) and diffs the events and the result as JSON,
+  printing a verify line `{ok, events, firstDiff}` after the result
+  line; exit 1 when the two runs disagree. JavaScript only, like
+  `--direct` (the script tracers' determinism is by construction);
+  it does not combine with `--translate`, `--direct` or `--synthesize`.
+
+The suite is now 673 tests (409 Node + 25 Python + 9 C++ + 230
+IrohScript/BASIC Python).
+
 ## 1.1.0 — IrohScript foundation rework + input synthesiser (20 Nov 2026)
 
 1.1.0 is the rework and the synthesiser together. IrohScript — the

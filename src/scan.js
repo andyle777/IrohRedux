@@ -73,6 +73,7 @@ export function scan(events, options) {
     infos: analysis.summary.infos,
     maxCallDepth: analysis.summary.maxCallDepth,
     distinctRegions: analysis.summary.distinctRegions,
+    unclosedFrames: analysis.summary.unclosedFrames,
     language: options.language || "javascript",
     neuron: {
       label: analysis.neuron.label,

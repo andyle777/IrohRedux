@@ -367,6 +367,47 @@ export function analyze(events, options) {
     });
   }
 
+  // Unclosed frames (1.1.1, M3): a generator closed early
+  // (.return() / .close()) leaves a FUNCTION_ENTER with no matching
+  // FUNCTION_LEAVE or FUNCTION_RETURN — the tracer cannot observe the
+  // close, so the frame dangles. The call depth is still correct (the
+  // yield already dropped it), and the analysis treats an ENTER still
+  // open at the end of the trace as closed, with this note, rather
+  // than silently dropping it. A plain function closes with
+  // FUNCTION_RETURN; a generator run to completion closes with
+  // FUNCTION_LEAVE.
+  let openFrames = [];
+  for (let ii = 0; ii < events.length; ++ii) {
+    let e = events[ii];
+    if (e.event === "FUNCTION_ENTER") {
+      openFrames.push({
+        name: e.name || null,
+        indent: typeof e.indent === "number" ? e.indent : null,
+      });
+    } else if (e.event === "FUNCTION_LEAVE" || e.event === "FUNCTION_RETURN") {
+      let popped = false;
+      for (let jj = openFrames.length - 1; jj >= 0; --jj) {
+        if (
+          openFrames[jj].indent === e.indent ||
+          openFrames[jj].indent === null ||
+          typeof e.indent !== "number"
+        ) {
+          openFrames.splice(jj, 1);
+          popped = true;
+          break;
+        }
+      }
+      if (!popped && openFrames.length > 0) openFrames.pop();
+    }
+  }
+  let unclosedFrames = openFrames.length > 0
+    ? {
+        count: openFrames.length,
+        frames: openFrames.map((f) => f.name),
+        note: "Frames still open at the end of the trace (e.g. a generator closed early with .return()/.close()) — treated as closed. The call depth is unaffected: the yield already dropped the frame.",
+      }
+    : null;
+
   // --- Scorecard -------------------------------------------------------
   // Coverage: categories fired vs total categories.
   let totalCategories = Object.keys(CATEGORY).length;
@@ -470,6 +511,7 @@ export function analyze(events, options) {
     infos: infos,
     maxCallDepth: maxDepth,
     distinctRegions: observedRegions,
+    unclosedFrames: unclosedFrames,
   };
 
   return { findings: findings, scores: scores, summary: summary, neuron: neuron };

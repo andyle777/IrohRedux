@@ -331,3 +331,23 @@ test("CLI --analyze appends an analysis line after the result line", () => {
   assert.ok(analysis.scores.coverage.total > 0);
   assert.equal(analysis.neuron.label, "hot");
 });
+
+test("analyze() notes a generator closed early as an unclosed frame, treated as closed", () => {
+  let { events } = Iroh.trace("function* gen() { yield 1; yield 2; } let g = gen(); g.next(); g.return();");
+  let enter = events.filter((e) => e.event === "FUNCTION_ENTER").length;
+  let leave = events.filter((e) => e.event === "FUNCTION_LEAVE").length;
+  assert.equal(enter, 1);
+  assert.equal(leave, 0);
+  let analysis = Iroh.analyze(events);
+  assert.ok(analysis.summary.unclosedFrames, "the unclosed frame is noted, not dropped silently");
+  assert.equal(analysis.summary.unclosedFrames.count, 1);
+  assert.deepEqual(analysis.summary.unclosedFrames.frames, ["gen"]);
+  assert.match(analysis.summary.unclosedFrames.note, /treated as closed/);
+});
+
+test("analyze() reports no unclosed frames for a completed generator or a plain function", () => {
+  let done = Iroh.trace("function* gen() { yield 1; yield 2; } let g = gen(); g.next(); g.next(); g.next();");
+  assert.equal(Iroh.analyze(done.events).summary.unclosedFrames, null);
+  let plain = Iroh.trace("function f(x) { return x * 2; } f(21);");
+  assert.equal(Iroh.analyze(plain.events).summary.unclosedFrames, null);
+});

@@ -186,3 +186,30 @@ test("eventToJSON matches the shape trace() returns", () => {
   assert.equal(line.trigger, "before");
   assert.equal(typeof line.hash, "number");
 });
+
+test("trace() with maxEvents stops a runaway and attaches the partial events", () => {
+  let err = null;
+  try {
+    Iroh.trace("let i = 0; while (true) { i++; } i;", { maxEvents: 100 });
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err instanceof Error, "the run stops with an error");
+  assert.match(err.message, /maxEvents \(100\)/);
+  assert.ok(Array.isArray(err.events), "the partial events ride on the error");
+  assert.ok(err.events.length > 100, "the event that tripped the cap is recorded");
+  assert.ok(err.events.length < 200, "the run stops promptly, it does not run on");
+});
+
+test("trace() with maxEvents not reached returns normally", () => {
+  let { events, result } = Iroh.trace("let x = 1; x;", { maxEvents: 1000 });
+  assert.equal(result, 1);
+  assert.ok(events.length > 0 && events.length <= 1000);
+});
+
+test("trace() with a bad maxEvents throws a clear error before running", () => {
+  assert.throws(() => Iroh.trace("let x = 1; x;", { maxEvents: 0 }), /positive integer/);
+  assert.throws(() => Iroh.trace("let x = 1; x;", { maxEvents: -5 }), /positive integer/);
+  assert.throws(() => Iroh.trace("let x = 1; x;", { maxEvents: 1.5 }), /positive integer/);
+  assert.throws(() => Iroh.trace("let x = 1; x;", { maxEvents: "100" }), /positive integer/);
+});

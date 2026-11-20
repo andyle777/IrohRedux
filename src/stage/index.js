@@ -93,6 +93,20 @@ Stage.prototype.addListener = function(category) {
   return listener;
 };
 
+// Detach every listener this Stage holds, so the listener callbacks —
+// which close over the recorded events — become unreachable. A Stage
+// is only needed while its program runs; after the run the caller
+// holds the events it wants. Called by releaseTraceRun in
+// src/setup.js (1.1.1: before that, every Stage stayed registered in
+// Iroh.stages forever and the closures kept the whole trace alive,
+// ~137 bytes/event, unbounded in a long-lived process). Idempotent.
+Stage.prototype.release = function() {
+  for (let key in this.listeners) {
+    if (!this.listeners.hasOwnProperty(key)) continue;
+    this.listeners[key].length = 0;
+  }
+};
+
 Stage.prototype.generateListeners = function() {
   for (let key in CATEGORY) {
     let bit = CATEGORY[key];

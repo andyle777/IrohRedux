@@ -209,3 +209,12 @@ test("CLI --scan works on a C++ trace, same schema", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("scan() carries the unclosed-frames note in its summary", () => {
+  let { events } = Iroh.trace("function* gen() { yield 1; yield 2; } let g = gen(); g.next(); g.return();");
+  let doc = Iroh.scan(events);
+  assert.equal(doc.summary.unclosedFrames.count, 1);
+  assert.deepEqual(doc.summary.unclosedFrames.frames, ["gen"]);
+  let clean = Iroh.trace("function f(x) { return x * 2; } f(21);");
+  assert.equal(Iroh.scan(clean.events).summary.unclosedFrames, null);
+});

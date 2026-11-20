@@ -118,6 +118,19 @@ function createTraceRun(iroh, code, options) {
   // inside the DEBUG call, after the line is recorded, so mutating the
   // raw event changes the running program.
   let rawOnEvent = options.rawOnEvent;
+  // 1.1.1 (M4): an opt-in cap on recorded events. No timeout exists by
+  // design, so this is the patch answer to a runaway: once the cap is
+  // passed the listener throws, the run stops, and the error carries
+  // the partial events (same shape as the director's stop). A program
+  // that catches every thrown value can defeat the stop the same way
+  // it defeats a director stop — the next event throws again, so it
+  // cannot make progress past an instrumented point without catching.
+  let maxEvents = options.maxEvents;
+  if (maxEvents !== void 0 && maxEvents !== null) {
+    if (typeof maxEvents !== "number" || maxEvents <= 0 || maxEvents !== Math.floor(maxEvents)) {
+      throw new Error("options.maxEvents must be a positive integer");
+    }
+  }
   // Indexed loops, not for...of: the browser bundle is transpiled by
   // buble, which cannot compile for...of.
   for (let ii = 0; ii < names.length; ++ii) {
@@ -127,6 +140,11 @@ function createTraceRun(iroh, code, options) {
       listener.on(trigger, (event) => {
         let line = iroh.eventToJSON(event, trigger);
         events.push(line);
+        if (maxEvents !== void 0 && maxEvents !== null && events.length > maxEvents) {
+          let err = new Error("Trace stopped: maxEvents (" + maxEvents + ") reached after " + events.length + " events");
+          err.maxEvents = maxEvents;
+          throw err;
+        }
         // The raw hook runs before onEvent: a director mutates the raw
         // event (and, through applyEntry, the line) so downstream
         // consumers — onEvent, the live analyzer, the recorded events —
@@ -247,10 +265,30 @@ export function trace(code, options) {
     result = runner(this);
   } catch (e) {
     attachTraceEvents(e, run.events);
+    releaseTraceRun(this, run);
     throw e;
   }
+  releaseTraceRun(this, run);
   return { events: run.events, result: result };
 };
+
+// Release a trace run's Stage after the run has settled: detach its
+// listeners and drop it from the Iroh stages registry. Before 1.1.1
+// every Stage stayed registered forever, and the listener closures
+// kept the whole recorded trace alive — ~137 bytes/event retained
+// after the caller dropped the result, unbounded in a long-lived
+// process tracing varied programs. The returned events array is the
+// same object the caller already holds, so output is unchanged; only
+// retention changes. Idempotent: safe to call twice (module runs
+// release in importTracedModule's cleanup and again in the director's
+// finish). A Stage is only needed while its program runs — the
+// generated script reads it through the registry during evaluation,
+// never after.
+function releaseTraceRun(iroh, run) {
+  if (!run || !run.stage) return;
+  if (typeof run.stage.release === "function") run.stage.release();
+  if (iroh && iroh.stages) delete iroh.stages[run.stage.key];
+}
 
 // Attach the events that fired before an error to the error itself, so
 // the trace of a failed program is not lost. Only objects can carry a
@@ -271,7 +309,7 @@ function attachTraceEvents(err, events) {
 // the events so far on a thrown error. Exported as one plain object —
 // not as functions — so extend() in src/index.js, which only copies
 // functions, does not put them on the Iroh singleton.
-export const runInternals = { createTraceRun, compileRunner, importTracedModule, attachTraceEvents };
+export const runInternals = { createTraceRun, compileRunner, importTracedModule, attachTraceEvents, releaseTraceRun };
 
 // Async version of trace(): awaits the program's completion value before
 // returning, so events from async continuations (await, promises) are
@@ -307,13 +345,18 @@ export function traceAsync(code, options) {
     result = runner(this);
   } catch (e) {
     attachTraceEvents(e, run.events);
+    releaseTraceRun(this, run);
     throw e;
   }
   let out = { events: run.events, result: result };
   if (result && typeof result.then === "function") {
+    // The run is not over until the promise settles: async
+    // continuations may still fire events. Release only then.
+    let iroh = this;
     return result.then(
       (value) => {
         out.result = value;
+        releaseTraceRun(iroh, run);
         return out;
       },
       // Like the sync path, an async failure carries the events that
@@ -321,10 +364,12 @@ export function traceAsync(code, options) {
       // lost entirely.
       (err) => {
         attachTraceEvents(err, out.events);
+        releaseTraceRun(iroh, run);
         throw err;
       }
     );
   }
+  releaseTraceRun(this, run);
   return Promise.resolve(out);
 };
 
@@ -423,6 +468,11 @@ function importTracedModule(iroh, run, options) {
           delete globalThis.__irohStages;
         }
       }
+      // The import has settled: the generated module has read its
+      // stage through the registry, and nothing reads it after.
+      // Release it here (1.1.1) — this covers traceModule and
+      // directModule alike.
+      releaseTraceRun(iroh, run);
       try {
         fs.unlinkSync(file);
       } catch (e) {

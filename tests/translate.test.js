@@ -497,3 +497,36 @@ test("process.exit translates as program end: sys.exit in Python, std::exit in C
   assert.match(typed.code, /int add\(int a, int b\)/);
   assert.ok(typed.report.assumptions.some((a) => a.what.includes("taken from the trace")));
 });
+
+test("translate() with evidence 'none' never runs the program (static-only)", () => {
+  global.__iroh_evidence_probe = 0;
+  let code = "global.__iroh_evidence_probe = (global.__iroh_evidence_probe || 0) + 1; function add(a, b) { return a + b; } add(2, 3);";
+  let traced = Iroh.translate(code, { to: "python" });
+  assert.equal(global.__iroh_evidence_probe, 1, "the default evidence run executes the program once");
+  assert.ok(traced.code.indexOf("def add") !== -1);
+  global.__iroh_evidence_probe = 0;
+  let staticOnly = Iroh.translate(code, { to: "python", evidence: "none" });
+  assert.equal(global.__iroh_evidence_probe, 0, "evidence 'none' must not execute the program");
+  assert.ok(staticOnly.code.indexOf("def add") !== -1, "it still translates");
+  assert.ok(
+    staticOnly.report.notes.some((n) => n.indexOf("evidence skipped") !== -1 && n.indexOf("options.evidence: 'none'") !== -1),
+    "the report says the evidence was skipped by request"
+  );
+  delete global.__iroh_evidence_probe;
+});
+
+test("translate() with a bad evidence value throws a clear error", () => {
+  assert.throws(
+    () => Iroh.translate("function add(a, b) { return a + b; }", { to: "python", evidence: "sometimes" }),
+    /options\.evidence must be 'trace' or 'none'/
+  );
+});
+
+test("translateAsync() with evidence 'none' never runs the program", async () => {
+  global.__iroh_evidence_probe = 0;
+  let code = "global.__iroh_evidence_probe = (global.__iroh_evidence_probe || 0) + 1; function add(a, b) { return a + b; } add(2, 3);";
+  let out = await Iroh.translateAsync(code, { to: "python", evidence: "none" });
+  assert.equal(global.__iroh_evidence_probe, 0);
+  assert.ok(out.code.indexOf("def add") !== -1);
+  delete global.__iroh_evidence_probe;
+});

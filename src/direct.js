@@ -638,6 +638,11 @@ function directInternal(iroh, code, director, options, mode) {
         "Stop requested but the program caught the director's stop signal and ran to completion — a program that swallows every thrown value defeats a stop.";
     }
     let summary = live.finish();
+    // The record is built: the director has read the events, and the
+    // returned record holds the same events array. Release the Stage
+    // (1.1.1) — the module path already released in
+    // importTracedModule's cleanup; the release is idempotent.
+    runInternals.releaseTraceRun(iroh, run);
     return {
       result: result,
       stopped: false,
@@ -663,6 +668,7 @@ function directInternal(iroh, code, director, options, mode) {
         stopEntry.appliedVia = "stop";
       }
       let summary = live.finish();
+      runInternals.releaseTraceRun(iroh, run);
       return {
         result: void 0,
         stopped: true,
@@ -683,6 +689,7 @@ function directInternal(iroh, code, director, options, mode) {
       directives: log,
       analysis: live.snapshot(),
     };
+    runInternals.releaseTraceRun(iroh, run);
     throw e;
   }
 

@@ -17,7 +17,7 @@ var extend = function(cls, prot) {
   }
 };
 
-var version = "1.1.0";
+var version = "1.1.1";
 
 // indent factor
 const INDENT_FACTOR = 1;
@@ -6052,6 +6052,20 @@ Stage.prototype.addListener = function(category) {
   return listener;
 };
 
+// Detach every listener this Stage holds, so the listener callbacks —
+// which close over the recorded events — become unreachable. A Stage
+// is only needed while its program runs; after the run the caller
+// holds the events it wants. Called by releaseTraceRun in
+// src/setup.js (1.1.1: before that, every Stage stayed registered in
+// Iroh.stages forever and the closures kept the whole trace alive,
+// ~137 bytes/event, unbounded in a long-lived process). Idempotent.
+Stage.prototype.release = function() {
+  for (let key in this.listeners) {
+    if (!this.listeners.hasOwnProperty(key)) continue;
+    this.listeners[key].length = 0;
+  }
+};
+
 Stage.prototype.generateListeners = function() {
   for (let key in CATEGORY) {
     let bit = CATEGORY[key];
@@ -6464,6 +6478,19 @@ function createTraceRun(iroh, code, options) {
   // inside the DEBUG call, after the line is recorded, so mutating the
   // raw event changes the running program.
   let rawOnEvent = options.rawOnEvent;
+  // 1.1.1 (M4): an opt-in cap on recorded events. No timeout exists by
+  // design, so this is the patch answer to a runaway: once the cap is
+  // passed the listener throws, the run stops, and the error carries
+  // the partial events (same shape as the director's stop). A program
+  // that catches every thrown value can defeat the stop the same way
+  // it defeats a director stop — the next event throws again, so it
+  // cannot make progress past an instrumented point without catching.
+  let maxEvents = options.maxEvents;
+  if (maxEvents !== void 0 && maxEvents !== null) {
+    if (typeof maxEvents !== "number" || maxEvents <= 0 || maxEvents !== Math.floor(maxEvents)) {
+      throw new Error("options.maxEvents must be a positive integer");
+    }
+  }
   // Indexed loops, not for...of: the browser bundle is transpiled by
   // buble, which cannot compile for...of.
   for (let ii = 0; ii < names.length; ++ii) {
@@ -6473,6 +6500,11 @@ function createTraceRun(iroh, code, options) {
       listener.on(trigger, (event) => {
         let line = iroh.eventToJSON(event, trigger);
         events.push(line);
+        if (maxEvents !== void 0 && maxEvents !== null && events.length > maxEvents) {
+          let err = new Error("Trace stopped: maxEvents (" + maxEvents + ") reached after " + events.length + " events");
+          err.maxEvents = maxEvents;
+          throw err;
+        }
         // The raw hook runs before onEvent: a director mutates the raw
         // event (and, through applyEntry, the line) so downstream
         // consumers — onEvent, the live analyzer, the recorded events —
@@ -6593,9 +6625,29 @@ function trace(code, options) {
     result = runner(this);
   } catch (e) {
     attachTraceEvents(e, run.events);
+    releaseTraceRun(this, run);
     throw e;
   }
+  releaseTraceRun(this, run);
   return { events: run.events, result: result };
+}
+
+// Release a trace run's Stage after the run has settled: detach its
+// listeners and drop it from the Iroh stages registry. Before 1.1.1
+// every Stage stayed registered forever, and the listener closures
+// kept the whole recorded trace alive — ~137 bytes/event retained
+// after the caller dropped the result, unbounded in a long-lived
+// process tracing varied programs. The returned events array is the
+// same object the caller already holds, so output is unchanged; only
+// retention changes. Idempotent: safe to call twice (module runs
+// release in importTracedModule's cleanup and again in the director's
+// finish). A Stage is only needed while its program runs — the
+// generated script reads it through the registry during evaluation,
+// never after.
+function releaseTraceRun(iroh, run) {
+  if (!run || !run.stage) return;
+  if (typeof run.stage.release === "function") run.stage.release();
+  if (iroh && iroh.stages) delete iroh.stages[run.stage.key];
 }
 
 // Attach the events that fired before an error to the error itself, so
@@ -6617,7 +6669,7 @@ function attachTraceEvents(err, events) {
 // the events so far on a thrown error. Exported as one plain object —
 // not as functions — so extend() in src/index.js, which only copies
 // functions, does not put them on the Iroh singleton.
-const runInternals = { createTraceRun, compileRunner, importTracedModule, attachTraceEvents };
+const runInternals = { createTraceRun, compileRunner, importTracedModule, attachTraceEvents, releaseTraceRun };
 
 // Async version of trace(): awaits the program's completion value before
 // returning, so events from async continuations (await, promises) are
@@ -6653,13 +6705,18 @@ function traceAsync(code, options) {
     result = runner(this);
   } catch (e) {
     attachTraceEvents(e, run.events);
+    releaseTraceRun(this, run);
     throw e;
   }
   let out = { events: run.events, result: result };
   if (result && typeof result.then === "function") {
+    // The run is not over until the promise settles: async
+    // continuations may still fire events. Release only then.
+    let iroh = this;
     return result.then(
       (value) => {
         out.result = value;
+        releaseTraceRun(iroh, run);
         return out;
       },
       // Like the sync path, an async failure carries the events that
@@ -6667,10 +6724,12 @@ function traceAsync(code, options) {
       // lost entirely.
       (err) => {
         attachTraceEvents(err, out.events);
+        releaseTraceRun(iroh, run);
         throw err;
       }
     );
   }
+  releaseTraceRun(this, run);
   return Promise.resolve(out);
 }
 
@@ -6769,6 +6828,11 @@ function importTracedModule(iroh, run, options) {
           delete globalThis.__irohStages;
         }
       }
+      // The import has settled: the generated module has read its
+      // stage through the registry, and nothing reads it after.
+      // Release it here (1.1.1) — this covers traceModule and
+      // directModule alike.
+      releaseTraceRun(iroh, run);
       try {
         fs.unlinkSync(file);
       } catch (e) {
@@ -7430,6 +7494,47 @@ function analyze(events, options) {
     });
   }
 
+  // Unclosed frames (1.1.1, M3): a generator closed early
+  // (.return() / .close()) leaves a FUNCTION_ENTER with no matching
+  // FUNCTION_LEAVE or FUNCTION_RETURN — the tracer cannot observe the
+  // close, so the frame dangles. The call depth is still correct (the
+  // yield already dropped it), and the analysis treats an ENTER still
+  // open at the end of the trace as closed, with this note, rather
+  // than silently dropping it. A plain function closes with
+  // FUNCTION_RETURN; a generator run to completion closes with
+  // FUNCTION_LEAVE.
+  let openFrames = [];
+  for (let ii = 0; ii < events.length; ++ii) {
+    let e = events[ii];
+    if (e.event === "FUNCTION_ENTER") {
+      openFrames.push({
+        name: e.name || null,
+        indent: typeof e.indent === "number" ? e.indent : null,
+      });
+    } else if (e.event === "FUNCTION_LEAVE" || e.event === "FUNCTION_RETURN") {
+      let popped = false;
+      for (let jj = openFrames.length - 1; jj >= 0; --jj) {
+        if (
+          openFrames[jj].indent === e.indent ||
+          openFrames[jj].indent === null ||
+          typeof e.indent !== "number"
+        ) {
+          openFrames.splice(jj, 1);
+          popped = true;
+          break;
+        }
+      }
+      if (!popped && openFrames.length > 0) openFrames.pop();
+    }
+  }
+  let unclosedFrames = openFrames.length > 0
+    ? {
+        count: openFrames.length,
+        frames: openFrames.map((f) => f.name),
+        note: "Frames still open at the end of the trace (e.g. a generator closed early with .return()/.close()) — treated as closed. The call depth is unaffected: the yield already dropped the frame.",
+      }
+    : null;
+
   // --- Scorecard -------------------------------------------------------
   // Coverage: categories fired vs total categories.
   let totalCategories = Object.keys(CATEGORY).length;
@@ -7533,6 +7638,7 @@ function analyze(events, options) {
     infos: infos,
     maxCallDepth: maxDepth,
     distinctRegions: observedRegions,
+    unclosedFrames: unclosedFrames,
   };
 
   return { findings: findings, scores: scores, summary: summary, neuron: neuron };
@@ -7789,6 +7895,7 @@ function scan(events, options) {
     infos: analysis.summary.infos,
     maxCallDepth: analysis.summary.maxCallDepth,
     distinctRegions: analysis.summary.distinctRegions,
+    unclosedFrames: analysis.summary.unclosedFrames,
     language: options.language || "javascript",
     neuron: {
       label: analysis.neuron.label,
@@ -8826,6 +8933,11 @@ function directInternal(iroh, code, director, options, mode) {
         "Stop requested but the program caught the director's stop signal and ran to completion — a program that swallows every thrown value defeats a stop.";
     }
     let summary = live.finish();
+    // The record is built: the director has read the events, and the
+    // returned record holds the same events array. Release the Stage
+    // (1.1.1) — the module path already released in
+    // importTracedModule's cleanup; the release is idempotent.
+    runInternals.releaseTraceRun(iroh, run);
     return {
       result: result,
       stopped: false,
@@ -8851,6 +8963,7 @@ function directInternal(iroh, code, director, options, mode) {
         stopEntry.appliedVia = "stop";
       }
       let summary = live.finish();
+      runInternals.releaseTraceRun(iroh, run);
       return {
         result: void 0,
         stopped: true,
@@ -8871,6 +8984,7 @@ function directInternal(iroh, code, director, options, mode) {
       directives: log,
       analysis: live.snapshot(),
     };
+    runInternals.releaseTraceRun(iroh, run);
     throw e;
   }
 
@@ -10165,6 +10279,16 @@ function synthesize(code, options) {
   for (let rr = 0; rr < allRuns.length; ++rr) {
     let lf = allRuns[rr].liveFindings;
     for (let ii = 0; ii < lf.length; ++ii) addFinding(lf[ii], allRuns[rr].stage);
+  }
+
+  // Every candidate run's Stage is released now that the findings are
+  // built (site info was resolved from the stages above). The stages
+  // are needed during synthesis — remapEvent and the site lookups read
+  // them per run — so they cannot be released per run, only here at
+  // the end. Before 1.1.1 every one stayed registered in Iroh.stages
+  // forever, so a synthesis over many runs retained every trace.
+  for (let rr = 0; rr < allRuns.length; ++rr) {
+    runInternals.releaseTraceRun(iroh, allRuns[rr]);
   }
 
   let coverage = {
@@ -12102,7 +12226,19 @@ function translateFromJS(iroh, code, to, options) {
   // Dynamic evidence: run the program through the tracer (best
   // effort — a program that throws, awaits, or imports still
   // translates statically, and the report says the evidence was
-  // unavailable). The evidence trace must not leak the program's
+  // unavailable). 1.1.1 (M6): options.evidence: "none" skips the run
+  // entirely (static-only) — for programs with side effects, or when
+  // the caller does not want the program executed at all. The report
+  // says so, and types come from static inference or hints only.
+  let evidenceMode = options.evidence === void 0 ? "trace" : options.evidence;
+  if (evidenceMode !== "trace" && evidenceMode !== "none") {
+    throw new Error("Iroh.translate: options.evidence must be 'trace' or 'none'");
+  }
+  let events = [];
+  if (evidenceMode === "none") {
+    report.notes.push("Dynamic trace evidence skipped (options.evidence: 'none'); types come from static inference or hints only.");
+  } else {
+  // The evidence trace must not leak the program's
   // output: translate() is a pure function, so the tracer's output
   // is silenced for the duration. Note the program's console.log
   // runs natively (the instrumenter does not rewrite it — Iroh.log
@@ -12118,7 +12254,6 @@ function translateFromJS(iroh, code, to, options) {
   // program ending is not mistaken for a failure. (In a browser
   // there is no process to stub, and a process.exit in the traced
   // code falls through to the evidence-unavailable path.)
-  let events = [];
   let originalLog = iroh.log;
   let originalConsoleLog = typeof console !== "undefined" ? console.log : null;
   let originalExit = (typeof process !== "undefined" && process && typeof process.exit === "function") ? process.exit : null;
@@ -12146,6 +12281,7 @@ function translateFromJS(iroh, code, to, options) {
     iroh.log = originalLog;
     if (originalConsoleLog) console.log = originalConsoleLog;
     if (originalExit) process.exit = originalExit;
+  }
   }
   let env = buildTraceEnv(events);
   let emitter;
@@ -15149,7 +15285,11 @@ function translate(code, options) {
   }
   let out = translateFromJS(this, first.code, to, options);
   out.report.from = from;
-  out.report.notes.push("Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is traced for its types, exactly as the direct JavaScript leg is).");
+  out.report.notes.push(
+    options.evidence === "none"
+      ? "Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is NOT traced — evidence: 'none', so types come from static inference or hints only)."
+      : "Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is traced for its types, exactly as the direct JavaScript leg is)."
+  );
   out.report.assumptions = first.report.assumptions.concat(out.report.assumptions);
   out.report.notes = first.report.notes.concat(out.report.notes);
   return out;
@@ -15201,7 +15341,11 @@ function translateAsync(code, options) {
         }
         let out = translateFromJS(iroh, first.code, to, options);
         out.report.from = from;
-        out.report.notes.push("Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is traced for its types, exactly as the direct JavaScript leg is).");
+        out.report.notes.push(
+          options.evidence === "none"
+            ? "Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is NOT traced — evidence: 'none', so types come from static inference or hints only)."
+            : "Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is traced for its types, exactly as the direct JavaScript leg is)."
+        );
         out.report.assumptions = first.report.assumptions.concat(out.report.assumptions);
         out.report.notes = first.report.notes.concat(out.report.notes);
         return out;

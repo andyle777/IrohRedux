@@ -10,15 +10,15 @@ JavaScript CLI emits and the native Python tracer emits
     {"type":"result","value":null}
 
 How it works: TracingBasicInterpreter subclasses the BASIC
-interpreter and overrides its hook points — FOR loop tests and
-entries (LOOP_TEST / LOOP_ENTER, one true test per iteration, plus
-the final false test), IF conditions (IF_TEST), GOSUB subroutines
-(FUNCTION_CALL / FUNCTION_ENTER / FUNCTION_CALL_END / FUNCTION_LEAVE,
-named "gosub@<line>", with the call depth as ``indent``), and
-assignments (ASSIGN with the post-assignment value). PRINT output is
-collected by the interpreter and written to stderr after the run, so
-the JSONL stream on stdout stays clean; INPUT reads from the
-inherited stdin, like the Python tracer.
+interpreter and overrides its hook points — FOR and WHILE loop tests
+and entries (LOOP_TEST / LOOP_ENTER, one true test per iteration,
+plus the final false test), IF conditions (IF_TEST), GOSUB
+subroutines (FUNCTION_CALL / FUNCTION_ENTER / FUNCTION_CALL_END /
+FUNCTION_LEAVE, named "gosub@<line>", with the call depth as
+``indent``), and assignments (ASSIGN with the post-assignment
+value). PRINT output is collected by the interpreter and written to
+stderr after the run, so the JSONL stream on stdout stays clean;
+INPUT reads from the inherited stdin, like the Python tracer.
 
 Hashes are CRC32 of kind:file:site, where the site is the BASIC
 line and the statement index on it ("10.0"). Deterministic across
@@ -27,7 +27,8 @@ runs: the same program always gets the same hashes.
 What v1 does NOT see (stated plainly, not hidden):
 - GOTO is a jump, and the JS engine has no jump event category, so
   GOTOs are invisible in the trace — a program that loops with GOTO
-  shows no loop events at all. (FOR/NEXT is the observable loop.)
+  shows no loop events at all. (FOR/NEXT and WHILE/WEND are the
+  observable loops.)
 - DIM has no event; array reads have none either — only array
   element writes emit ASSIGN.
 - A GOSUB that raises emits FUNCTION_CALL / FUNCTION_ENTER but no
@@ -89,14 +90,14 @@ class TracingBasicInterpreter(BasicInterpreter):
                        self._depth, value=bool(value), kind="If",
                        file=self.basename)
 
-    def _hook_loop_test(self, site, value):
+    def _hook_loop_test(self, site, value, kind="For"):
         self.sink.emit("LOOP_TEST", "LOOP", "test", self._hash("loop", site),
-                       self._depth, value=bool(value), kind="For",
+                       self._depth, value=bool(value), kind=kind,
                        file=self.basename)
 
-    def _hook_loop_enter(self, site):
+    def _hook_loop_enter(self, site, kind="For"):
         self.sink.emit("LOOP_ENTER", "LOOP", "enter", self._hash("loop", site),
-                       self._depth, kind="For", file=self.basename)
+                       self._depth, kind=kind, file=self.basename)
 
     def _hook_gosub(self, site, name):
         hash_ = self._hash("gosub", site)

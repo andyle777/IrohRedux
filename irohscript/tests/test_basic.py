@@ -88,6 +88,29 @@ class TestBasicControl(unittest.TestCase):
             run("10 FOR I = 1 TO 2\n20 FOR J = 1 TO 2\n30 PRINT I * 10 + J\n40 NEXT J\n50 NEXT I\n"),
             ["11", "12", "21", "22"])
 
+    # 1.1.1 (M5): WHILE/WEND.
+    def test_while_sums(self):
+        prog = ("10 LET I = 1\n20 LET S = 0\n30 WHILE I <= 5\n"
+                "40 S = S + I\n50 I = I + 1\n60 WEND\n70 PRINT S\n")
+        self.assertEqual(run(prog), ["15"])
+
+    def test_while_zero_iterations(self):
+        prog = ("10 LET I = 10\n20 WHILE I < 3\n30 PRINT I\n40 WEND\n"
+                "50 PRINT \"done\"\n")
+        self.assertEqual(run(prog), ["done"])
+
+    def test_while_nested(self):
+        prog = ("10 LET A = 0\n20 LET I = 1\n30 WHILE I <= 2\n"
+                "40 LET J = 1\n50 WHILE J <= 3\n60 A = A + 1\n"
+                "70 J = J + 1\n80 WEND\n90 I = I + 1\n100 WEND\n110 PRINT A\n")
+        self.assertEqual(run(prog), ["6"])
+
+    def test_while_inside_for(self):
+        prog = ("10 LET S = 0\n20 FOR I = 1 TO 2\n"
+                "30 LET J = 1\n40 WHILE J <= 2\n50 S = S + 1\n"
+                "60 J = J + 1\n70 WEND\n80 NEXT I\n90 PRINT S\n")
+        self.assertEqual(run(prog), ["4"])
+
     def test_goto(self):
         self.assertEqual(
             run("10 PRINT \"a\"\n20 GOTO 40\n30 PRINT \"skipped\"\n40 PRINT \"b\"\n"),
@@ -160,10 +183,18 @@ class TestBasicErrors(unittest.TestCase):
             run("10 DATA 1, 2, 3\n")
         self.assertIn("DATA/READ is not in the v1 subset", str(ctx.exception))
 
-    def test_while_is_a_clear_error(self):
+    def test_wend_without_while(self):
+        with self.assertRaises(BasicError):
+            run("10 WEND\n")
+
+    def test_while_without_wend(self):
+        with self.assertRaises(BasicError):
+            run("10 WHILE 1\n20 PRINT 1\n")
+
+    def test_while_in_if_part_is_a_clear_error(self):
         with self.assertRaises(BasicError) as ctx:
-            run("10 WHILE X < 3\n20 PRINT X\n30 WEND\n")
-        self.assertIn("WHILE/WEND is not in the v1 subset", str(ctx.exception))
+            run("10 IF 1 THEN WHILE 1\n")
+        self.assertIn("not allowed in an IF THEN/ELSE part", str(ctx.exception))
 
     def test_for_in_if_part_is_a_clear_error(self):
         with self.assertRaises(BasicError) as ctx:

@@ -2,12 +2,12 @@
 
 <p align="center">
   <a href="https://github.com/andyle777/IrohRedux/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/version-1.1.0-orange.svg?style=flat-square" alt="Version 1.1.0" />
+  <img src="https://img.shields.io/badge/version-1.1.1-orange.svg?style=flat-square" alt="Version 1.1.1" />
   <img src="https://img.shields.io/badge/node-%3E%3D%2018-339933.svg?style=flat-square" alt="Node >= 18" />
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-649%20passing-brightgreen.svg?style=flat-square" alt="649 tests passing" />
+  <img src="https://img.shields.io/badge/tests-673%20passing-brightgreen.svg?style=flat-square" alt="673 tests passing" />
 </p>
 
 <p align="center">
@@ -43,6 +43,14 @@ Two releases, both on the
   member and scoped sets, `directAsync`/`directModule`, decorated
   computed keys, Python per-assignment events). 348 tests (314 Node +
   25 Python + 9 C++).
+- **1.1.1 — the patch.** The trace memory release: a finished trace
+  now releases its Stage instead of keeping it registered forever
+  (137 bytes/event retained, unbounded — now a 472,976-byte residual
+  heap on a 500,013-event trace). Plus: an opt-in event cap
+  (`--max-events`), generator tolerance in the analysis, a static-only
+  translate option, BASIC `WHILE`/`WEND`, and a `--verify`
+  determinism check. No new languages, no event-shape change, no
+  breaking changes.
 - **1.1.0 — the new release.** The IrohScript foundation rework
   (IrohScript and BASIC trace first-class, the five-language
   translator, the IrohScript compiler with the perceptron core in
@@ -74,7 +82,7 @@ git clone https://github.com/andyle777/IrohRedux.git
 cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
-npm test            # 649 tests: 392 Node + 25 Python + 9 C++ + 223 IrohScript/BASIC
+npm test            # 673 tests: 409 Node + 25 Python + 9 C++ + 230 IrohScript/BASIC
 ```
 
 The Python client installs with `pip install -e python/`; the C++ client is
@@ -613,7 +621,7 @@ entry functions; shipped in 1.1.0.
   run — with a full audit log of what fired, what was directed, and what
   changed. The built-in runaway-loop guard throttles a hot loop (or stops
   it); `node cli/iroh.js program.js --direct` runs any script under it.
-- **No surprises.** 649 tests (392 Node + 25 Python + 9 C++ + 223
+- **No surprises.** 673 tests (409 Node + 25 Python + 9 C++ + 230
   IrohScript/BASIC Python), `npm test` runs them all, plus a TypeScript
   type test (`npm run test:types`). Zero runtime dependencies in the
   engine beyond Acorn, astring, and acorn-walk.
@@ -622,7 +630,7 @@ entry functions; shipped in 1.1.0.
 
 - [Getting started](//github.com/andyle777/IrohRedux/blob/master/GETTING_STARTED.md) — worked examples you can run locally.
 - [API](//github.com/andyle777/IrohRedux/blob/master/API.md) — the full listener and event reference, including `Iroh.assert` / `Iroh.log` and the `INSTR` / `CATEGORY` / `OP` label tables.
-- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, 0.7.0, 0.8.0, 0.9.0, 1.0.0, 1.0.1, and 1.1.0.
+- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, 0.7.0, 0.8.0, 0.9.0, 1.0.0, 1.0.1, 1.1.0, and 1.1.1.
 
 ---
 

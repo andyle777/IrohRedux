@@ -21,6 +21,10 @@ never silently skipped):
     GOSUB inside an IF part are a v1 parse error.
   - FOR var = start TO end [STEP step] / NEXT [var], nested; GOTO;
     GOSUB / RETURN; END / STOP.
+  - WHILE cond / WEND, nested (1.1.1, M5): the condition is tested
+    at the top on every pass, so a WHILE loop that never enters
+    prints nothing and a loop whose condition never turns false
+    runs until the caller stops it — same as FOR/NEXT.
   - Expressions: numbers, strings, names (with an optional $ suffix),
     array reads, parentheses, + - * / % = <> < > <= >= AND OR NOT.
     Division is true division and % is floored modulo (Python-style,
@@ -28,7 +32,7 @@ never silently skipped):
     question for Andy, not a BASIC standard).
 
 NOT in v1 (a clear error naming the construct):
-  DATA/READ, WHILE/WEND, DEF FN, ON GOTO/GOSUB, built-in functions
+  DATA/READ, DEF FN, ON GOTO/GOSUB, built-in functions
   (ABS, LEN, ...), multi-statement string handling beyond PRINT,
   file I/O, PRINT zones (',' separates with one space, not 14-column
   zones), INPUT reprompting (a bad value is an error, not "?Redo").
@@ -169,8 +173,6 @@ def lex_line(text):
 _UNSUPPORTED = {
     "DATA": "DATA/READ is not in the v1 subset",
     "READ": "DATA/READ is not in the v1 subset",
-    "WHILE": "WHILE/WEND is not in the v1 subset",
-    "WEND": "WHILE/WEND is not in the v1 subset",
     "DEF": "DEF FN is not in the v1 subset",
     "ON": "ON GOTO/GOSUB is not in the v1 subset",
 }
@@ -241,6 +243,11 @@ class _Parser:
             return self._parse_if()
         if kind == "FOR":
             return self._parse_for()
+        if kind == "WHILE":
+            return self._parse_while()
+        if kind == "WEND":
+            self.pos += 1
+            return ("wend",)
         if kind == "NEXT":
             self.pos += 1
             name = None
@@ -348,6 +355,11 @@ class _Parser:
         if self.accept("STEP"):
             step = self.parse_expr()
         return ("for", var, start, end, step)
+
+    def _parse_while(self):
+        self.expect("WHILE")
+        cond = self.parse_expr()
+        return ("while", cond)
 
     def _parse_input(self):
         self.expect("INPUT")
@@ -525,6 +537,7 @@ class BasicInterpreter:
         self._slots = []  # (line_key, stmt_index, stmt)
         self._line_map = {}  # line number -> first slot index
         self._for_next = {}  # for slot -> next slot; next slot -> for slot
+        self._while_wend = {}  # while slot -> wend slot; wend slot -> while slot
         self.halted = False
 
     # ------------------------------------------------------------ hooks
@@ -535,10 +548,10 @@ class BasicInterpreter:
     def _hook_if(self, site, value):
         pass
 
-    def _hook_loop_test(self, site, value):
+    def _hook_loop_test(self, site, value, kind="For"):
         pass
 
-    def _hook_loop_enter(self, site):
+    def _hook_loop_enter(self, site, kind="For"):
         pass
 
     def _hook_gosub(self, site, name):
@@ -573,6 +586,20 @@ class BasicInterpreter:
         if stack:
             line = self._slots[stack[-1]][0]
             raise BasicError("FOR without NEXT", line)
+        # Pair WHILE with WEND by nesting (1.1.1, M5).
+        wstack = []
+        for pc, (_line, _ii, stmt) in enumerate(self._slots):
+            if stmt[0] == "while":
+                wstack.append(pc)
+            elif stmt[0] == "wend":
+                if not wstack:
+                    raise BasicError("WEND without WHILE", _line)
+                while_pc = wstack.pop()
+                self._while_wend[while_pc] = pc
+                self._while_wend[pc] = while_pc
+        if wstack:
+            line = self._slots[wstack[-1]][0]
+            raise BasicError("WHILE without WEND", line)
 
     def run(self, program):
         """Execute a parsed program. Returns {"output": [...]}."""
@@ -637,6 +664,10 @@ class BasicInterpreter:
             return self._do_for(stmt, line, ii, pc)
         if kind == "next":
             return self._do_next(stmt, line, ii, pc)
+        if kind == "while":
+            return self._do_while(stmt, line, ii, pc)
+        if kind == "wend":
+            return self._do_wend(stmt, line, ii, pc)
         if kind == "goto":
             target = stmt[1]
             if target not in self._line_map:
@@ -684,12 +715,12 @@ class BasicInterpreter:
         self._hook_assign(var, start, "=", var, self._site(line, ii))
         site = self._site(line, ii)
         passed = start <= end if step > 0 else start >= end
-        self._hook_loop_test(site, passed)
+        self._hook_loop_test(site, passed, "For")
         if not passed:
             return self._for_next[pc] + 1
         if pc not in self._entered_loops:
             self._entered_loops.add(pc)
-            self._hook_loop_enter(site)
+            self._hook_loop_enter(site, "For")
         self._for_stack.append({"var": var, "end": end, "step": step,
                                 "for_pc": pc, "next_pc": self._for_next[pc]})
         return pc + 1
@@ -719,13 +750,35 @@ class BasicInterpreter:
         site = self._site(*self._slot_line(frame["for_pc"]))
         passed = (new_value <= frame["end"] if frame["step"] > 0
                   else new_value >= frame["end"])
-        self._hook_loop_test(site, passed)
+        self._hook_loop_test(site, passed, "For")
         if passed:
             self._for_stack.pop()
             self._for_stack.append(frame)
             return frame["for_pc"] + 1
         self._for_stack.pop()
         return pc + 1
+
+    def _do_while(self, stmt, line, ii, pc):
+        # 1.1.1 (M5): WHILE cond ... WEND. The condition is tested at
+        # the top on every pass — WEND jumps back here, so one
+        # LOOP_TEST fires per iteration, exactly like FOR/NEXT (the
+        # tracer's contract). A false test skips past the WEND.
+        _kind, cond_e = stmt
+        cond = self._eval(cond_e)
+        passed = self._truthy(cond)
+        site = self._site(line, ii)
+        self._hook_loop_test(site, passed, "While")
+        if not passed:
+            return self._while_wend[pc] + 1
+        if pc not in self._entered_loops:
+            self._entered_loops.add(pc)
+            self._hook_loop_enter(site, "While")
+        return pc + 1
+
+    def _do_wend(self, stmt, line, ii, pc):
+        # Jump back to the matching WHILE, which re-tests the
+        # condition (and fires the next LOOP_TEST).
+        return self._while_wend[pc]
 
     def _slot_line(self, pc):
         line, ii, _stmt = self._slots[pc]

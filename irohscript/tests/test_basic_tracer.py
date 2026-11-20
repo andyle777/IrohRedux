@@ -59,6 +59,21 @@ class TestBasicTracerLoops(unittest.TestCase):
         self.assertEqual([(a["name"], a["value"]) for a in assigns],
                          [("I", 1), ("I", 2), ("I", 3)])
 
+    # 1.1.1 (M5): WHILE/WEND traces like FOR/NEXT — one true test per
+    # iteration, plus the final false test, one entry.
+    def test_while_loop_events(self):
+        events = _events_of(
+            "10 LET I = 1\n20 WHILE I <= 3\n30 I = I + 1\n40 WEND\n50 PRINT \"done\"\n",
+            filename="while.bas")
+        tests = [e for e in events if e["event"] == "LOOP_TEST"]
+        enters = [e for e in events if e["event"] == "LOOP_ENTER"]
+        self.assertEqual(len(tests), 4)
+        self.assertEqual(sum(1 for t in tests if t["value"] is True), 3)
+        self.assertEqual([t["value"] for t in tests[-1:]], [False])
+        self.assertEqual(len(enters), 1)
+        self.assertEqual(tests[0]["kind"], "While")
+        self.assertEqual(enters[0]["hash"], tests[0]["hash"])
+
 
 class TestBasicTracerCalls(unittest.TestCase):
     def test_gosub_calls_and_returns(self):

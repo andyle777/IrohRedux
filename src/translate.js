@@ -1792,7 +1792,19 @@ function translateFromJS(iroh, code, to, options) {
   // Dynamic evidence: run the program through the tracer (best
   // effort — a program that throws, awaits, or imports still
   // translates statically, and the report says the evidence was
-  // unavailable). The evidence trace must not leak the program's
+  // unavailable). 1.1.1 (M6): options.evidence: "none" skips the run
+  // entirely (static-only) — for programs with side effects, or when
+  // the caller does not want the program executed at all. The report
+  // says so, and types come from static inference or hints only.
+  let evidenceMode = options.evidence === void 0 ? "trace" : options.evidence;
+  if (evidenceMode !== "trace" && evidenceMode !== "none") {
+    throw new Error("Iroh.translate: options.evidence must be 'trace' or 'none'");
+  }
+  let events = [];
+  if (evidenceMode === "none") {
+    report.notes.push("Dynamic trace evidence skipped (options.evidence: 'none'); types come from static inference or hints only.");
+  } else {
+  // The evidence trace must not leak the program's
   // output: translate() is a pure function, so the tracer's output
   // is silenced for the duration. Note the program's console.log
   // runs natively (the instrumenter does not rewrite it — Iroh.log
@@ -1808,7 +1820,6 @@ function translateFromJS(iroh, code, to, options) {
   // program ending is not mistaken for a failure. (In a browser
   // there is no process to stub, and a process.exit in the traced
   // code falls through to the evidence-unavailable path.)
-  let events = [];
   let originalLog = iroh.log;
   let originalConsoleLog = typeof console !== "undefined" ? console.log : null;
   let originalExit = (typeof process !== "undefined" && process && typeof process.exit === "function") ? process.exit : null;
@@ -1836,6 +1847,7 @@ function translateFromJS(iroh, code, to, options) {
     iroh.log = originalLog;
     if (originalConsoleLog) console.log = originalConsoleLog;
     if (originalExit) process.exit = originalExit;
+  }
   }
   let env = buildTraceEnv(events);
   let emitter;
@@ -4839,7 +4851,11 @@ export function translate(code, options) {
   }
   let out = translateFromJS(this, first.code, to, options);
   out.report.from = from;
-  out.report.notes.push("Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is traced for its types, exactly as the direct JavaScript leg is).");
+  out.report.notes.push(
+    options.evidence === "none"
+      ? "Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is NOT traced — evidence: 'none', so types come from static inference or hints only)."
+      : "Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is traced for its types, exactly as the direct JavaScript leg is)."
+  );
   out.report.assumptions = first.report.assumptions.concat(out.report.assumptions);
   out.report.notes = first.report.notes.concat(out.report.notes);
   return out;
@@ -4891,7 +4907,11 @@ export function translateAsync(code, options) {
         }
         let out = translateFromJS(iroh, first.code, to, options);
         out.report.from = from;
-        out.report.notes.push("Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is traced for its types, exactly as the direct JavaScript leg is).");
+        out.report.notes.push(
+          options.evidence === "none"
+            ? "Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is NOT traced — evidence: 'none', so types come from static inference or hints only)."
+            : "Translated " + from + " -> JavaScript -> " + to + " (two-hop: the JavaScript in the middle is traced for its types, exactly as the direct JavaScript leg is)."
+        );
         out.report.assumptions = first.report.assumptions.concat(out.report.assumptions);
         out.report.notes = first.report.notes.concat(out.report.notes);
         return out;

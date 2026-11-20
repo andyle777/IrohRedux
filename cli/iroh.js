@@ -235,7 +235,13 @@ function printUsage() {
     "the script tracers run under spawnSync, so no directive can reach\n" +
     "them mid-run (the same limit Python/C++ already have).\n" +
     "--translate cannot be combined with --live, --scan, --analyze or\n" +
-    "--direct. --include-events needs --scan.\n"
+    "--direct. --include-events needs --scan. --max-events N caps the\n" +
+    "recorded events (JavaScript legs only): the run stops with a clear\n" +
+    "error and the partial events attached once N events have fired.\n" +
+    "--verify traces the program twice (JavaScript legs only) and diffs\n" +
+    "the events and the result, printing a verify line {ok, events,\n" +
+    "firstDiff}; exit 1 when the two runs disagree. It does not combine\n" +
+    "with --translate, --direct or --synthesize.\n"
   );
 }
 
@@ -409,6 +415,8 @@ async function main() {
   let entryArg = null;
   let seedsArg = null;
   let maxRunsArg = null;
+  let maxEventsArg = null;
+  let verifyFlag = false;
   let translateTo = null;
   let fromArg = null;
   let langArg = null;
@@ -464,6 +472,13 @@ async function main() {
       if (maxRunsArg === void 0) { printUsage(); process.exitCode = 2; return; }
     } else if (arg.startsWith("--max-runs=")) {
       maxRunsArg = arg.slice("--max-runs=".length);
+    } else if (arg === "--max-events") {
+      maxEventsArg = args[++ii];
+      if (maxEventsArg === void 0) { printUsage(); process.exitCode = 2; return; }
+    } else if (arg.startsWith("--max-events=")) {
+      maxEventsArg = arg.slice("--max-events=".length);
+    } else if (arg === "--verify") {
+      verifyFlag = true;
     } else if (arg === "--lang") {
       langArg = args[++ii];
       if (langArg === void 0) { printUsage(); process.exitCode = 2; return; }
@@ -522,6 +537,36 @@ async function main() {
     process.exitCode = 2;
     return;
   }
+  // 1.1.1 (A2): --verify traces the program twice and diffs the
+  // events. It is a plain-trace check: it runs no trace under
+  // --translate, and a directed or synthesized run is a different
+  // mode, not a plain trace. JavaScript only, like --direct: the
+  // script tracers run under spawnSync and their determinism is by
+  // construction (CRC32 hashes of kind:file:site, no process state).
+  if (verifyFlag && translateTo !== null) {
+    process.stderr.write("--verify runs no trace under --translate\n");
+    printUsage();
+    process.exitCode = 2;
+    return;
+  }
+  if (verifyFlag && directMode !== null) {
+    process.stderr.write("--verify is for plain traces, not directed runs (--direct)\n");
+    printUsage();
+    process.exitCode = 2;
+    return;
+  }
+  if (verifyFlag && synthesizeFlag) {
+    process.stderr.write("--verify is for plain traces, not synthesis (--synthesize)\n");
+    printUsage();
+    process.exitCode = 2;
+    return;
+  }
+  if (verifyFlag && language !== "javascript") {
+    process.stderr.write("--verify is JavaScript-only: the script tracers run under spawnSync and their determinism is by construction (CRC32 hashes of kind:file:site, no process state)\n");
+    printUsage();
+    process.exitCode = 2;
+    return;
+  }
   if (directMode !== null && eventsArg.toUpperCase() !== "ALL") {
     process.stderr.write("--direct always traces ALL categories (the director and the live analyzer need the full stream); --events with --direct is a usage error\n");
     printUsage();
@@ -533,6 +578,19 @@ async function main() {
     printUsage();
     process.exitCode = 2;
     return;
+  }
+  // 1.1.1 (M4): --max-events caps the recorded events (JavaScript legs
+  // only — the script tracers run under spawnSync and cannot be
+  // stopped mid-run). A bad value is a usage error, exit 2.
+  let maxEvents = void 0;
+  if (maxEventsArg !== null) {
+    maxEvents = Number(maxEventsArg);
+    if (maxEvents !== Math.floor(maxEvents) || maxEvents <= 0) {
+      process.stderr.write("--max-events must be a positive integer\n");
+      printUsage();
+      process.exitCode = 2;
+      return;
+    }
   }
 
   let code;
@@ -597,6 +655,9 @@ async function main() {
   let collected = [];
   let result = null;
   let traceError = null;
+  // 1.1.1 (A2): --verify outcome, filled by the JavaScript branch
+  // after its second trace and printed after the result line.
+  let verifyOutcome = null;
   // The live wire analyzer (see src/live.js): findings fire as events
   // arrive. For JavaScript the events stream through it as the program
   // runs; for Python/C++ they are fed after the run, because the
@@ -822,6 +883,7 @@ async function main() {
       if (isModule) {
         out = await Iroh.traceModule(code, {
           events: eventsArg,
+          maxEvents: maxEvents,
           onEvent: (line) => {
             collected.push(line);
             if (liveFlag) {
@@ -835,6 +897,7 @@ async function main() {
       } else {
         out = await Iroh.traceAsync(code, {
           events: eventsArg,
+          maxEvents: maxEvents,
           onEvent: (line) => {
             collected.push(line);
             if (liveFlag) {
@@ -850,6 +913,62 @@ async function main() {
       traceError = errorLine(e);
       // The JS tracers attach prior events to the error; keep them.
       if (e && Array.isArray(e.events)) collected = e.events;
+    }
+    // 1.1.1 (A2): --verify traces a second time, silently (no live
+    // streaming, no live-analyzer feed — the first run already fed
+    // it), and diffs the events and the result as JSON, so the check
+    // is byte-level, the same guarantee the determinism tests assert
+    // in-process. A second run that throws where the first succeeded
+    // is a determinism failure, not a trace failure.
+    if (verifyFlag && traceError === null) {
+      let secondEvents = [];
+      let secondResult = null;
+      let secondError = null;
+      try {
+        let second;
+        if (isModule) {
+          second = await Iroh.traceModule(code, {
+            events: eventsArg,
+            maxEvents: maxEvents,
+            onEvent: (line) => { secondEvents.push(line); },
+            filename: file || undefined,
+          });
+        } else {
+          second = await Iroh.traceAsync(code, {
+            events: eventsArg,
+            maxEvents: maxEvents,
+            onEvent: (line) => { secondEvents.push(line); },
+          });
+        }
+        secondResult = Iroh.safeValue(second.result, 4, new Set());
+      } catch (e2) {
+        secondError = e2;
+      }
+      if (secondError !== null) {
+        verifyOutcome = {
+          ok: false,
+          events: collected.length,
+          firstDiff: null,
+          note: "second run threw: " + (secondError.message || String(secondError)),
+        };
+      } else {
+        let firstJSON = JSON.stringify({ events: collected, result: result });
+        let secondJSON = JSON.stringify({ events: secondEvents, result: secondResult });
+        if (firstJSON === secondJSON) {
+          verifyOutcome = { ok: true, events: collected.length };
+        } else {
+          let firstDiff = null;
+          let n = Math.min(collected.length, secondEvents.length);
+          for (let ii = 0; ii < n; ++ii) {
+            if (JSON.stringify(collected[ii]) !== JSON.stringify(secondEvents[ii])) {
+              firstDiff = ii;
+              break;
+            }
+          }
+          if (firstDiff === null) firstDiff = n;
+          verifyOutcome = { ok: false, events: collected.length, firstDiff: firstDiff };
+        }
+      }
     }
   } else {
     // Native tracers need a real file. From stdin, write the code to
@@ -905,6 +1024,13 @@ async function main() {
   }
   if (wantResult) {
     printLine({ type: "result", value: result });
+  }
+  if (verifyOutcome !== null) {
+    printLine(Object.assign({ type: "verify" }, verifyOutcome));
+    if (!verifyOutcome.ok) {
+      process.exitCode = 1;
+      return;
+    }
   }
   if (analyzeFlag) {
     // The analysis runs over the collected events, with the source

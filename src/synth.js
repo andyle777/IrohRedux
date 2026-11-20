@@ -1155,6 +1155,16 @@ export function synthesize(code, options) {
     for (let ii = 0; ii < lf.length; ++ii) addFinding(lf[ii], allRuns[rr].stage);
   }
 
+  // Every candidate run's Stage is released now that the findings are
+  // built (site info was resolved from the stages above). The stages
+  // are needed during synthesis — remapEvent and the site lookups read
+  // them per run — so they cannot be released per run, only here at
+  // the end. Before 1.1.1 every one stayed registered in Iroh.stages
+  // forever, so a synthesis over many runs retained every trace.
+  for (let rr = 0; rr < allRuns.length; ++rr) {
+    runInternals.releaseTraceRun(iroh, allRuns[rr]);
+  }
+
   let coverage = {
     covered: coveredArms,
     total: totalArms,
