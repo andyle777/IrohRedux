@@ -392,6 +392,60 @@ export interface ScanTraceOptions extends TraceOptions {
   includeEvents?: boolean;
 }
 
+// --- 0.9.0: live wire AI analysis mode (src/live.js) -----------------------
+
+export interface LiveAnalyzerOptions extends AnalyzeOptions {
+  /** Which language the trace came from (default "javascript"). */
+  language?: "javascript" | "python" | "cpp";
+}
+
+/** A finding that fired live: the batch finding plus where it tripped. */
+export interface LiveFinding extends AnalysisFinding {
+  /** 0-based index of the event that tripped this finding. */
+  firedAt: number;
+  /**
+   * Present on findings that can only be decided at stream end
+   * (ZERO_ITERATION_LOOP, ONE_SIDED_BRANCH): why they waited.
+   */
+  note?: string;
+}
+
+/** Progress so far, from snapshot() (no scores — those are final). */
+export interface LiveSnapshot {
+  /** Events fed so far. */
+  events: number;
+  /** Findings fired so far, in fire order. */
+  findings: LiveFinding[];
+  /** The window classification over the events so far. */
+  neuron: NeuronClassification;
+  /** The vector over the events so far. */
+  vectors: TraceVector;
+  finished: false;
+}
+
+/** The final summary, from finish(): the batch analysis + vectors. */
+export interface LiveSummary extends AnalysisResult {
+  /** The batch-equal findings (the final tally). */
+  findings: AnalysisFinding[];
+  /** The trace refracted into a feature vector. */
+  vectors: TraceVector;
+  /** The summary adds the trace language. */
+  summary: AnalysisSummary & { language: "javascript" | "python" | "cpp" };
+  finished: true;
+}
+
+/** An incremental analyzer: feed events, get findings as they trip. */
+export interface LiveAnalyzer {
+  /** Feed one event; returns the findings that fired on it (usually []). */
+  feed(event: TraceEvent): LiveFinding[];
+  /** All findings fired so far, in fire order. */
+  findings(): LiveFinding[];
+  /** Progress so far (no scores — those are final). */
+  snapshot(): LiveSnapshot | LiveSummary;
+  /** Finish the stream: the final summary (batch-equal findings + scores + vectors). */
+  finish(): LiveSummary;
+}
+
 // --- 0.8.0: hybrid translation engine (src/translate.js) -----------------
 
 export type TranslateFrom = "javascript" | "python" | "cpp";
@@ -565,6 +619,21 @@ export interface IrohAPI {
   scanTraceAsync(code: string, options?: ScanTraceOptions): Promise<ScanResult>;
   /** Module version of scanTrace(), via traceModule(). Node only. */
   scanModule(code: string, options?: ScanTraceOptions): Promise<ScanResult>;
+
+  /**
+   * Live wire AI analysis mode (0.9.0): analysis that runs WHILE the
+   * program runs. Feed events as they arrive; findings fire the moment
+   * their threshold trips (HOT_LOOP, DEEP_RECURSION, REPEATED_SEQUENCE,
+   * THROWING_PATH), each carrying `firedAt` and the evidence as of the
+   * trip. Findings that need the complete trace (ZERO_ITERATION_LOOP,
+   * ONE_SIDED_BRANCH) fire at finish() with a `note` saying so. The
+   * fired findings' codes equal batch analyze() codes on the same
+   * complete trace, and finish() returns the batch analysis itself
+   * (findings, scores, summary, neuron) plus the vector — so live vs
+   * batch agreement holds by construction. Deterministic: the same
+   * events give the same findings in the same order, twice.
+   */
+  liveAnalyzer(options?: LiveAnalyzerOptions): LiveAnalyzer;
 
   /**
    * Hybrid translation engine (0.8.0): JavaScript -> Python / C++

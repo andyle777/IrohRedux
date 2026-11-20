@@ -292,6 +292,36 @@ no model, no vector DB, no new dependencies. `Iroh.scanTrace(code)`,
 `Iroh.euclideanDistance(a, b)` are the library forms; identical traces
 have distance exactly 0. Same schema for JS, Python, and C++.
 
+### Watch it live (0.9.0)
+
+Scan is analyze-after-the-fact. The live wire is analysis WHILE the
+program runs — an AI watches the program and gets findings the moment
+they trip:
+
+```sh
+node cli/iroh.js program.js --live
+```
+
+```json
+{"type":"live-finding","code":"HOT_LOOP","severity":"warning","message":"Loop entered 100 times (threshold 100).","evidence":{"hash":1,"kind":"ForStatement","iterations":100,"tests":100,"threshold":100},"neuron":{"label":"hot","score":0.0251,"features":{...}},"firedAt":505}
+```
+
+The finding fired at event 505 of 763 — the loop had only run 100
+iterations when the AI was told, not 150. Then a final
+`{"type":"live-summary",...}` line carries the batch-equal findings
+(the final tally: 150 iterations), the scorecard, and the vector. The
+library form is `Iroh.liveAnalyzer(options)` with `.feed(event)` and
+`.snapshot()` / `.findings()` / `.finish()`. Two findings need the
+complete trace — `ZERO_ITERATION_LOOP` (a loop could still be entered)
+and `ONE_SIDED_BRANCH` (a later test could take the other arm) — so
+they fire at stream end with a `note` saying so, never a wrong early
+call. The fired findings' codes always equal the batch `analyze()`
+codes on the same complete trace, and the summary IS the batch
+analysis, so live vs batch agreement holds by construction. Same
+events give the same findings in the same order, twice. For Python
+and C++ the live lines print after the run, because the native tracers
+buffer their events; for JavaScript they stream as the program runs.
+
 ### What you get
 
 - **Every event, live.** Calls, ifs, loops, assignments, allocations, awaits —

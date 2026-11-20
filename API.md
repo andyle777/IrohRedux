@@ -138,6 +138,38 @@ traces. `scanTrace(code, options)` / `scanTraceAsync(code, options)` /
 (mirroring the analyzeTrace family; `options.analyze.source` defaults to
 the code). The CLI `--scan` flag is how Python and C++ traces reach it.
 
+``liveAnalyzer(options)``: Live wire AI analysis mode (0.9.0) —
+analysis that runs WHILE the program runs. Returns an analyzer with
+`feed(event)` (returns the findings that fired on that event, usually
+`[]`), `findings()` (all findings fired so far, in fire order),
+`snapshot()` (progress so far: event count, findings fired, the window
+classification and the vector over the events so far — no scores,
+those are final), and `finish()` (the final summary: the batch
+analysis `{ findings, scores, summary, neuron }` plus `vectors` and
+`finished: true`). A finding fires the moment its threshold trips:
+`HOT_LOOP` when a loop's true-test count reaches `hotLoopThreshold`,
+`DEEP_RECURSION` when a `FUNCTION_ENTER` indent reaches
+`deepRecursionThreshold`, `REPEATED_SEQUENCE` when a call sequence
+reaches `repeatSequenceMinOccurrences` (the first sequence to reach it;
+at most one live `REPEATED_SEQUENCE`), `THROWING_PATH` on the first
+`CATCH_ENTER`. Each fired finding is the batch finding plus `firedAt`
+(the 0-based index of the event that tripped it) and the evidence as
+of the trip — the counts are the counts so far, and the neuron label is
+the window classification over the events so far. Two findings cannot
+be decided incrementally, so they fire at `finish()` with a `note`
+saying so, never a wrong early call: `ZERO_ITERATION_LOOP` and
+`ONE_SIDED_BRANCH`. The fired findings' codes equal the batch
+`analyze()` codes on the same complete trace, and `finish()` returns
+the batch analysis itself, so live vs batch agreement holds by
+construction. Deterministic: the same events give the same findings in
+the same order, twice. `feed()` after `finish()` throws. The CLI
+`--live` flag streams `{"type":"live-finding",...}` lines as they fire
+(suppressing the event flood, like `--scan`), then a final
+`{"type":"live-summary",...}` after the result line; for Python/C++
+the live lines print after the run, because the native tracers buffer
+their events. Options are the `analyze()` thresholds plus `source`
+(for the final scorecard) and `language` (default `\"javascript\"`).
+
 ``translate(code, options)``: Hybrid translation engine (0.8.0). Returns
 `{ code, report }` where `report` is `{ ok, from, to, staticOnly, clean,
 assumptions, unsupported, notes }`. JavaScript out (`to: "python" |

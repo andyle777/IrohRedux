@@ -12,6 +12,7 @@
 //   node cli/iroh.js program.cpp [--lang cpp]
 //   node cli/iroh.js program.js --analyze
 //   node cli/iroh.js program.py --scan
+//   node cli/iroh.js program.js --live
 //   node cli/iroh.js program.js --translate python
 //   node cli/iroh.js program.py --translate javascript
 //
@@ -25,6 +26,10 @@
 //   {"type":"result","value":6}
 //   {"type":"analysis","findings":[...],"scores":{...},"summary":{...},"neuron":{...}}
 //   {"type":"scan","vectors":{...},"findings":[...],"scores":{...},"summary":{...}}
+//   {"type":"live-finding","code":"HOT_LOOP","severity":"warning",
+//    "message":"...","evidence":{...},"neuron":{...},"firedAt":505}
+//   {"type":"live-summary","findings":[...],"scores":{...},"summary":{...},
+//    "neuron":{...},"vectors":{...},"finished":true}
 //   {"type":"translation","from":"javascript","to":"python","code":"...","report":{...}}
 //
 // --analyze appends an analysis line (see src/analyze.js) after the
@@ -32,7 +37,18 @@
 // of the raw event flood: the scan runs trace -> analyze -> vector in
 // one pass and emits { vectors, findings, scores, summary } — no event
 // lines are printed in scan mode unless --include-events embeds the
-// raw events in the scan document. --translate skips tracing and
+// raw events in the scan document. --live (see src/live.js) streams
+// {"type":"live-finding",...} lines as findings trip while the program
+// runs — HOT_LOOP when a loop's iteration count crosses its threshold,
+// DEEP_RECURSION when call depth crosses its threshold — then a final
+// {"type":"live-summary",...} with the batch-equal findings, the
+// scorecard and the vector. Each live finding carries `firedAt` (the
+// 0-based index of the event that tripped it) and the evidence as of
+// the trip; findings that need the complete trace (ZERO_ITERATION_LOOP,
+// ONE_SIDED_BRANCH) fire in the summary instead, with a `note` saying
+// so. For JavaScript the live lines stream as the program runs; for
+// Python/C++ they print after the run, because the native tracers
+// buffer their events. --translate skips tracing and
 // translates the program instead (see src/translate.js); it takes
 // precedence over --events and --module, and exits 1 when the report
 // lists anything unsupported. --from defaults by file extension (.py
@@ -121,7 +137,9 @@ function printUsage() {
     "--analyze appends an analysis line after the result line.\n" +
     "--scan appends ONE scan line { vectors, findings, scores, summary }\n" +
     "instead of the event flood; --include-events embeds the raw events\n" +
-    "in the scan document. --lang python|cpp|javascript selects the\n" +
+    "in the scan document. --live streams live-finding lines as findings\n" +
+    "trip while the program runs, then a final live-summary line with\n" +
+    "the findings, scores and vectors. --lang python|cpp|javascript selects the\n" +
     "tracer (default: inferred from the file extension).\n" +
     "--translate prints one translation line instead of tracing; --from\n" +
     "defaults by file extension (.py -> python, .cpp/.cc/.cxx -> cpp).\n"
@@ -267,6 +285,7 @@ async function main() {
   let analyzeFlag = false;
   let scanFlag = false;
   let includeEventsFlag = false;
+  let liveFlag = false;
   let translateTo = null;
   let fromArg = null;
   let langArg = null;
@@ -292,6 +311,8 @@ async function main() {
       scanFlag = true;
     } else if (arg === "--include-events") {
       includeEventsFlag = true;
+    } else if (arg === "--live") {
+      liveFlag = true;
     } else if (arg === "--lang") {
       langArg = args[++ii];
       if (langArg === void 0) { printUsage(); process.exitCode = 2; return; }
@@ -409,6 +430,18 @@ async function main() {
   let collected = [];
   let result = null;
   let traceError = null;
+  // The live wire analyzer (see src/live.js): findings fire as events
+  // arrive. For JavaScript the events stream through it as the program
+  // runs; for Python/C++ they are fed after the run, because the
+  // native tracers buffer their events.
+  let liveAnalyzer = liveFlag
+    ? Iroh.liveAnalyzer({ language: language, source: code })
+    : null;
+  function printLiveFindings(fired) {
+    for (let ii = 0; ii < fired.length; ++ii) {
+      printLine(Object.assign({ type: "live-finding" }, fired[ii]));
+    }
+  }
   if (language === "javascript") {
     // Modules: an explicit --module, or a .mjs file. Scripts (including
     // top-level await) go through traceAsync(); modules through
@@ -421,7 +454,11 @@ async function main() {
           events: eventsArg,
           onEvent: (line) => {
             collected.push(line);
-            if (!scanFlag) printLine(line);
+            if (liveFlag) {
+              printLiveFindings(liveAnalyzer.feed(line));
+            } else if (!scanFlag) {
+              printLine(line);
+            }
           },
           filename: file || undefined,
         });
@@ -430,7 +467,11 @@ async function main() {
           events: eventsArg,
           onEvent: (line) => {
             collected.push(line);
-            if (!scanFlag) printLine(line);
+            if (liveFlag) {
+              printLiveFindings(liveAnalyzer.feed(line));
+            } else if (!scanFlag) {
+              printLine(line);
+            }
           },
         });
       }
@@ -468,8 +509,14 @@ async function main() {
       }
     }
     // Python and C++ traces print their events after the run, in
-    // order — unless scan mode suppresses the flood.
-    if (!scanFlag) {
+    // order — unless scan mode suppresses the flood, or live mode
+    // prints live-finding lines instead (fed after the run, because
+    // the native tracers buffer their events).
+    if (liveFlag) {
+      for (let ii = 0; ii < collected.length; ++ii) {
+        printLiveFindings(liveAnalyzer.feed(collected[ii]));
+      }
+    } else if (!scanFlag) {
       for (let ii = 0; ii < collected.length; ++ii) printLine(collected[ii]);
     }
   }
@@ -499,6 +546,13 @@ async function main() {
       includeEvents: includeEventsFlag,
     });
     printLine(Object.assign({ type: "scan" }, doc));
+  }
+  if (liveFlag) {
+    // The final live summary: the batch-equal findings (including the
+    // stream-end ones, with their notes), the scorecard and the vector.
+    // Not printed when the trace itself errored — same as --analyze.
+    let summary = liveAnalyzer.finish();
+    printLine(Object.assign({ type: "live-summary" }, summary));
   }
 }
 

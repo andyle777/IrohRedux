@@ -178,6 +178,32 @@ Library forms: `Iroh.scanTrace(code)`, `Iroh.scan(events)`,
 0. These are FEATURE VECTORS, not LLM embeddings: no model, no vector
 DB, no new dependencies.
 
+## Watch it live (0.9.0)
+
+Scan is analyze-after-the-fact. The live wire analyzes WHILE the
+program runs — findings stream the moment they trip:
+
+```sh
+node cli/iroh.js program.js --live
+# {"type":"live-finding","code":"HOT_LOOP",...,"firedAt":505}
+# {"type":"result","value":11175}
+# {"type":"live-summary","findings":[...],"scores":{...},"summary":{...},"neuron":{...},"vectors":{...},"finished":true}
+```
+
+A 150-iteration loop fires `HOT_LOOP` at event 505, when it has run
+100 iterations — the AI is told mid-run, not after. The library form
+is `Iroh.liveAnalyzer(options)`: `.feed(event)` returns the findings
+that fired on that event, `.findings()` lists all fired so far,
+`.snapshot()` reports progress (no scores — those are final), and
+`.finish()` returns the final summary. The fired findings' codes always
+equal the batch `analyze()` codes on the same complete trace, and the
+summary IS the batch analysis (findings, scores, summary, neuron) plus
+the vector — so live vs batch agreement holds by construction. Two
+findings need the complete trace and fire at stream end with a `note`
+saying so: `ZERO_ITERATION_LOOP` and `ONE_SIDED_BRANCH`. For Python
+and C++ the live lines print after the run, because the native tracers
+buffer their events; for JavaScript they stream as the program runs.
+
 The rest of this guide uses the classic Stage API, which is still fully
 supported and gives you live listeners that can change values mid-flight.
 

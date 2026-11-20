@@ -8,8 +8,8 @@ now trace natively, through the same JSON event shape, so
 trace itself refracts into a deterministic feature vector, with a scan
 mode that turns trace → analyze → vector into ONE compact JSON document
 for AI consumers — no raw event flood unless asked for. All 206 prior
-tests still pass; the suite is now 265 tests (231 Node + 25 Python + 9 C++),
-after the hardening pass below.
+tests still pass; the suite is now 275 tests (241 Node + 25 Python + 9 C++),
+after the hardening pass and the live wire mode below.
 
 ### Native Python tracer — `python/iroh/trace.py` (stdlib only)
 
@@ -128,6 +128,13 @@ after the hardening pass below.
   legs translate from source alone). Native Python/C++ tracers exist
   now, but translation does not use them — the docs that said "there
   is no tracer for those languages" now say so correctly.
+
+### Live wire AI analysis mode — `src/live.js`, CLI `--live`
+
+- Analysis that runs WHILE the program runs, not after: `Iroh.liveAnalyzer(options)` with `.feed(event)` (returns the findings that fired on that event), `.findings()` (all fired so far, in fire order), `.snapshot()` (progress: event count, findings fired, the window classification and the vector so far — no scores, those are final), and `.finish()` (the final summary). A finding fires the moment its threshold trips: `HOT_LOOP` when a loop's true-test count reaches 100, `DEEP_RECURSION` when a `FUNCTION_ENTER` indent reaches 20, `REPEATED_SEQUENCE` when a call sequence reaches 3 occurrences (the first sequence to reach it; at most one live finding), `THROWING_PATH` on the first `CATCH_ENTER`. Each fired finding carries `firedAt` (the 0-based index of the event that tripped it) and the evidence as of the trip.
+- Two findings cannot be decided incrementally, so they fire at stream end with a `note` saying so, never a wrong early call: `ZERO_ITERATION_LOOP` (a loop could still be entered later) and `ONE_SIDED_BRANCH` (a later test could take the other arm).
+- Consistency holds by construction, not by re-implementation: the fired findings' codes equal the batch `analyze()` codes on the same complete trace, and `finish()` returns the batch analysis itself (findings, scores, summary, neuron) plus the `toVector()` projection. Live evidence is the counts as of the trip; the summary is the final tally. Deterministic: the same events give the same findings in the same order, twice. `feed()` after `finish()` throws.
+- CLI: `node cli/iroh.js program.js --live` streams `{"type":"live-finding",...}` lines as findings trip (suppressing the event flood, like `--scan`), then a final `{"type":"live-summary",...}` after the result line. A 150-iteration JS loop fires `HOT_LOOP` at event 505 of 763, with 100 iterations — the AI is told mid-run. Works for Python and C++ traces too (same event shape); their live lines print after the run, because the native tracers buffer their events. Proven end to end on all three languages; 10 new tests in `tests/live.test.js` (mid-stream firing, live vs batch agreement across every finding code, determinism, stream-end notes, CLI on JS/Python/C++).
 
 ### Hardening pass (0.9.0, same release — audit-and-patch on the 0.9.0 additions only)
 

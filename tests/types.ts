@@ -15,6 +15,10 @@ import type {
   TraceVector,
   VectorComparison,
   ScanResult,
+  LiveAnalyzer,
+  LiveFinding,
+  LiveSnapshot,
+  LiveSummary,
   TranslateResult,
 } from "../index";
 
@@ -115,6 +119,21 @@ const scanLanguage: "javascript" | "python" | "cpp" = scanned.summary.language;
 void scanLanguage;
 const truncated: number = scanned.summary.findingsTruncated;
 void truncated;
+
+// 0.9.0: live wire AI analysis mode.
+const live: LiveAnalyzer = Iroh.liveAnalyzer({ language: "python" });
+const liveFired: LiveFinding[] = live.feed(sync.events[0]);
+void liveFired;
+const liveFindings: LiveFinding[] = live.findings();
+const liveFiredAt: number = liveFindings[0].firedAt;
+void liveFiredAt;
+const liveSnap: LiveSnapshot | LiveSummary = live.snapshot();
+void liveSnap;
+const liveFin: LiveSummary = live.finish();
+const liveFinLanguage: "javascript" | "python" | "cpp" = liveFin.summary.language;
+void liveFinLanguage;
+const liveFinVectors: TraceVector = liveFin.vectors;
+void liveFinVectors;
 
 const traced: AnalyzeTraceResult = Iroh.analyzeTrace("let s = 0; s;", {
   analyze: { source: "let s = 0; s;" },
