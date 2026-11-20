@@ -134,29 +134,43 @@ test("summary wraps the legs in the brief's shape", () => {
   assert.equal(report.legs.length, 1);
 });
 
-test("npm test wrote a suite-summary file, and it matches the last run", () => {
+test("npm test wrote a suite-summary file, and it matches the last run", (t) => {
   let file = path.join(__dirname, "..", "test-results", "suite-summary.json");
-  assert.ok(fs.existsSync(file), "test-results/suite-summary.json should exist after npm test");
+  // No previous run on a fresh checkout (CI included): the file is
+  // written at the END of tests/index.js, after this leg has run, so
+  // it cannot exist yet. That is not a failure — the post-run gate
+  // (scripts/check-suite-summary.mjs, run as `npm run check:summary`
+  // right after `npm test` in CI) is what checks the file this run
+  // just wrote. Skipping here keeps a fresh checkout green; the gate
+  // keeps a missing or bad file from passing silently.
+  if (!fs.existsSync(file)) {
+    t.skip("no previous suite-summary.json (fresh checkout); the post-run check covers this run's file");
+    return;
+  }
   let report = JSON.parse(fs.readFileSync(file, "utf8"));
   assert.equal(report.type, "suite-summary");
   assert.equal(report.legs.length, 4);
   let byLeg = {};
   for (let leg of report.legs) byLeg[leg.leg] = leg;
-  // On this box (Node 24, python3, g++) every leg runs. The ran
-  // counts are the current suite sizes.
-  assert.equal(byLeg.node.ran, 433);
-  assert.equal(byLeg.python.ran, 25);
-  assert.equal(byLeg.irohscript.ran, 230);
-  assert.equal(byLeg.cpp.ran, 9);
-  // Deliberately NOT asserting failed === 0 or skipped === 0 here:
-  // the file records the PREVIOUS run, and this test's own failure
-  // (if it ever failed) would be in that file — asserting the
-  // previous run was clean would make one failure permanent. The
-  // previous run's cleanliness is what `npm test`'s exit code
-  // already proves.
-  for (let leg of report.legs) {
-    assert.equal(typeof leg.failed, "number");
-    assert.equal(typeof leg.skipped, "number");
-    assert.ok(Array.isArray(leg.skips));
+  for (let name of ["node", "python", "irohscript", "cpp"]) {
+    assert.ok(byLeg[name], "leg " + name + " should be in the summary");
+    // Deliberately NOT asserting exact `ran` counts here, and NOT
+    // asserting failed === 0: the file records the PREVIOUS run, and
+    // the suite grows whenever a test is added — a hardcoded count
+    // passes on the run that adds the test (it reads the old file)
+    // and then fails every run after it, which is exactly how CI
+    // went red on all 28 runs of 1.1.1 (node ran 435, the test
+    // demanded 433). A previous run's failure is likewise what `npm
+    // test`'s exit code already proves. What this test does prove is
+    // the shape: four legs, numeric counts, and a leg that ran
+    // nothing naming its reason instead of passing silently (the F2
+    // rule — a missing leg is did-not-run, never a pass).
+    assert.equal(typeof byLeg[name].ran, "number");
+    assert.equal(typeof byLeg[name].failed, "number");
+    assert.equal(typeof byLeg[name].skipped, "number");
+    assert.ok(Array.isArray(byLeg[name].skips));
+    if (byLeg[name].ran === 0) {
+      assert.ok(byLeg[name].skips.length > 0, "leg " + name + " ran 0 tests and named no reason");
+    }
   }
 });
