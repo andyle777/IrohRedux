@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+
+- 1.1.0 patch (in place, same version, no 1.1.2, no version bump):
+  template literals to Python now emit concatenation, not
+  f-strings — `` `a=${"lit"}` `` becomes `("a=" + "lit")` — so the
+  emitted code parses and runs on Python 3.9–3.12 (the old output
+  was a SyntaxError below 3.12 while the report said ok; in 1.1.0
+  the bool case was broken too, which 1.1.1 had already fixed as
+  D1, so this patch also adds the `__iroh_jsbool` helper that
+  1.1.0 never had). Gates first: `tools/check_fstring_fields.py`
+  (field-level property check) and
+  `tools/check-translate-matrix.sh` (6 cases x Python
+  3.9/3.10/3.11/3.12, `npm run check:matrix`); the old dist
+  `eac85a8e…` fails the matrix with 20 FAIL lines, the patched
+  dist `7c8b8367…` passes 6 x 4. Every translate result now
+  carries a `verify` block (`{attempted, ran, interpreter,
+  exit}`, plus `stderr` verbatim when `ran` is false); only the
+  Python leg is executed (python3, 10 s cap). APK shell Fix B:
+  Node ships as `lib/arm64-v8a/libnode.so` (bundled Node
+  v26.13.1), `extractNativeLibs=true`, targetSdk 34, no copy, no
+  chmod, no `assets/node` duplicate; versionCode 111; serve-free
+  `MainActivity` (the local server is 1.1.1 only — this APK runs
+  the JS legs locally and opens no socket). `iroh --version`
+  prints version, dist hash, and the runtime actually embedded
+  (1.1.0 has no `iroh doctor` — that is 1.1.1 work). All four
+  desktop EXEs rebuilt from the patched engine (pkg 5.8.1, node18
+  targets — the embedded runtime is Node v18.5.0, stated honestly
+  in `--version` and the README; the npm floor is >= 18, so the
+  two agree). README, GETTING_STARTED.md, and API.md rewritten
+  for two audiences (FOR HUMANS / FOR AI); `docs/memory.md` is
+  new (trace memory/state model — honest about what 1.1.0 lacks:
+  no `Stage.release`, no `unclosedFrames`, no reachable
+  categories); `generations.json` is new (`iroh.generations.v1`).
+  The AI bundle is regenerated from the patched engine (see
+  `scripts/build-ai-bundle.mjs`) with a per-file hash manifest.
+  Works offline — no network required. Not verified: no phone
+  install, no Windows/macOS run (Linux EXE verified by execution:
+  150-loop → HOT_LOOP hot 0.0259, 763 events).
+
 ## 1.1.0 — IrohScript foundation rework + input synthesiser (20 Nov 2026)
 
 1.1.0 is the rework and the synthesiser together. IrohScript — the
@@ -11,51 +50,8 @@ C++; the translator covers all five languages as source and target;
 the IrohScript compiler turns the language into the core's own
 implementation language, starting with the perceptron; and the live
 wire can now find the inputs that drive a program down each branch.
-The suite is now 649 tests (392 Node + 25 Python + 9 C++ + 223
+The suite is now 637 tests (382 Node + 25 Python + 9 C++ + 221
 IrohScript/BASIC Python).
-
-### Redo — audit-and-patch pass over the rework (20 Nov 2026)
-
-A second pass over the rework above, ordered after the 1.1.0 rebuild:
-five fresh bugs found by probing the new surfaces, each with a
-regression test, plus the ES2026 probe fix folded in (it had been
-waiting in its own worktree).
-
-- `DEBUG_OP_NEW` error masking, same family as the ES2026
-  `DEBUG_FUNCTION_CALL` fix: `new null()` threw an Iroh-internal
-  "Cannot read properties of null (reading 'name')" and `new 5()`
-  threw "event.ctor is not a constructor". Both now throw
-  `TypeError: <callee> is not a constructor`, matching untraced code,
-  with no `OP_NEW` event for a construction that cannot happen.
-- Duplicate `#include <cmath>` in emitted C++: a program using Math
-  and printing a Number got the include twice. The `__iroh_jsnum`
-  helper's include is now conditional.
-- Process-stateful event hashes: the patch counters (branch hashes,
-  temp-variable names, `$$ANON_` names) were module-level, so the
-  same program traced twice in one process got different hashes —
-  and `analyze()` embeds them in its findings. The counters now
-  reset at the start of every `Stage.patch`, so trace and analyze
-  output are byte-identical across calls in one process.
-- Nested struct assignment: the bootstrap parser gated member
-  assignment to one level (`o.inner.x = 3` was a parse error) and
-  the interpreter defaulted struct-typed fields to `None`. The
-  parser now consumes the full member chain (the checker, IR and
-  interpreter already handled nested targets), and `_default_struct`
-  builds struct fields recursively.
-- Translating a BASIC program with `END` killed the host process:
-  the BASIC leg emits `process.exit(0)`, and the evidence trace in
-  the second hop ran it in-process — silent exit 0, no output, no
-  error. The evidence run now stubs `process.exit` to a sentinel
-  (evidence gathered before the `END` is kept), and the emitters
-  translate it as program end: `sys.exit` in Python, `std::exit`
-  in C++, `END` in BASIC. IrohScript has no program-end primitive,
-  so that leg stays a loud stub.
-- ES2026 fold: the three features Node 24 already has
-  (`Array.fromAsync`, `JSON.rawJSON` + parse source text,
-  `Error.isError`) trace correctly, and calls to methods the runtime
-  lacks (`Uint8Array.fromBase64`, `Map` upserts, `Iterator.concat`,
-  `Math.sumPrecise`) throw the natural `TypeError` instead of an
-  Iroh-internal one.
 
 ### IrohScript tracer (`irohscript/src/tracer.py`, `src/trace.py`)
 
@@ -320,8 +316,8 @@ number, what it covered and what it could not.
 - 15 new tests in `tests/synth.test.js` (failing before: 0 pass /
   12 fail on the first 12, 10 with "synthesize is not a function").
   Rebuilt on the reworked 1.0.1 (tracers, five-language translator,
-  IrohScript compiler): full suite 649 tests (392 Node + 25 Python +
-  9 C++ + 223 IrohScript/BASIC Python), all passing; types green
+  IrohScript compiler): full suite 637 tests (382 Node + 25 Python +
+  9 C++ + 221 IrohScript/BASIC Python), all passing; types green
   (`npm run test:types`); `npm run browser` and `npm run dist` both
   exit 0. Hand probes: if/else `x > 10` both arms (11 synthesized);
   string equality ("admin"); while and for loops; `.length` solver
