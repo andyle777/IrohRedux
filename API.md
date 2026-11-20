@@ -770,7 +770,7 @@ every flag in `iroh --help` appears in it.
 - Engine: IrohRedux 1.0.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. The engine is unchanged by the patch.
   `dist/iroh-node.js` SHA-256:
-  `1a4ea7c00553c262350997eb6f93c7861f0a415d0e170b3ba68bd47280862602`.
+  `4e2d2c2a5815dae5be79bade6aed3b3d5f8e65e93d4be26295793c579c52ef61`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set.
