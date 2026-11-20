@@ -96,3 +96,9 @@ cpp/test_filter
 # Python bytecode
 __pycache__/
 *.pyc
+# AI bundle build output (scripts/build-ai-bundle.mjs, local artifact)
+ai-bundle/
+
+# Standalone Python builds for the translate execution-matrix gate
+# (indygreg python-build-standalone install_only tarballs; NOT checked in)
+.pythons/
