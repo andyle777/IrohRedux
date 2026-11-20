@@ -29,16 +29,9 @@ jobs:
       - run: npm run check:api-txt
       - run: npm run build:ai-bundle /tmp/ai-bundle-ci
 
-  # 1.1.1 patch: the translate execution-matrix gate (Fix Spec 3.6
-  # layer 2). One job, all four interpreters installed side by side
-  # (setup-python run four times); the gate requires every one and
-  # FAILS if any is missing — it is never skipped, and a per-version
-  # matrix would leave three interpreters absent in each leg. The
-  # emitted Python must run and match node on 3.9, 3.10, 3.11 and
-  # 3.12: a single-version CI run cannot see the f-string class
-  # (3.12 parses what 3.9 rejects).
+  # 1.1.1 patch: execution-matrix gate for the Python translator.
   translate-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
