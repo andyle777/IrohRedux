@@ -32,16 +32,16 @@
   },
   "scripts": {
     "dist": "npm run build && npm run browser",
-    "build": "rollup -c rollup/rollup.config.cjs.js && rollup -c rollup/rollup.config.es.js",
-    "browser": "rollup -c rollup/rollup.config.iife.js",
+    "build": "rollup -c rollup/rollup.config.cjs.mjs && rollup -c rollup/rollup.config.es.mjs",
+    "browser": "rollup -c rollup/rollup.config.iife.mjs",
     "test": "node tests/index.js"
   },
   "devDependencies": {
-    "rollup": "^0.47.2",
-    "rollup-plugin-json": "^2.3.0",
-    "rollup-plugin-buble": "^0.15.0",
-    "rollup-plugin-commonjs": "^8.1.0",
-    "rollup-plugin-node-resolve": "^3.0.0"
+    "@rollup/plugin-buble": "^1.0.3",
+    "@rollup/plugin-commonjs": "^29.0.3",
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "rollup": "^4.68.7"
   },
   "dependencies": {
     "acorn": "^5.1.1",
