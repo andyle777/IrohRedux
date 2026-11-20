@@ -122,7 +122,7 @@ a single header — just `#include "iroh.hpp"`.
 
 ### Use it as an AI
 
-Each release ships a **py / txt / json bundle** alongside the binaries:
+Each release ships an **AI bundle** (`iroh-1.1.1-ai-bundle.zip`) alongside the binaries — py / txt / json inside:
 
 - **.py** — the Python client (`python/iroh`: `run`, `trace_python`,
   `scan_python` and friends) and the native tracers
@@ -141,7 +141,7 @@ Drive the CLI and read the events straight from JSON:
 ```python
 import json, subprocess
 
-proc = subprocess.run(["./iroh", "program.js", "--events", "CALL,IF"],
+proc = subprocess.run(["./iroh-1.1.1-linux", "program.js", "--events", "CALL,IF"],
                       capture_output=True, text=True)
 events = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
 calls = [e for e in events if e["event"] == "FUNCTION_CALL"]
@@ -159,10 +159,18 @@ doc["summary"]["neuron"]          # {"label": "hot", "score": 0.0259}
 ```
 
 `--scan` is the same document from the CLI
-(`./iroh program.js --scan`), and `--live` streams findings as they
-fire instead of after the run. Every number in a scan carries its
-denominator; findings are capped at 200 and the dropped count is
-reported, never hidden.
+(`./iroh-1.1.1-linux program.js --scan` — the binary name varies by
+platform: `iroh-1.1.1-linux`, `iroh-1.1.1-macos`,
+`iroh-1.1.1-macos-arm64`, `iroh-1.1.1-win.exe`), and `--live` streams
+findings as they fire instead of after the run. Every number in a scan
+carries its denominator: coverage is fired / reachable per tracer, so
+a C++ trace reads "2 of 2 reachable", not "2 of 30" — if a coverage
+number has no `reachable`, report it as unnormalised, never as a
+share of 30. Findings are capped at 200 and the dropped count is
+reported as `summary.findingsTruncated`, never hidden. The trace
+memory/state model is documented in `txt/memory.md` in the bundle.
+`--verify` traces a JavaScript program twice and diffs the events
+and result. Everything works offline — no network required.
 
 ### Why dynamic analysis?
 
