@@ -89,17 +89,19 @@ const js = Iroh.translate("def add(a, b):\n    return a + b\n\nprint(add(2, 3))\
 // js.report.staticOnly === true
 ```
 
-`to` is `"python" | "cpp" | "javascript"`; `from` defaults to
+`to` is `"python" | "cpp" | "javascript" | "irohscript" | "basic"`; `from` defaults to
 `"javascript"`. The report lists what translated cleanly, what needed an
 assumption (with the trace evidence cited — C++ parameter types come from
 the first call's arguments), and what could not be translated. A function
 never called in the trace has no parameter types: pass them in
 `options.types`, or the report lists it unsupported. The CLI translates
 too: `node cli/iroh.js program.js --translate python` (exit 1 when
-anything was unsupported), and `--from` is inferred from `.py` / `.cpp`
-files.
+anything was unsupported), and `--from` is inferred from `.py` / `.cpp` /
+`.iroh` / `.bas` files. Direct legs run out of JavaScript to every other
+language; anything else goes two-hop via JavaScript and the report says
+so.
 
-## Trace Python and C++ natively (0.9.0) — and IrohScript and BASIC (1.0.1 rework)
+## Trace Python and C++ natively (0.9.0) — and IrohScript and BASIC (1.1.0)
 
 ```sh
 node cli/iroh.js program.py --analyze
@@ -198,7 +200,7 @@ with `language`, the neuron classification, and `findingsTruncated`
 reported, never hidden). Raw events ride along only with
 `--include-events`. A 20,000-iteration loop (100k+ raw events) scans to
 under 2% of the raw JSON bytes; scanning the same program twice gives
-byte-identical output. Same schema for JS, Python, and C++ traces.
+byte-identical output. Same schema for all five languages.
 Library forms: `Iroh.scanTrace(code)`, `Iroh.scan(events)`,
 `Iroh.toVector(events)`, `Iroh.cosineSimilarity(a, b)` /
 `Iroh.euclideanDistance(a, b)` — identical traces have distance exactly
