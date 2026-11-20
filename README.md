@@ -75,8 +75,6 @@ The APK manifest does not even request internet permission.
 
 ## Download — 1.1.1 patched (current)
 
-Each release ships an **AI bundle** (`iroh-1.1.1-ai-bundle.zip`) alongside the binaries — py / txt / json inside:
-
 Direct links to the [v1.1.1 release](https://github.com/andyle777/IrohRedux/releases/tag/v1.1.1). These are the patched assets, re-uploaded to the existing release — no new version, no new tag.
 
 - [iroh-1.1.1-linux](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1-linux) — Linux. The engine as a single executable, rebuilt from the patched tree. Includes `iroh serve` and `iroh node` — the laptop becomes a local node. JavaScript legs run standalone; Python, C++, IrohScript and BASIC legs need `python3` (and `g++` for C++).
@@ -329,44 +327,6 @@ on the machine (`python3` on PATH, `g++` on PATH).
   checks for updates, or downloads at first run. The APK manifest
   requests no permissions. Online availability changes nothing:
   there is no update check to fail.
-
-## Driving the packaged binary from Python
-
-Drive the CLI and read the events straight from JSON. The binary
-name varies by platform: `iroh-1.1.1-linux`, `iroh-1.1.1-macos`,
-`iroh-1.1.1-macos-arm64`, `iroh-1.1.1-win.exe`.
-
-```python
-import json, subprocess
-
-proc = subprocess.run(["./iroh-1.1.1-linux", "program.js", "--events", "CALL,IF"],
-                      capture_output=True, text=True)
-events = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
-calls = [e for e in events if e["event"] == "FUNCTION_CALL"]
-print(calls[0]["name"], calls[0]["arguments"])  # factorial [3]
-```
-
-Or take a whole scan document through the Python client:
-
-```python
-from iroh import scan
-
-doc = scan("let s = 0; for (let i = 0; i < 150; i++) { s += i; } s;")
-doc["findings"][0]["code"]        # "HOT_LOOP"
-doc["summary"]["neuron"]          # {"label": "hot", "score": 0.0259}
-```
-
-`--scan` is the same document from the CLI
-(`./iroh-1.1.1-linux program.js --scan`), and `--live` streams
-findings as they fire instead of after the run. Every number in a scan
-carries its denominator: coverage is fired / reachable per tracer, so
-a C++ trace reads "2 of 2 reachable", not "2 of 30" — if a coverage
-number has no `reachable`, report it as unnormalised, never as a
-share of 30. Findings are capped at 200 and the dropped count is
-reported as `summary.findingsTruncated`, never hidden. The trace
-memory/state model is documented in `txt/memory.md` in the bundle.
-`--verify` traces a JavaScript program twice and diffs the events
-and result. Everything works offline — no network required.
 
 ## CLI flags
 
