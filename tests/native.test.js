@@ -162,6 +162,39 @@ test("CLI --lang cpp traces factorial with resolved names", () => {
   }
 });
 
+// D2: a program with a static initialiser must not trace GCC's
+// translation-unit init as a user call. One static object generates
+// _GLOBAL__sub_I_main (init) and _GLOBAL__sub_D_main (destroy); before
+// the filter the top frame of the trace was _GLOBAL__sub_I_main, not
+// main. The unit rows in cpp/test_filter.cpp prove the classifier;
+// this row proves the trace itself is clean.
+const CPP_STATIC_INIT =
+  "#include <iostream>\n" +
+  "struct Greeter { Greeter() { std::cout << \"hi\" << std::endl; } };\n" +
+  "static Greeter g;\n" +
+  "int main() { return 0; }\n";
+
+test("D2: C++ trace with a static initialiser has no _GLOBAL__ frame", () => {
+  let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-native-"));
+  try {
+    let file = writeTemp(dir, "static.cpp", CPP_STATIC_INIT);
+    let { proc, lines } = runCliFile(file, ["--lang", "cpp"]);
+    assert.equal(proc.status, 0, proc.stderr);
+    let events = lines.filter((l) => l.type === "event");
+    assert.ok(events.length > 0, "expected trace events");
+    let globals = events.filter((e) => typeof e.name === "string" && e.name.indexOf("_GLOBAL__") === 0);
+    assert.equal(globals.length, 0, "found _GLOBAL__ frames: " + JSON.stringify(globals.map((g) => g.name)));
+    // The static object's constructor is user code, so it IS traced —
+    // it runs before main, at indent 0. What must not appear is the
+    // compiler-generated _GLOBAL__sub_I_main wrapper around it.
+    let calls = events.filter((e) => e.event === "FUNCTION_CALL");
+    assert.deepEqual(calls.map((c) => c.name), ["Greeter::Greeter()", "main"]);
+    assert.deepEqual(calls.map((c) => c.indent), [0, 0]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI infers cpp from a .cpp file without --lang", () => {
   let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-native-"));
   try {
@@ -187,9 +220,14 @@ test("C++ deep recursion analyzes to DEEP_RECURSION through --analyze", () => {
     assert.ok(deep, "expected DEEP_RECURSION, got " + JSON.stringify(analysis.findings.map((f) => f.code)));
     assert.equal(deep.evidence.maxDepth, 31);
     assert.equal(deep.evidence.name, "countdown(int)");
-    // Function-level only: coverage is honestly low (2 of 30).
+    // Function-level only: coverage is 2 of 2 reachable (CALL and
+    // FUNCTION), not 2 of 30 — the other 28 categories are
+    // unreachable for this tracer by design, not missed.
     assert.equal(analysis.scores.coverage.fired, 2);
+    assert.equal(analysis.scores.coverage.reachable, 2);
     assert.equal(analysis.scores.coverage.total, 30);
+    assert.equal(analysis.scores.coverage.value, 1);
+    assert.deepEqual(analysis.scores.coverage.missingCategories, []);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
