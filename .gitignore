@@ -86,8 +86,6 @@ $RECYCLE.BIN/
 
 www
 
-package-lock.json
-
 # C++ client build outputs
 cpp/example
 cpp/test_client

@@ -1,7 +1,6 @@
 # Minimal CI for IrohRedux (1.1.1, B4): one job, no matrix, no
-# caching. npm install, not npm ci — package-lock.json is gitignored
-# and not tracked in this repo, so there is no lockfile to install
-# from. The C++ leg needs g++, which ubuntu-latest ships.
+# caching. npm ci uses the tracked lockfile to keep CI builds reproducible.
+# The C++ leg needs g++, which ubuntu-latest ships.
 name: CI
 
 on:
@@ -22,7 +21,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: npm install
+      - run: npm ci
       - run: npm test
       - run: npm run check:summary
       - run: npm run check:dist
@@ -52,6 +51,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: npm install
+      - run: npm ci
       - run: npm run dist
       - run: tools/check-translate-matrix.sh
