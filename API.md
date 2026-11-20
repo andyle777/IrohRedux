@@ -399,7 +399,14 @@ it); `iroh capabilities --json` prints the same as one JSON line
 prints the last recorded test run (from
 `test-results/suite-summary.json`, written by `npm test`), the live
 toolchain versions, the dist hash, and the capabilities — it does not
-run the suite itself. Thin clients live in `python/` (stdlib only:
+run the suite itself. Two more flags (1.1.1): `--max-events N` caps
+the recorded events (JavaScript legs only — a runaway stops with an
+error line carrying the partial events; a program that catches every
+thrown value can defeat the stop), and `--verify` traces a JavaScript
+program twice and diffs the events and result as JSON, printing
+`{"type":"verify","ok":true,"events":N}` and exiting 1 on
+disagreement (JavaScript only; it does not combine with `--translate`,
+`--direct`, or `--synthesize`). Thin clients live in `python/` (stdlib only:
 `run(code, events=None)` → `(events, result)`,
 `trace_python(code)` / `trace_python_file(path)`,
 `scan(code)` / `scan_python(code)` / `scan_python_file(path)`) and
