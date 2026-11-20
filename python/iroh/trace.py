@@ -27,9 +27,12 @@ Two mechanisms, both stdlib:
   kind:file:line, so the same program always gets the same hashes.
 
 What v1 does NOT see (stated plainly, not hidden): per-assignment
-events — assignments are not instrumented, so no ASSIGN events fire
-(the JS engine's private-field and destructuring blind spots have a
-Python cousin: every assignment is a blind spot here). Comprehensions,
+events fire for simple Name targets only (``x = ...``, ``x += ...``,
+``x: int = ...``) — tuple targets, attributes and subscripts are not
+instrumented (the JS engine's private-field and destructuring blind
+spots have a Python cousin). The ASSIGN event carries the
+post-assignment value; JS compound assignments carry the RHS instead,
+so the two differ for ``+=`` and friends. Comprehensions,
 ``async for`` and lambdas' bodies are not loop/branch instrumented.
 Only the target file is traced; functions imported from other modules
 run untraced. The trace is single-threaded: ``threading.settrace`` is
@@ -67,7 +70,7 @@ KNOWN_CATEGORIES = {
 }
 
 # Categories this tracer can emit.
-EMITTED_CATEGORIES = {"CALL", "FUNCTION", "LOOP", "IF", "CATCH"}
+EMITTED_CATEGORIES = {"CALL", "FUNCTION", "LOOP", "IF", "CATCH", "ASSIGN"}
 
 # ---------------------------------------------------------------------------
 # Event sink (module state, reset per run)
@@ -181,6 +184,18 @@ def __iroh_catch(hash_):
     return None
 
 
+def __iroh_assign(hash_, name, value, op):
+    # value is the post-assignment value (read after the assignment
+    # ran, so a failed assignment emits nothing). It matches the JS
+    # plain-ASSIGN shape: object is the variable-name string, result
+    # is the new value. (JS compound assignments carry the RHS as
+    # result; Python carries the post-assignment value instead —
+    # the two are documented, not hidden.)
+    _emit("ASSIGN", "ASSIGN", "assign", hash_, name=name, value=_safe(value),
+          result=_safe(value), op=op, object=name, kind="Assign")
+    return value
+
+
 class _Instrument(ast.NodeTransformer):
     """Wrap loop tests, if tests and except handlers with the hooks above."""
 
@@ -228,6 +243,56 @@ class _Instrument(ast.NodeTransformer):
         )
         node.body.insert(0, hook)
         return node
+
+    def _assign_hook(self, node, name, op):
+        # One hook statement after the assignment, reading the
+        # variable's new value. The hash carries the target name so
+        # two assignments on one line do not collide.
+        return ast.Expr(
+            value=ast.Call(
+                func=ast.Name(id="__iroh_assign", ctx=ast.Load()),
+                args=[
+                    ast.Constant(value=_hash("assign:" + name, self.filename, node.lineno)),
+                    ast.Constant(value=name),
+                    ast.Name(id=name, ctx=ast.Load()),
+                    ast.Constant(value=op),
+                ],
+                keywords=[],
+            )
+        )
+
+    def visit_Assign(self, node):
+        self.generic_visit(node)
+        # Only simple Name targets: a tuple target, an attribute or a
+        # subscript needs a different read for each target, and the
+        # hook would have to re-evaluate the object — left
+        # uninstrumented (a documented blind spot, like JS
+        # destructuring).
+        names = []
+        for target in node.targets:
+            if target.__class__ is ast.Name:
+                names.append(target.id)
+            else:
+                return node
+        return [node] + [self._assign_hook(node, n, "=") for n in names]
+
+    def visit_AugAssign(self, node):
+        self.generic_visit(node)
+        if node.target.__class__ is not ast.Name:
+            return node
+        op = node.op.__class__.__name__
+        opmap = {"Add": "+=", "Sub": "-=", "Mult": "*=", "Div": "/=",
+                 "FloorDiv": "//=", "Mod": "%=", "Pow": "**=",
+                 "LShift": "<<=", "RShift": ">>=", "BitOr": "|=",
+                 "BitXor": "^=", "BitAnd": "&="}
+        return [node, self._assign_hook(node, node.target.id, opmap.get(op, "+="))]
+
+    def visit_AnnAssign(self, node):
+        self.generic_visit(node)
+        # `x: int` (no value) is an annotation, not an assignment.
+        if node.value is None or node.target.__class__ is not ast.Name:
+            return node
+        return [node, self._assign_hook(node, node.target.id, "=")]
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +453,7 @@ def trace_code(code, filename="<iroh>", events=None):
             "__iroh_for_iter": __iroh_for_iter,
             "__iroh_if_test": __iroh_if_test,
             "__iroh_catch": __iroh_catch,
+            "__iroh_assign": __iroh_assign,
         }
         old_stdout = sys.stdout
         sys.stdout = sys.stderr

@@ -179,17 +179,21 @@ snapshot, event, eventIndex, directives }`, and returns a directive, an
 array of directives, or `null`. Three directives, each taking effect in
 the running program: `{ type: "set", name, value }` writes a variable
 at its next value-flow point — a declaration's initializer, a plain
-assignment (`x = v`), or the next test of a loop comparing that
-variable with a numeric literal (the test is flipped to `false` only
-when the set value makes the comparison false, for counters advanced
-by `i++`); `{ type: "skip", name, value }` makes the next call of that
+assignment (`x = v`), a member assignment (`obj.prop = v`, one level,
+including compound member assignments), or the next test of a loop
+comparing that variable with a numeric literal (the test is flipped to
+`false` only when the set value makes the comparison false, for
+counters advanced by `i++`); a set may carry `scope` (a function name,
+or `null` for the top level; omitted means any scope, first match
+wins); `{ type: "skip", name, value }` makes the next call of that
 name evaluate to `value` without running — the real function never
 executes, no `FUNCTION_ENTER`, no side effects (a skip issued for the
 very call that tripped the finding applies to that call now);
 `{ type: "stop", reason }` ends the run with a reason. Each directive
 applies once, at the first matching point, then it is consumed; a
 directive that never matches is recorded with `applied: false` and a
-reason. Matching is by name only, not by scope. A stop is delivered by
+reason. A set on a property with a setter runs the setter twice (once
+for the original write, once for the overwrite). A stop is delivered by
 throwing a sentinel from the next event — a program inside
 `try`/`catch` may swallow one throw, so the engine re-throws it at
 every following event until it propagates out. Returns
@@ -199,11 +203,23 @@ batch agreement holds by construction. A runtime error throws with the
 events so far as `error.events` (like `trace()`) and the direction
 record so far as `error.direct`; a directed stop returns normally with
 `stopped: true`. Options are the `liveAnalyzer()` thresholds plus
-`stageOptions`, `onEvent(line)` and `onDirective(entry)`; the `events`
-option is ignored — the director needs the full stream, so `direct()`
-always traces ALL categories. Scripts only (synchronous, like
-`trace()`) — modules and top-level await are rejected with the
-`trace()` pointers, and Python/C++ traces cannot be directed.
+`stageOptions`, `onEvent(line)`, `onDirective(entry)` and
+`onFinding(findings)` (called with the findings that just fired, after
+the director is consulted). The `events` option is ignored — the
+director needs the full stream, so `direct()` always traces ALL
+categories. Scripts only (synchronous, like `trace()`) — modules and
+top-level await are rejected with the `direct()` pointers (use
+`directModule()` / `directAsync()` for those), and Python/C++ traces
+cannot be directed.
+
+``directAsync(code, director, options)`` (1.0.1): like `direct()`, but
+asynchronous — top-level await works here. Returns a promise of the
+same record. Modules are rejected (use `directModule()`).
+
+``directModule(code, director, options)`` (1.0.1): like `direct()`, but
+for modules — `import`/`export` and top-level await work here, and the
+result is the live module namespace (traceModule semantics). Returns a
+promise of the same record. Node.js only.
 
 ``runawayGuard(options)``: The built-in director (1.0.0) — a factory
 returning a director function, so one guard instance directs one run.
@@ -218,7 +234,14 @@ flag runs a script under this guard (throttle by default,
 `--direct=stop` stops instead), streaming
 `{"type":"directive",...}` lines as directives take effect and closing
 with a `{"type":"direct-summary",...}` — findings, the full directive
-audit log and the analysis. A directed stop exits 0.
+audit log and the analysis. A directed stop exits 0. `--direct` works
+on modules (`.mjs` or `--module`) and scripts with top-level await,
+and combines with `--analyze`, `--scan`, and `--live` (the analysis
+and scan lines follow the direct-summary). Conflicting mode
+combinations (`--translate` with `--live`/`--scan`/`--analyze`/
+`--direct`, `--direct` with a non-ALL `--events`, `--include-events`
+without `--scan`) are usage errors, exit 2, checked before the file
+is read.
 
 ``translate(code, options)``: Hybrid translation engine (0.8.0). Returns
 `{ code, report }` where `report` is `{ ok, from, to, staticOnly, clean,
@@ -243,7 +266,9 @@ parameter type). `options.types` supplies C++ types the trace could not
 (`{ functions: { add: { params: ["int", "int"], returns: "int" } } }`).
 The JS-out leg runs the program through the tracer for evidence, and
 its `console.log` output is silenced while it runs, so `translate()` has
-no visible side effects. `translateAsync(code, options)` is the async
+no visible side effects. But the evidence trace really runs the program,
+so any other side effects (file writes, network calls, non-terminating
+loops) happen for real — `translate()` does not sandbox it. `translateAsync(code, options)` is the async
 version — in the ESM build the Python leg loads `child_process` by
 dynamic import (the sync version needs the CJS build's `require` for
 that leg); in a browser, the Python leg throws a clear error and the

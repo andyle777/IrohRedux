@@ -151,7 +151,7 @@ const directed: DirectResult = Iroh.direct(
   {
     hotLoopThreshold: 100,
     onDirective: (entry: DirectiveEntry) => {
-      const via: "init" | "assign" | "loop-test" | "call" | "stop" | null = entry.appliedVia;
+      const via: "init" | "assign" | "member" | "loop-test" | "call" | "stop" | null = entry.appliedVia;
       void via;
     },
   }

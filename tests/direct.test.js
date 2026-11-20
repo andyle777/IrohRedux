@@ -286,14 +286,17 @@ test("onEvent and onDirective callbacks fire as the run proceeds", () => {
   assert.equal(seenDirectives, 1);
 });
 
-test("direct() rejects modules and top-level await with the trace() pointers", () => {
+test("direct() rejects modules and top-level await with the direct() pointers", () => {
+  // 1.0.1: the pointers name the direct() family now (directModule /
+  // directAsync), not the trace() family — direct() itself cannot run
+  // them, but its siblings can.
   assert.throws(
     () => Iroh.direct("import x from './x.js'; x;", () => null),
-    /traceModule/
+    /directModule/
   );
   assert.throws(
     () => Iroh.direct("await Promise.resolve(1);", () => null),
-    /traceAsync/
+    /directAsync/
   );
 });
 
@@ -343,7 +346,7 @@ test("CLI --direct=stop stops the run", () => {
   }
 });
 
-test("CLI --direct rejects Python, modules and bad modes", () => {
+test("CLI --direct rejects Python and bad modes, and runs modules", () => {
   let { dir, file } = writeRunaway();
   try {
     let py = path.join(dir, "prog.py");
@@ -354,10 +357,127 @@ test("CLI --direct rejects Python, modules and bad modes", () => {
     let badMode = runCliFile(file, ["--direct=explode"]);
     assert.equal(badMode.proc.status, 2);
     assert.match(badMode.proc.stderr, /Unknown --direct mode/);
+    // 1.0.1: --direct --module no longer rejects — it runs the module
+    // under Iroh.directModule() and throttles the runaway the same
+    // way a script is throttled. (A module's result line is its
+    // namespace object, not the completion value — traceModule
+    // semantics — so the throttle is proven by the directive, not
+    // by the result.)
     let mod = runCliFile(file, ["--direct", "--module"]);
-    assert.equal(mod.proc.status, 2);
-    assert.match(mod.proc.stderr, /cannot run modules/);
+    assert.equal(mod.proc.status, 0);
+    let directive = mod.lines.find((l) => l.type === "directive");
+    assert.ok(directive, "a directive line streamed for the module run");
+    assert.equal(directive.applied, true);
+    assert.equal(directive.appliedVia, "loop-test");
+    let summary = mod.lines.find((l) => l.type === "direct-summary");
+    assert.ok(summary, "a direct-summary line closed the module run");
+    assert.equal(summary.stopped, false);
+    assert.equal(summary.directives.length, 1);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("set applies to a member assignment through appliedVia member", () => {
+  let out = Iroh.direct(
+    "let o = { a: 7 }; o.a = 7; o.a;",
+    () => ({ type: "set", name: "o.a", value: 42 })
+  );
+  assert.equal(out.result, 42);
+  assert.equal(out.directives[0].applied, true);
+  assert.equal(out.directives[0].appliedVia, "member");
+});
+
+test("set applies to a compound member assignment", () => {
+  let out = Iroh.direct(
+    "let o = { a: 10 }; o.a += 5; o.a;",
+    () => ({ type: "set", name: "o.a", value: 99 })
+  );
+  assert.equal(out.result, 99);
+  assert.equal(out.directives[0].appliedVia, "member");
+});
+
+test("set with a dotted name deeper than one level is a clear error", () => {
+  assert.throws(
+    () => Iroh.direct("let o = { a: { b: 1 } }; o.a.b;", () => ({ type: "set", name: "o.a.b", value: 2 })),
+    /one level/
+  );
+});
+
+test("set with scope hits only the named function", () => {
+  let out = Iroh.direct(
+    "let i = 0; function inner() { let i = 1; return i; } inner(); i;",
+    () => ({ type: "set", name: "i", value: 77, scope: "inner" })
+  );
+  assert.equal(out.result, 0, "the top-level i is untouched");
+  assert.equal(out.directives[0].applied, true);
+});
+
+test("set with scope null hits only the top level", () => {
+  let out = Iroh.direct(
+    "let i = 0; function inner() { let i = 1; return i; } inner(); i;",
+    () => ({ type: "set", name: "i", value: 55, scope: null })
+  );
+  assert.equal(out.result, 55);
+  assert.equal(out.directives[0].applied, true);
+});
+
+test("set with a wrong scope stays unapplied", () => {
+  let out = Iroh.direct(
+    "let i = 0; function inner() { let i = 1; return i; } inner(); i;",
+    () => ({ type: "set", name: "i", value: 55, scope: "nope" })
+  );
+  assert.equal(out.result, 0);
+  assert.equal(out.directives[0].applied, false);
+});
+
+test("directAsync runs top-level await and the runaway guard", async () => {
+  let out = await Iroh.directAsync(
+    "await Promise.resolve(1); let i = 0; let total = 0; while (i < 10000) { total += i; i++; } total;",
+    Iroh.runawayGuard()
+  );
+  assert.equal(out.result, 4950);
+  assert.equal(out.directives.length, 1);
+  assert.equal(out.directives[0].appliedVia, "loop-test");
+});
+
+test("directAsync rejects module code with the directModule pointer", async () => {
+  await assert.rejects(
+    Iroh.directAsync("import x from './x.js'; x;", () => null),
+    /directModule/
+  );
+});
+
+test("directModule throttles a runaway loop in a module", async () => {
+  let out = await Iroh.directModule(
+    "let i = 0; let total = 0; while (i < 10000) { total += i; i++; } total;",
+    Iroh.runawayGuard()
+  );
+  // A module's result is its namespace object, not the completion
+  // value — the throttle is proven by the directive, not the result.
+  assert.equal(typeof out.result, "object");
+  assert.equal(out.directives.length, 1);
+  assert.equal(out.directives[0].applied, true);
+  assert.equal(out.directives[0].appliedVia, "loop-test");
+});
+
+test("directModule runs top-level await and skip", async () => {
+  let out = await Iroh.directModule(
+    "await Promise.resolve(1); function f() { return 'real'; } export const got = f();",
+    () => ({ type: "skip", name: "f", value: "skipped" })
+  );
+  assert.equal(out.result.got, "skipped");
+  assert.equal(out.directives[0].appliedVia, "call");
+});
+
+test("onFinding fires with live findings without being the director", () => {
+  let seen = [];
+  let out = Iroh.direct(
+    "let i = 0; let total = 0; while (i < 10000) { total += i; i++; } total;",
+    Iroh.runawayGuard(),
+    { onFinding: (findings) => { seen.push(findings.map((f) => f.code)); } }
+  );
+  assert.equal(out.result, 4950);
+  assert.ok(seen.length > 0, "onFinding fired at least once");
+  assert.ok(seen.some((codes) => codes.includes("HOT_LOOP")), "HOT_LOOP was reported live");
 });

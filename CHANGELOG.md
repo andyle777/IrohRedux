@@ -1,5 +1,245 @@
 # Changelog
 
+## 1.0.1 — All-generations audit-and-patch pass (20 Nov 2026)
+
+Every known limitation from 0.4.0 through 1.0.0, re-read and re-probed.
+The ones that were real, fixable bugs are fixed here; the ones that
+were out of scope or genuinely infeasible are named below with the
+evidence for leaving them. All 295 prior tests still pass; the suite
+is now 348 tests (314 Node + 25 Python + 9 C++).
+
+### Translation — `%`, number formatting, string concat, type conflicts (`src/translate.js`)
+
+- `%` is JS `%` now, in every leg. JS → Python emits a
+  `__iroh_jsmod(a, b)` helper (`a - int(a / b) * b`, ints stay int,
+  floats stay float); JS → C++ emits `std::fmod` when either operand
+  is a double (plain `%` for ints); Python → JS emits the floored form
+  `((l % r) + r) % r` and the old `noteOnce("mod", ...)` warning is
+  gone — the warning was a confession, not a fix. Probed: `-5 % 3`
+  gives -2 (JS) / 1 (Python semantics, floored), `5 % -3` gives -1
+  (JS) / -1 (floored, same), `-5.5 % 2` gives -1.5 (JS) / 0.5
+  (floored).
+- Numbers print like JS numbers now. `__iroh_jsnum(double)` in C++
+  and `__iroh_jsnum(v)` in Python implement ECMAScript
+  Number::toString placement rules over the shortest round-trip
+  digits: 1e16 prints "10000000000000000" (Python's repr used to
+  switch to exponential at 1e16, JS waits until 1e21), 1e21 prints
+  "1e+21", 1e-7 prints "1e-7", 0.000001 prints "0.000001",
+  0.1 + 0.2 prints "0.30000000000000004". Routed at string concat,
+  template literal interpolation, `String()`, and console/print
+  double args. Two bugs found by probes and fixed on the way: the
+  `%e` digit-extraction loop ran when there was no `.` in the string
+  (precision 0 gives "1e-07", `find('.')` is npos, `dot + 1` wrapped
+  to 0 — `1e-7` printed as "1.1e-7"); and C++ `String(true)` printed
+  "1" (`std::to_string(true)`), now "true".
+- String `+` concat with a double or a bool works in both legs.
+  Python `+` was silently broken before this: `"x" + 1.5` emitted
+  `print("x" + 1.5)`, which raises TypeError at runtime with zero
+  unsupported entries — a silent mistranslation, fixed by the
+  `pyStringOf` routing. C++ `"b" + true` failed to compile before
+  this: `cppStringOf` returned the raw `"b"` literal (const char*)
+  and the bool ternary (const char*), giving pointer arithmetic.
+  Fixed: `cppStringOf` wraps string literals and bool ternaries in
+  `std::string(...)`. A 16-line cross-language probe (%, concat,
+  `String`, template literals, 1e16/1e-7/1e21/0.000001, 0.1+0.2)
+  matches JS output byte-for-byte in both C++ and Python.
+- C++ type conflicts are refused, not silently built on the first
+  call. `buildTraceEnv` now collects ALL calls and ALL return values
+  per function; `cppSignature` refuses with a clear message when a
+  parameter or return type differs across calls (hints fill gaps but
+  never override trace evidence — the refusal message says so). The
+  assumption messages now read "(verified consistent across N calls)"
+  and "(verified consistent across N returns)". Probed: `f(1);
+  f("a")` refuses with the conflict message; same-type calls pass
+  with the "verified consistent across 2 calls" assumption; a return
+  conflict across two calls refuses.
+- `inferType` returned "int" for any integer-valued numeric literal,
+  so `String(1e21)` emitted `std::to_string(1e+21)` (full digits,
+  not "1e+21") — found by the new tests. Only a safe integer is
+  "int" now (`Number.isSafeInteger(node.value) ? "int" : "double"`).
+
+### Director — member set, scope-aware set, directAsync/directModule, onFinding (`src/direct.js`, `src/setup.js`)
+
+- A `set` directive with a dotted name (`"obj.prop"`, one level)
+  applies at member assignments (`=` and compound `+=` etc.) by
+  overwriting `raw.object[raw.property] = d.value` after the write,
+  with `appliedVia: "member"`; the recorded line is updated too.
+  Probed: `o.a = 7` set to 42 → result 42, event line shows
+  `result: 42, object: {a: 42}`; `o.a += 5` set to 99 → 99.
+  Caveat: a setter property runs twice (once for the original write,
+  once for the overwrite). Deeper than one level (`o.a.b`) is refused
+  by `validateDirective`.
+- A `set` directive may carry `scope`: a function name to set only
+  that function's variable, `null` for the top level only, omitted
+  for any scope (the 1.0.0 behaviour). Matching uses
+  `stage.currentScope`. Probed: scoped set on inner `i` → inner()
+  returns 77; unscoped set hits top-level `i` first (inner returns
+  1); `scope: null` → top-level `i` = 55; wrong scope → applied
+  false.
+- `directAsync(code, director, options)` — like `direct()`, but
+  asynchronous: top-level await works there. `directModule(code,
+  director, options)` — like `direct()`, but for modules: import/
+  export and top-level await work, result is the live module
+  namespace. Both share `direct()`'s setup and completion handling
+  (`directInternal`, mode `"sync" | "async" | "module"`); parse
+  errors and module code reject (never throw synchronously). The
+  Node-only temp-file/import machinery moved from `src/setup.js`
+  into a shared `importTracedModule(iroh, run, options)`;
+  `traceModule` is a thin wrapper over it now, and the error message
+  generalized from "Iroh.traceModule() requires Node.js" to
+  "Modules require Node.js" (no test or doc asserted the old
+  wording). Probed: guard throttles a module loop (4950, loop-test);
+  skip + TLA in a module → "skipped", appliedVia "call"; plain
+  module works; `traceModule` still works after the extraction.
+- New `onFinding(findings)` option on `direct()`/`directAsync()`/
+  `directModule()`: called with the enriched fired findings (which
+  carry `firedAt`) after the director is consulted — for a caller
+  that wants to print live findings without being the director.
+- `index.d.ts` updated for the new API: `scope` on set directives,
+  `"member"` in `appliedVia`, `onFinding`, and the
+  `directAsync`/`directModule` declarations (the `direct()` doc's
+  "rejected with the trace() pointers" is now "with the direct()
+  pointers").
+
+### CLI — mode validation before the file read, `--direct` for modules and TLA (`cli/iroh.js`)
+
+- Mode-combination validation moved BEFORE the file read (after
+  language validation): `--translate` + `--live`/`--scan`/`--analyze`/
+  `--direct` → usage error exit 2; `--direct` + `--events` (non-ALL)
+  → exit 2; `--include-events` without `--scan` → exit 2. Before
+  this, `--direct --module` and `--direct --translate python` on a
+  missing file gave a file-read error (exit 1) before any mode
+  validation. `--translate` + `--events`/`--module` remains
+  documented precedence (not rejected).
+- `--direct` now uses `Iroh.directAsync()` for scripts (top-level
+  await works) and `Iroh.directModule()` for modules (`.mjs` or
+  `--module`); the old `--direct cannot run modules` rejection is
+  gone. `--direct` + `--analyze`/`--scan` honoured (analysis line /
+  scan line after the direct-summary, built from `out.events`);
+  `--live` honoured via the new `onFinding` hook (live-finding lines
+  as findings trip; no separate live-summary in direct mode — the
+  direct-summary already carries the live finish). Before this,
+  `--direct --analyze/--scan/--live` all ran direct mode and printed
+  only the direct-summary, silently ignoring the other flags.
+  Probed: `--direct --analyze --scan --live` on a 10,000-iteration
+  runaway → 513 event lines + 1 directive + 1 live-finding
+  (HOT_LOOP) + 1 direct-summary + 1 analysis + 1 scan.
+
+### Decorators — computed keys, eval order, accessor fields (`src/decorators-plugin.js`, `src/decorators.js`)
+
+- Decorated computed keys parsed and ran — before this they failed
+  at parse time (`@dec [key()]()`, `@dec ["m"]()`, `@dec [k()] = 5`
+  all failed with "Unexpected token"), because `parseExprSubscripts`
+  greedily consumed the `[` as a member access on the decorator. No
+  test covered computed keys; the 0.7.0 CHANGELOG claim "computed
+  keys evaluate twice" was written from reading the desugar, never
+  tested — the real bug was worse. Fix: `parseDecoratorExpression()`
+  with a subscript loop that breaks (leaving the `[` for the element
+  parser) when a throwaway-probe token scan says the bracket starts
+  a computed element name (the token after the matching `]` is `(`
+  or `=` or `;` or `}` or `@`). `?.[` is deliberately not
+  intercepted (pathological case; greedy parse errors clearly).
+- The key now evaluates exactly once. The element's key becomes a
+  SequenceExpression evaluated in phase 1, in definition order:
+  `(keyTemp = <origKey>, decTemp1 = <dec1>, ..., keyTemp)` for
+  computed keys, `(keyTemp = lit(name), decTemp1 = <dec1>, ...,
+  keyTemp)` for plain keys — so the context `name`, method target
+  and field applies all read the temp and nothing re-evaluates. (An
+  earlier attempt used a static-block prologue; V8 probing proved
+  computed keys evaluate BEFORE all static blocks, so the prologue
+  ran after the key was read and installed the method under
+  `undefined`.) Probed: `key()` runs exactly once, method installed
+  under the right key (`m()` returns 42); computed field key once,
+  value 7, context kind "field", name "f".
+- Eval order is now the spec order: an instance field's apply runs
+  in a static block spliced before the element (phase 2, in
+  definition order, interleaved with static field initializers),
+  instead of as a statement after the class (which ran static field
+  decorators first regardless of definition order). Probed:
+  `["eval:inst","eval:stat","apply:inst","apply:stat"]` and the
+  reverse, both in order. Class decorator expressions are hoisted
+  into temps in a trailing static block (documented `this` caveat: a
+  class decorator expression reading `this` sees the class inside a
+  static block, where the proposal gives it the enclosing `this`).
+- Accessor fields land. The plugin detects the contextual `accessor`
+  keyword (only when a name follows, so `accessor()`, `accessor = 1`,
+  `accessor;` remain a plain method/field named "accessor"). The
+  desugar rewrites an accessor into a private storage field
+  (`#Iroh$$acc_<name>`) plus a getter/setter pair; decorated
+  accessors apply the decorators to the `{get, set}` pair one at a
+  time (reverse order), merging get/set per decorator and composing
+  any `{init}` returns. Probed: undecorated instance/static,
+  decorated get/set replacement (kind "accessor", `c.x` → 100),
+  `{init}` (3 → 30), two-decorator init order (d2's init first:
+  3*2=6, then d1's +100 = 106), set-only return (get kept),
+  computed decorated (key once, ctx "accessor:m"), `access.get`/
+  `set`/`has`, static `{init}` (5 → 6) and static get/set (77).
+  Decorated private accessors throw a clear error — loud, not
+  silent. Remaining gap: method-vs-field apply order (method applies
+  still run after the class, so a method's decorators apply after
+  all field decorators regardless of definition order).
+
+### Python tracer — per-assignment events (`python/iroh/trace.py`)
+
+- `ASSIGN` events fire for simple Name targets: `x = ...`, `x +=
+  ...` (op map for all 13 augmented operators), `x: int = ...`
+  (only when a value is present). Tuple targets, attributes and
+  subscripts are deliberately left uninstrumented (documented blind
+  spot, like JS destructuring). The event carries the post-assignment
+  value as `value`/`result` — unlike JS compound assignments, which
+  carry the RHS — documented in the hook comment, not hidden. A
+  failed assignment (`z = 1 / 0`) emits nothing, because the hook
+  runs after the value is computed. Probed: `a = b = 5` → two events
+  (a=5, b=5); `o['k'] = 9` → no event; `y: int` (annotation only)
+  → no event; `w = 42` inside a function → event. One prior test
+  changed: the live `--live` Python test's `firedAt` went from 100
+  to 200 — the finding still fires at iteration 100, but each
+  iteration now emits 2 events (LOOP_TEST + ASSIGN), so the event
+  count at firing doubled; the test now says so.
+
+### Left, with the evidence
+
+- 0.9.0 no-timeout — left, by design. A timeout is a behaviour
+  change, not a fix; the README/API/CHANGELOG all say a
+  non-terminating program hangs exactly as running it directly
+  would, and a caller that needs one should wrap the CLI run.
+- 0.9.0 C++ function-level only — NOT attempted. Loop/branch
+  instrumentation for C++ is a new engine (the subset parser
+  translates C++ to JS; it does not rewrite C++ source with hooks),
+  not a stretch goal. C++ stays function-level.
+- 0.9.0 `.close()`d generators leaving an unclosed CALL — left.
+  Probed: trace shows FUNCTION_CALL + FUNCTION_ENTER only, no
+  CALL_END/LEAVE — `sys.settrace` fires no event at all for a close
+  with no `finally` block, so the tracer cannot observe it. The
+  depth is still correct, because the yield already dropped it.
+- 1.0.0 identifier compound set (`x += 5`) — NOT fixable via the
+  event. Probed: the event is ASSIGN `{op: "+=", result: 5, value:
+  5, object: "x"}` — `result` is the RHS only, the event carries no
+  current value of `x`, so a set cannot be computed from it. Member
+  compound assignments ARE fixed (the event carries the object).
+- 0.8.0 `translate()` evidence-trace side effects — inherent. The
+  trace runs the program, so side effects happen and a
+  non-terminating program never translates; documented in API.md,
+  not "fixed".
+- 0.4.0 limits — left: no `Iroh.CHAIN` listener; private-field and
+  destructuring assignments produce no ASSIGN event; member
+  logical-assignment RHS evaluated eagerly. None fell out of this
+  pass; recorded, not attempted.
+
+### Tests
+
+- 53 new tests: 12 in `tests/decorators.test.js` (38 total),
+  23 in `tests/translate.test.js` (91 total), 11 in
+  `tests/direct.test.js` (31 total), 4 in `tests/cli.test.js`
+  (13 total), 3 in `tests/native.test.js` (21 total). Two prior
+  tests changed, both intentional behaviour changes, both noted
+  above: the direct() module/TLA rejection tests now assert the
+  direct() pointers (not the trace() pointers) and that `--direct
+  --module` runs; the live Python test's `firedAt` 100 → 200 (new
+  ASSIGN events per iteration). Full suite: 348 tests (314 Node +
+  25 Python + 9 C++), all passing; types green; browser bundle
+  smoke-tested (VERSION 1.0.1, `direct()` + guard work in a `vm`).
+
 ## 1.0.0 — AI director and live code engine (20 Nov 2026)
 
 The original vision complete. The engine runs a program under trace
@@ -113,19 +353,28 @@ let out = Iroh.direct(
   is a usage error, exit 2). A director supplied as a JS file is NOT
   in v1 — the CLI runs the built-in guard only.
 
-### Known limitations (1.0.0)
+### Known limitations (1.0.0 — updated in 1.0.1: the first two are fixed, the rest stand)
 
-- `direct()` runs scripts synchronously (like `trace()`) — top-level
+- ~~`direct()` runs scripts synchronously (like `trace()`) — top-level
   `await` and modules are rejected with the same pointers `trace()`
-  gives. There is no `directAsync()` / `directModule()` in v1.
-- `set` applies at the next plain assignment or declaration of that
+  gives. There is no `directAsync()` / `directModule()` in v1.~~
+  Fixed in 1.0.1: `directAsync()` (top-level await) and
+  `directModule()` (modules, Node.js only) exist; `direct()` rejects
+  modules and TLA with the `direct()` pointers.
+- ~~`set` applies at the next plain assignment or declaration of that
   variable, or at the next test of a loop comparing it with a numeric
   literal. Member assignments (`obj.prop = v`) are written inside
   `DEBUG_ASSIGN` before the event fires, and compound assignments
   (`x += v`) pass only the right-hand value through the event — neither
   is a set point, and a set never applies there. Matching is by name
   only, not by scope: a set for `"i"` applies to the first `i`
-  assignment reached, in whichever scope that is.
+  assignment reached, in whichever scope that is.~~
+  Fixed in 1.0.1, in part: member assignments (plain and compound)
+  are set points now (`appliedVia: "member"`), and a set may carry
+  `scope` (a function name, or `null` for the top level). Identifier
+  compound assignments (`x += v`) are NOT fixed — the event carries
+  only the RHS, no current value of `x`, so a set cannot be computed
+  from it (probed in the 1.0.1 pass).
 - A stop is delivered by throwing a sentinel from the next event. A
   program that swallows every thrown value defeats it only in the
   narrow case where no further event fires after the catch — in
@@ -363,16 +612,19 @@ after the hardening pass and the live wire mode below.
   `mix` 1, `coverage` 0.0333). The README footer changelog line now
   mentions 0.9.0.
 
-### Known limitations (0.9.0)
+### Known limitations (0.9.0 — updated in 1.0.1: per-assignment events landed, the rest stand)
 
-- Python: no per-assignment events; comprehensions, `async for` and
-  lambdas not loop/branch instrumented; target file only; single
-  thread; a program that replaces `sys.settrace` breaks the trace. A
-  generator closed with `.close()` (or abandoned while suspended)
-  leaves its CALL unclosed in the stream: `sys.settrace` fires no
-  event at all for a close with no `finally` block, so the tracer
-  cannot observe it — the depth is still correct, because the yield
-  already dropped it.
+- Python: ~~no per-assignment events;~~ per-assignment events fire
+  for simple Name targets only (tuple targets, attributes and
+  subscripts are blind spots; the event carries the post-assignment
+  value, unlike JS compound assignments, which carry the RHS);
+  comprehensions, `async for` and lambdas not loop/branch
+  instrumented; target file only; single thread; a program that
+  replaces `sys.settrace` breaks the trace. A generator closed with
+  `.close()` (or abandoned while suspended) leaves its CALL unclosed
+  in the stream: `sys.settrace` fires no event at all for a close
+  with no `finally` block, so the tracer cannot observe it — the
+  depth is still correct, because the yield already dropped it.
 - C++: function-level only; single .cpp file; `-O0` only (inlined
   functions invisible); `std::`/`__` names filtered (by the mangled
   name's outermost qualifier); unresolved names are null with an
@@ -501,7 +753,7 @@ is now 206 tests (194 Node + 7 Python + 5 C++).
   -> python, `.cpp`/`.cc`/`.cxx` -> cpp, else javascript); `--translate`
   takes precedence over `--events`/`--module`.
 
-### Known limitations (0.8.0)
+### Known limitations (0.8.0 — updated in 1.0.1: the translation limits below are fixed, the analysis limits stand)
 
 - Analysis: `HOT_LOOP` counts true `LOOP_TEST` events, so a loop whose
   test has side effects (or a `do...while`, whose first iteration has no
@@ -514,17 +766,28 @@ is now 206 tests (194 Node + 7 Python + 5 C++).
   heuristic, not a verdict — its weights were trained on synthetic
   traces, not on real programs, and it answers one question (hot vs
   normal) only.
-- Translation: C++ parameter types come from the FIRST call in the
+- Translation: ~~C++ parameter types come from the FIRST call in the
   trace — a function called later with different argument types would
-  break the translation, and the report says so. Functions never called
-  in the trace need a type hint, or they are reported unsupported. A
-  `Math.round` in Python is emulated as `math.floor(x + 0.5)` (Python's
-  `round()` is banker's rounding); string concatenation of a double in
-  C++ is refused outright (`std::to_string` prints 6 decimals, unlike
-  JS). Python `%` and JS `%` differ for negative operands — the report
-  notes it. The C++ subset parser rejects anything outside v1 with a
-  clear message rather than guessing. The Python leg needs `python3` on
-  `PATH` (and the CJS build, or `translateAsync`, for the sync path).
+  break the translation, and the report says so.~~ Fixed in 1.0.1:
+  ALL calls and return values are collected; a parameter or return
+  type that differs across calls is refused with a clear message, and
+  consistent types are reported as "(verified consistent across N
+  calls)". Functions never called in the trace need a type hint, or
+  they are reported unsupported. A `Math.round` in Python is emulated
+  as `math.floor(x + 0.5)` (Python's `round()` is banker's rounding);
+  ~~string concatenation of a double in C++ is refused outright
+  (`std::to_string` prints 6 decimals, unlike JS).~~ Fixed in 1.0.1:
+  `__iroh_jsnum` prints doubles with JS Number::toString rules, and
+  string `+` concat with a double or a bool works in both legs (the
+  Python leg was silently broken before this — `"x" + 1.5` emitted
+  `print("x" + 1.5)`, a runtime TypeError with zero unsupported
+  entries). ~~Python `%` and JS `%` differ for negative operands —
+  the report notes it.~~ Fixed in 1.0.1: `%` is JS `%` in every leg
+  (`__iroh_jsmod` in Python, `std::fmod` for doubles in C++, the
+  floored form for Py → JS). The C++ subset parser rejects anything
+  outside v1 with a clear message rather than guessing. The Python
+  leg needs `python3` on `PATH` (and the CJS build, or
+  `translateAsync`, for the sync path).
 - The `translate()` evidence trace runs the program: a program with
   side effects (writes, network) performs them during translation, and
   a program that never terminates never translates. That is the price
@@ -678,17 +941,27 @@ go with it. All 79 prior tests still pass; the suite is now 120 tests
   decorator runs during class definition and may call
   `addInitializer`).
 
-### Known limitations (0.7.0)
-- No `accessor` fields: `@dec accessor x = 1` is a parse error.
-- Computed keys with side effects evaluate twice: the key expression
+### Known limitations (0.7.0 — updated in 1.0.1: the first three are fixed, the rest stand)
+- ~~No `accessor` fields: `@dec accessor x = 1` is a parse error.~~
+  Fixed in 1.0.1: accessor fields parse and trace, decorated and
+  undecorated, instance and static, with `{init}` composition.
+  Decorated private accessors throw a clear error (not supported yet).
+- ~~Computed keys with side effects evaluate twice: the key expression
   is cloned into the context `name`, so it runs once in the class
-  definition and once per decorator application.
-- Decorator expressions for instance fields evaluate after the class
+  definition and once per decorator application.~~ Fixed in 1.0.1:
+  decorated computed keys parse (before this they failed at parse
+  time — the real bug was worse than the claim), and the key evaluates
+  exactly once, via a SequenceExpression in phase 1.
+- ~~Decorator expressions for instance fields evaluate after the class
   definition, not during it: their applies run as statements after
   the class, while static fields' applies run inline during
   definition — so evaluation order between a static field and an
   instance element follows definition order only when the static
-  field comes first.
+  field comes first.~~ Fixed in 1.0.1: instance field applies run in
+  a static block spliced before the element (phase 2, in definition
+  order). Remaining gap: method-vs-field apply order — method applies
+  still run after the class, so a method's decorators apply after all
+  field decorators regardless of definition order.
 - `import.meta.url` in a traced module is the temp file's URL.
 - The decorator desugar is a source-to-source transform: the
   instrumented code is the desugared form, so event hashes for

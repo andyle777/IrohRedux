@@ -391,3 +391,53 @@ test("Python --events filter keeps only the requested categories", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("Python tracer emits ASSIGN events for simple Name targets", () => {
+  let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-native-"));
+  try {
+    let file = writeTemp(dir, "assign.py",
+      "x = 1\nx += 2\ny = x * 3\n");
+    let { proc, lines } = runCliFile(file, ["--events", "ASSIGN"]);
+    assert.equal(proc.status, 0, proc.stderr);
+    let assigns = lines.filter((l) => l.event === "ASSIGN");
+    assert.deepEqual(
+      assigns.map((a) => [a.name, a.value, a.op]),
+      [["x", 1, "="], ["x", 3, "+="], ["y", 9, "="]]
+    );
+    assert.ok(assigns.every((a) => a.object === a.name));
+    assert.ok(assigns.every((a) => a.result === a.value));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Python ASSIGN skips tuple, attribute and subscript targets, and failed assignments", () => {
+  let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-native-"));
+  try {
+    let file = writeTemp(dir, "assign2.py",
+      "a, b = 1, 2\no = {}\no['k'] = 9\nx = 1\ntry:\n    z = 1 / 0\nexcept ZeroDivisionError:\n    pass\n");
+    let { proc, lines } = runCliFile(file, ["--events", "ASSIGN"]);
+    assert.equal(proc.status, 0, proc.stderr);
+    let assigns = lines.filter((l) => l.event === "ASSIGN");
+    assert.deepEqual(
+      assigns.map((a) => [a.name, a.value]),
+      [["o", {}], ["x", 1]]
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Python ASSIGN fires inside functions with the post-assignment value", () => {
+  let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-native-"));
+  try {
+    let file = writeTemp(dir, "assign3.py",
+      "def f():\n    w = 42\n    return w\nprint(f())\n");
+    let { proc, lines } = runCliFile(file, ["--events", "ASSIGN"]);
+    assert.equal(proc.status, 0, proc.stderr);
+    let assigns = lines.filter((l) => l.event === "ASSIGN");
+    assert.deepEqual(assigns.map((a) => [a.name, a.value]), [["w", 42]]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

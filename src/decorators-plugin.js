@@ -40,6 +40,93 @@ import { Parser, TokenType } from "acorn";
 
 const atToken = new TokenType("@", { startsExpr: true });
 
+// NOTE: Acorn's `tokTypes` is NOT imported. Rollup cannot see it as a
+// named export of acorn's CJS dist (the browser bundle fails with
+// "'tokTypes' is not exported by node_modules/acorn/dist/acorn.js"),
+// so token types are compared by their stable `.label` strings
+// instead: "(" "=" ";" "}" "eof" "[" "]". The `@` token is this
+// file's own TokenType, compared by identity.
+
+// The tokens that can follow a complete class-element name: `(` for
+// a method, `=` for a field with an initializer, `;` / `}` / `@` for
+// a field that ends there (or the next decorated element). Anything
+// else after a `]` — an identifier, another `[` — means the bracket
+// belonged to the decorator expression (a computed member access),
+// and the element's name follows it.
+function isElementNameTerminator(type) {
+  return (
+    type.label === "(" ||
+    type.label === "=" ||
+    type.label === ";" ||
+    type.label === "}" ||
+    type === atToken
+  );
+}
+
+// The token after the token starting at `offset`. Found by
+// tokenizing with a throwaway parser — Acorn's token stream is a
+// function of the input and options alone, so a fresh parser over
+// the same input produces the same tokens as the real one, and no
+// tokenizer state has to be saved and restored. Returns the token
+// object, or null at end of input.
+function tokenAfterOffset(options, input, offset) {
+  let probeOptions = Object.assign({}, options, {
+    onToken: void 0,
+    onComment: void 0,
+  });
+  let probe = new DecoratorParser(probeOptions, input);
+  for (;;) {
+    let tok = probe.getToken();
+    if (tok.type.label === "eof") return null;
+    if (tok.start === offset) {
+      let next = probe.getToken();
+      return next.type.label === "eof" ? null : next;
+    }
+  }
+}
+
+// True when a token can start a class-element name (mirrors
+// Acorn's isClassElementNameStart, by label — see the tokTypes
+// note above).
+function isNameStartToken(type) {
+  return (
+    type.label === "name" ||
+    type.label === "privateId" ||
+    type.label === "num" ||
+    type.label === "string" ||
+    type.label === "[" ||
+    !!type.keyword
+  );
+}
+function tokenAfterBracket(options, input, bracketStart) {
+  let probeOptions = Object.assign({}, options, {
+    onToken: void 0,
+    onComment: void 0,
+  });
+  let probe = new DecoratorParser(probeOptions, input);
+  let depth = 0;
+  let started = false;
+  for (;;) {
+    let tok = probe.getToken();
+    if (tok.type.label === "eof") return null;
+    if (!started) {
+      if (tok.start === bracketStart && tok.type.label === "[") {
+        started = true;
+        depth = 1;
+      }
+      continue;
+    }
+    if (tok.type.label === "[") depth += 1;
+    else if (tok.type.label === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        let next = probe.getToken();
+        return next.type.label === "eof" ? null : next;
+      }
+    }
+  }
+}
+
 function decoratorsPlugin(BaseParser) {
   return class extends BaseParser {
     // Tokenize `@` (code 64). Acorn's own getTokenFromCode falls
@@ -53,19 +140,76 @@ function decoratorsPlugin(BaseParser) {
     }
 
     // Parse one or more `@expr` decorators. The expression is a
-    // LeftHandSideExpression: parseExprSubscripts parses an atom plus
-    // member/call chains, and stops before binary operators, so
-    // `@a + b` is a decorator `@a` followed by `+ b` (a later error),
-    // while `@(a + b)` and `@factory()` parse as written.
+    // LeftHandSideExpression (identifier, member chain, call, ...).
+    // parseExprSubscripts parses an atom plus member/call chains, and
+    // stops before binary operators, so `@a + b` is a decorator `@a`
+    // followed by `+ b` (a later error), while `@(a + b)` and
+    // `@factory()` parse as written. A `[` that begins a computed
+    // class-element name is NOT part of the decorator:
+    // `@dec [key]` is a decorator `dec` on a computed element, while
+    // `@dec[key] m()` is a member decorator on a method `m` — told
+    // apart by the token after the matching `]` (see
+    // parseDecoratorExpression).
     parseDecorators() {
       let decorators = [];
       while (this.type === atToken) {
         let node = this.startNode();
         this.next();
-        node.expression = this.parseExprSubscripts(null, false);
+        node.expression = this.parseDecoratorExpression();
         decorators.push(this.finishNode(node, "Decorator"));
       }
       return decorators;
+    }
+
+    // True when the next subscript step would be a `[` that begins a
+    // computed class-element name (not a member access on the
+    // decorator). Decided by the token after the matching `]`.
+    computedElementNameAhead() {
+      if (this.type.label !== "[") return false;
+      let after = tokenAfterBracket(this.options, this.input, this.start);
+      return after !== null && isElementNameTerminator(after.type);
+    }
+
+    // A decorator's LeftHandSideExpression, stopping before a `[`
+    // that begins a computed class-element name. Mirrors
+    // parseExprSubscripts / parseSubscripts, but the subscript loop
+    // breaks (leaving the `[` unconsumed, for the element parser)
+    // when computedElementNameAhead() says the bracket is the
+    // element's name. Everything else — dot members, calls, optional
+    // chaining, template tags, async arrows — goes through Acorn's
+    // own parseSubscript, so decorator expressions parse exactly as
+    // they did before.
+    parseDecoratorExpression() {
+      let startPos = this.start, startLoc = this.startLoc;
+      let expr = this.parseExprAtom(null, false);
+      if (expr.type === "ArrowFunctionExpression" && this.input.slice(this.lastTokStart, this.lastTokEnd) !== ")") {
+        return expr;
+      }
+      let maybeAsyncArrow = this.options.ecmaVersion >= 8 && expr.type === "Identifier" && expr.name === "async" &&
+        this.lastTokEnd === expr.end && !this.canInsertSemicolon() && expr.end - expr.start === 5 &&
+        this.potentialArrowAt === expr.start;
+      let optionalChained = false;
+      for (;;) {
+        if (this.computedElementNameAhead()) break;
+        let element = this.parseSubscript(expr, startPos, startLoc, false, maybeAsyncArrow, optionalChained, false);
+        if (element.optional) optionalChained = true;
+        if (element.end === expr.end || element.type === "ArrowFunctionExpression") {
+          if (optionalChained) {
+            let chainNode = this.startNodeAt(startPos, startLoc);
+            chainNode.expression = element;
+            element = this.finishNode(chainNode, "ChainExpression");
+          }
+          return element;
+        }
+        expr = element;
+        maybeAsyncArrow = false;
+      }
+      if (optionalChained) {
+        let chainNode = this.startNodeAt(startPos, startLoc);
+        chainNode.expression = expr;
+        expr = this.finishNode(chainNode, "ChainExpression");
+      }
+      return expr;
     }
 
     // `@dec class C {}`, `@dec export class C {}`,
@@ -94,6 +238,26 @@ function decoratorsPlugin(BaseParser) {
       }
       target.decorators = decorators;
       return result;
+    }
+
+    // `accessor x = 1` — the decorators proposal's accessor field.
+    // Acorn has no `accessor` keyword, so it is recognized here, at
+    // the element-name position (after `static`, and never after
+    // `get`/`set`/`async`/`*`, which Acorn consumes first). It is an
+    // accessor field only when a name follows: `accessor()`,
+    // `accessor = 1` and `accessor;` are a plain method/field named
+    // "accessor" and fall through to Acorn unchanged. The element is
+    // marked `__irohAccessor` for the desugar, which rewrites it
+    // into a private storage field plus a getter/setter pair.
+    parseClassElementName(element) {
+      if (this.type.label === "name" && this.value === "accessor") {
+        let next = tokenAfterOffset(this.options, this.input, this.start);
+        if (next !== null && isNameStartToken(next.type)) {
+          this.next();
+          element.__irohAccessor = true;
+        }
+      }
+      return super.parseClassElementName(element);
     }
 
     // `@dec` before a class element. Static blocks cannot be

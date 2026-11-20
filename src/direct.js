@@ -19,11 +19,18 @@
 //          whose test compares that variable with a literal bound: the
 //          comparison is evaluated with the set value, and the test is
 //          flipped to false only when the set value makes it false.
-//          Member assignments (`obj.prop = v`) are written inside
-//          DEBUG_ASSIGN before the event fires, and compound
-//          assignments (`x += v`) pass only the right-hand value
-//          through event.result — neither is a set point, and a set
-//          never applies there.
+//          Member assignments (`obj.prop = v`, including compound
+//          `obj.prop += v`) are written before the event fires, so a
+//          set for "obj.prop" overwrites the property on the live
+//          object after the write — which runs a setter a second time
+//          when the property is one, so use it on plain data
+//          properties. A plain compound assignment (`x += v`) passes
+//          only the right-hand value through event.result — it is not
+//          a set point, and a set never applies there.
+//          A set may carry `scope`: the name of the function it applies
+//          in (the innermost function at the interception point, as the
+//          stage tracks it; null means top level). An omitted scope
+//          matches any scope — the 1.0.0 behaviour.
 //   skip — FUNCTION_CALL fires "before" with event.call (the function)
 //          and event.arguments, and only then applies the callee. A
 //          listener that replaces event.call with a stub makes the call
@@ -57,9 +64,9 @@
 // Each directive applies once, at the first matching point, then it is
 // consumed. A directive that never matches is recorded with
 // applied: false and a reason — the audit log never pretends a
-// directive took effect. Matching is by name only, not by scope: a
-// set for "i" applies to the first `i` assignment reached, in
-// whichever scope that is.
+// directive took effect. Matching is by name, and by scope when the
+// directive carries one: a set for "i" in scope "inner" applies only
+// to the `i` in that function, not to an outer or top-level `i`.
 //
 // The director receives { findings, allFindings, snapshot, event,
 // eventIndex, directives } and returns a directive, an array of
@@ -68,9 +75,9 @@
 // directives, analysis) makes the run auditable, not a black box.
 //
 // Limits (also in CHANGELOG.md): direct() runs scripts synchronously
-// (like trace()) — top-level await and modules are rejected with the
-// same pointers trace() gives; use traceAsync()/traceModule() for
-// those, without direction. Python/C++ traces cannot be directed —
+// (like trace()) — top-level await is rejected with the same pointer
+// trace() gives; use directAsync() for that. Modules are directed by
+// directModule(). Python/C++ traces cannot be directed —
 // their events arrive buffered after the run, so there is nothing
 // live to direct; the CLI --direct flag is JavaScript-only.
 
@@ -175,7 +182,10 @@ function normalizeDirectives(answer) {
 // A director bug fails loudly: an unknown directive type, or a set/skip
 // without a name or a value, throws instead of being silently ignored.
 // The returned object keeps only the known fields, so the audit log
-// never carries a director's stray properties.
+// never carries a director's stray properties. A set's `scope`, when
+// given, must be a string (the function name) or null (top level); a
+// dotted set name must be exactly "object.property" (one level) —
+// deeper paths are not a set point.
 function validateDirective(d) {
   if (!d || typeof d !== "object") {
     throw new Error(
@@ -186,10 +196,32 @@ function validateDirective(d) {
     if (typeof d.name !== "string" || d.name === "") {
       throw new Error("A \"set\" directive needs a non-empty string `name`.");
     }
+    if (d.name.indexOf(".") !== -1) {
+      let parts = d.name.split(".");
+      let ident = /^[$A-Za-z_][$\w]*$/;
+      if (
+        parts.length !== 2 ||
+        !ident.test(parts[0]) ||
+        !ident.test(parts[1])
+      ) {
+        throw new Error(
+          "A \"set\" directive name with a dot must be exactly \"object.property\" (one level) — got: " + d.name
+        );
+      }
+    }
     if (!Object.prototype.hasOwnProperty.call(d, "value")) {
       throw new Error("A \"set\" directive needs a `value`.");
     }
-    return { type: "set", name: d.name, value: d.value };
+    let out = { type: "set", name: d.name, value: d.value };
+    if (Object.prototype.hasOwnProperty.call(d, "scope")) {
+      if (d.scope !== null && typeof d.scope !== "string") {
+        throw new Error(
+          "A \"set\" directive `scope` must be a string (the function name) or null (top level) — got: " + String(d.scope)
+        );
+      }
+      out.scope = d.scope;
+    }
+    return out;
   }
   if (d.type === "skip") {
     if (typeof d.name !== "string" || d.name === "") {
@@ -223,6 +255,9 @@ function validateDirective(d) {
 //   onEvent(line): called for every JSON event line as it fires.
 //   onDirective(entry): called when a directive is applied (or when a
 //           stop is issued).
+//   onFinding(findings): called with the findings that just fired
+//           (HOT_LOOP carries its loop info), for a caller that wants
+//           to print them live without being the director.
 //   hotLoopThreshold, deepRecursionThreshold,
 //   repeatSequenceMinOccurrences, oneSidedMinTests: live analyzer
 //           thresholds, as for liveAnalyzer().
@@ -235,9 +270,17 @@ function validateDirective(d) {
 // before it attached as error.events (like trace()) and the direction
 // record so far as error.direct. A directed stop is not an error: it
 // returns normally with stopped: true.
-export function direct(code, director, options) {
+//
+// directInternal is the shared core of direct() (sync), directAsync()
+// and directModule(): the same setup, the same director calls, the
+// same completion handling — only the runner differs (compileRunner's
+// sync form, its async wrapper, or the temp-file import for modules).
+// Written with Promise chains, not async/await, because the browser
+// bundle is transpiled by buble.
+function directInternal(iroh, code, director, options, mode) {
   options = options || {};
-  let iroh = this;
+  let allowAsync = mode === "async";
+  let isModule = mode === "module";
   if (
     director !== null &&
     director !== void 0 &&
@@ -275,6 +318,18 @@ export function direct(code, director, options) {
     return entry;
   }
 
+  // Whether this directive's scope matches the current point: an
+  // omitted scope matches anywhere; a string matches only that
+  // function (the innermost, as the stage tracks it); null matches
+  // only top level. Without a stage the scope cannot be checked, so
+  // a scoped directive does not apply.
+  function scopeMatches(d) {
+    if (!Object.prototype.hasOwnProperty.call(d, "scope")) return true;
+    if (stage === null) return false;
+    if (d.scope === null) return stage.currentScope === null;
+    return stage.currentScope === d.scope;
+  }
+
   // Try to apply one pending set/skip entry at this raw event. Returns
   // true when it applied (the entry is then consumed). The raw event is
   // the live object the DEBUG function is about to use, so mutating it
@@ -289,7 +344,8 @@ export function direct(code, director, options) {
       if (
         raw.type === INSTR.VAR_INIT &&
         trigger === "after" &&
-        raw.name === d.name
+        raw.name === d.name &&
+        scopeMatches(d)
       ) {
         raw.value = d.value;
         // The line carries the safe projection of the value (like
@@ -310,7 +366,8 @@ export function direct(code, director, options) {
         raw.type === INSTR.ASSIGN &&
         trigger === "fire" &&
         raw.object === d.name &&
-        raw.property === null
+        raw.property === null &&
+        scopeMatches(d)
       ) {
         let node = null;
         try {
@@ -326,6 +383,70 @@ export function direct(code, director, options) {
           return true;
         }
       }
+      // Member assignment `obj.prop = v` (or `obj.prop += v`): the
+      // write already happened before the event fires, so a set for
+      // "obj.prop" overwrites the property on the live object. The
+      // object variable name comes from the AST — the event carries
+      // the object itself, not its name. A setter property runs twice
+      // (once for the original write, once for the overwrite), so use
+      // this on plain data properties. The recorded line is updated
+      // alongside (result and the object projection) so the trace
+      // shows the directed value.
+      if (
+        raw.type === INSTR.ASSIGN &&
+        trigger === "fire" &&
+        raw.property !== null &&
+        d.name.indexOf(".") !== -1 &&
+        scopeMatches(d)
+      ) {
+        let parts = d.name.split(".");
+        let node = null;
+        try {
+          node = raw.getASTNode();
+        } catch (e) {
+          node = null;
+        }
+        if (
+          node !== null &&
+          node.left &&
+          node.left.type === "MemberExpression" &&
+          node.left.object &&
+          node.left.object.type === "Identifier" &&
+          node.left.object.name === parts[0]
+        ) {
+          let propName = null;
+          if (!node.left.computed && node.left.property) {
+            propName = node.left.property.name;
+          } else if (
+            node.left.computed &&
+            node.left.property &&
+            node.left.property.type === "Literal"
+          ) {
+            propName = String(node.left.property.value);
+          }
+          if (
+            propName === parts[1] &&
+            raw.property === parts[1] &&
+            raw.object !== null &&
+            typeof raw.object === "object"
+          ) {
+            try {
+              raw.object[raw.property] = d.value;
+            } catch (e) {
+              return false;
+            }
+            line.result = iroh.safeValue(d.value, 3, new Set());
+            line.object = iroh.safeValue(raw.object, 3, new Set());
+            entry.applied = true;
+            entry.appliedVia = "member";
+            entry.note =
+              "Member assignment: the write had already happened when the event fired, so the property was overwritten on the live object" +
+              (node.operator === "=" ? "" : " (compound " + node.operator + " — the overwrite replaces the computed result)") +
+              "; a setter property would run twice.";
+            return true;
+          }
+        }
+      }
       // Loop test: the loop compares this variable with a literal
       // bound. Flip the test to false only when the set value makes
       // the comparison false — a set that keeps the test true is not
@@ -333,7 +454,8 @@ export function direct(code, director, options) {
       if (
         raw.type === INSTR.LOOP_TEST &&
         trigger === "test" &&
-        raw.value === true
+        raw.value === true &&
+        scopeMatches(d)
       ) {
         let info = resolveLoopTest(stage, raw.hash);
         if (info !== null && info.counter === d.name) {
@@ -447,47 +569,94 @@ export function direct(code, director, options) {
       }
     }
     let fired = live.feed(line);
-    if (director && fired.length > 0) {
-      let answer = director({
-        findings: enrichFindings(fired),
-        allFindings: live.findings(),
-        snapshot: live.snapshot(),
-        event: line,
-        eventIndex: eventIndex,
-        directives: log.slice(),
-      });
-      issueDirectives(answer, eventIndex, raw, trigger, line);
+    if (fired.length > 0) {
+      let enriched = enrichFindings(fired);
+      if (director) {
+        let answer = director({
+          findings: enriched,
+          allFindings: live.findings(),
+          snapshot: live.snapshot(),
+          event: line,
+          eventIndex: eventIndex,
+          directives: log.slice(),
+        });
+        issueDirectives(answer, eventIndex, raw, trigger, line);
+      }
+      // Live findings as they fire, for a caller that wants to print
+      // them (the CLI --live flag) without being the director.
+      if (options.onFinding) options.onFinding(enriched);
     }
   }
 
-  run = runInternals.createTraceRun(
-    iroh,
-    code,
-    Object.assign({}, options, { events: "ALL", rawOnEvent: handleRaw })
-  );
-  stage = run.stage;
-  let runner = runInternals.compileRunner(iroh, run.stage, false);
-  let result;
+  // Parse errors reject/throw before anything runs; the two errors
+  // users hit most often get a pointer at the right entry point
+  // (directAsync / directModule) instead of createTraceRun's
+  // traceAsync / traceModule pointers.
+  let runOptions = Object.assign({}, options, { events: "ALL", rawOnEvent: handleRaw });
+  if (allowAsync) {
+    runOptions.stageOptions = Object.assign({}, options.stageOptions, {
+      allowAwaitOutsideFunction: true,
+    });
+  }
+  if (isModule) {
+    runOptions.stageOptions = Object.assign({}, options.stageOptions, {
+      sourceType: "module",
+    });
+  }
   try {
-    // Start call: the director may issue initial directives (e.g. skip
-    // a call from the outset) before the first event fires.
-    if (director) {
-      let answer = director({
-        findings: [],
-        allFindings: [],
-        snapshot: live.snapshot(),
-        event: null,
-        eventIndex: -1,
-        directives: [],
-      });
-      issueDirectives(answer, -1, null, null, null);
-    }
-    result = runner(iroh);
+    run = runInternals.createTraceRun(iroh, code, runOptions);
   } catch (e) {
+    if (e instanceof Error && typeof e.message === "string" && !isModule) {
+      if (e.message.indexOf("This program uses top-level await") === 0) {
+        throw new Error(
+          "This program uses top-level await — run it with Iroh.directAsync() (or Iroh.directModule() for modules); Iroh.direct() runs synchronously"
+        );
+      }
+      if (e.message.indexOf("This program uses import/export") === 0) {
+        throw new Error(
+          "This program uses import/export (or import.meta) — direct it with Iroh.directModule(); Iroh.direct() and Iroh.directAsync() run scripts only"
+        );
+      }
+    }
+    throw e;
+  }
+  stage = run.stage;
+  let runner = isModule ? null : runInternals.compileRunner(iroh, run.stage, allowAsync);
+
+  // The run completed normally: directives that never matched stay in
+  // the audit log as unapplied, with the reason — the log never
+  // pretends one took effect. A stop that was swallowed the same way:
+  // the run completed, so the stop did not take effect.
+  function finishSuccess(result) {
+    for (let ii = 0; ii < pending.length; ++ii) {
+      pending[ii].note =
+        "Never applied: no matching interception point was reached before the run ended.";
+    }
+    if (stopPending && stopEntry !== null) {
+      stopEntry.applied = false;
+      stopEntry.note =
+        "Stop requested but the program caught the director's stop signal and ran to completion — a program that swallows every thrown value defeats a stop.";
+    }
+    let summary = live.finish();
+    return {
+      result: result,
+      stopped: false,
+      stopReason: null,
+      events: run.events,
+      findings: summary.findings,
+      directives: log,
+      analysis: summary,
+    };
+  }
+
+  // The run ended by a directed stop or an error. A directed stop is
+  // a normal outcome, not an error: the analysis is the live finish()
+  // over the trace as it stands — a loop the run never reached counts
+  // as zero-iteration in the recorded trace. A runtime error (or a
+  // director bug) throws with the trace so far attached, like trace(),
+  // plus the direction record so far.
+  function finishError(e) {
     if (e === DIRECTOR_STOP) {
-      // Directed stop: a normal outcome, not an error. The analysis is
-      // the live finish() over the trace as it stands — a loop the run
-      // never reached counts as zero-iteration in the recorded trace.
       if (stopEntry !== null) {
         stopEntry.applied = true;
         stopEntry.appliedAtEvent = run.events.length - 1;
@@ -504,8 +673,6 @@ export function direct(code, director, options) {
         analysis: summary,
       };
     }
-    // A runtime error (or a director bug): the trace so far is
-    // attached, like trace(), plus the direction record so far.
     runInternals.attachTraceEvents(e, run.events);
     e.direct = {
       result: void 0,
@@ -518,29 +685,80 @@ export function direct(code, director, options) {
     };
     throw e;
   }
-  // Directives that never matched stay in the audit log as unapplied,
-  // with the reason — the log never pretends one took effect. A stop
-  // that was swallowed the same way: the run completed, so the stop
-  // did not take effect.
-  for (let ii = 0; ii < pending.length; ++ii) {
-    pending[ii].note =
-      "Never applied: no matching interception point was reached before the run ended.";
+
+  let result;
+  try {
+    // Start call: the director may issue initial directives (e.g. skip
+    // a call from the outset) before the first event fires.
+    if (director) {
+      let answer = director({
+        findings: [],
+        allFindings: [],
+        snapshot: live.snapshot(),
+        event: null,
+        eventIndex: -1,
+        directives: [],
+      });
+      issueDirectives(answer, -1, null, null, null);
+    }
+    if (isModule) {
+      // The module runs through the temp-file import; its result is
+      // the namespace (like traceModule()), and a directed stop thrown
+      // from a listener rejects the import with the sentinel, which
+      // finishError turns into the stopped record.
+      return runInternals.importTracedModule(iroh, run, options).then(
+        function(out) { return finishSuccess(out.result); },
+        finishError
+      );
+    }
+    if (allowAsync) {
+      return runner(iroh).then(finishSuccess, finishError);
+    }
+    result = runner(iroh);
+  } catch (e) {
+    return finishError(e);
   }
-  if (stopPending && stopEntry !== null) {
-    stopEntry.applied = false;
-    stopEntry.note =
-      "Stop requested but the program caught the director's stop signal and ran to completion — a program that swallows every thrown value defeats a stop.";
+  return finishSuccess(result);
+}
+
+// Synchronous directed run: direct() in the 1.0.0 sense.
+export function direct(code, director, options) {
+  return directInternal(this, code, director, options, "sync");
+}
+
+// Async directed run: the same engine, but the program runs through
+// compileRunner's async wrapper, so top-level await works and async
+// continuations are included. Returns a Promise of the directed
+// record. A parse error or module code rejects (never throws
+// synchronously) — like traceAsync() — and a runtime error rejects
+// with the events that fired before it attached as error.events and
+// the direction record so far as error.direct.
+export function directAsync(code, director, options) {
+  let out;
+  try {
+    out = directInternal(this, code, director, options, "async");
+  } catch (e) {
+    return Promise.reject(e);
   }
-  let summary = live.finish();
-  return {
-    result: result,
-    stopped: false,
-    stopReason: null,
-    events: run.events,
-    findings: summary.findings,
-    directives: log,
-    analysis: summary,
-  };
+  return Promise.resolve(out);
+}
+
+// Module directed run: the same engine, but the program runs as an ES
+// module through the temp-file import, so import/export and top-level
+// await both work. Returns a Promise of the directed record; the
+// record's result is the module namespace (like traceModule()).
+// Options.filename bases relative imports, as in traceModule(). A
+// parse error rejects before running; a runtime error rejects with the
+// events that fired before it attached as error.events and the
+// direction record so far as error.direct. Requires Node.js.
+export function directModule(code, director, options) {
+  let out;
+  try {
+    out = directInternal(this, code, director, options, "module");
+  } catch (e) {
+    return Promise.reject(e);
+  }
+  return Promise.resolve(out);
 }
 
 // The built-in director: a runaway-loop guard. When HOT_LOOP fires it

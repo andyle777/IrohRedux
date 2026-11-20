@@ -122,14 +122,21 @@ function buildTraceEnv(events) {
     } else if (e.event === "FUNCTION_CALL" && e.trigger === "before" && e.name) {
       env.called[e.name] = true;
       if (!env.funcs[e.name]) {
-        env.funcs[e.name] = { args: e.arguments || [], returns: null };
+        env.funcs[e.name] = { args: e.arguments || [], returns: null, calls: [], returnValues: [] };
       }
+      // Every call's arguments, not just the first: a later call with
+      // a different argument type must not silently reuse the first
+      // call's signature (see the ctx seeding below).
+      env.funcs[e.name].calls.push(e.arguments || []);
     } else if (e.event === "FUNCTION_RETURN" && e.name) {
       if (!env.funcs[e.name]) {
-        env.funcs[e.name] = { args: null, returns: null };
+        env.funcs[e.name] = { args: null, returns: null, calls: [], returnValues: [] };
       }
-      if (env.funcs[e.name].returns === null && e.return !== void 0) {
-        env.funcs[e.name].returns = e.return;
+      if (e.return !== void 0) {
+        env.funcs[e.name].returnValues.push(e.return);
+        if (env.funcs[e.name].returns === null) {
+          env.funcs[e.name].returns = e.return;
+        }
       }
     } else if (e.event === "IF_TEST") {
       let g = env.ifOutcomes[e.hash];
@@ -149,7 +156,11 @@ function inferType(node, ctx) {
   switch (node.type) {
     case "Literal": {
       if (typeof node.value === "number") {
-        return Number.isInteger(node.value) ? "int" : "double";
+        // Only a safe integer is a C++ int: JS numbers are doubles,
+        // and a literal like 1e21 is integer-valued but cannot be a
+        // C++ int (nor a long long) — String(1e21) must format as
+        // "1e+21", not std::to_string's full digits.
+        return Number.isSafeInteger(node.value) ? "int" : "double";
       }
       if (typeof node.value === "string") return "std::string";
       if (typeof node.value === "boolean") return "bool";
@@ -287,7 +298,7 @@ function makeJSEmitter(target, report, env, hints) {
   let isPy = target === "python";
   let lines = [];
   let indentLevel = 0;
-  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, vectorHelper: false, unsupportedHelper: false, cout: false };
+  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false };
   let noted = {};
   function noteOnce(key, text) {
     if (!noted[key]) {
@@ -309,10 +320,38 @@ function makeJSEmitter(target, report, env, hints) {
   for (let ii = 0; ii < funcNames.length; ++ii) {
     let f = env.funcs[funcNames[ii]];
     let params = null;
+    let paramsConflict = null;
     if (f.args) {
       params = [];
       for (let jj = 0; jj < f.args.length; ++jj) {
         params.push(cppTypeOfValue(f.args[jj]));
+      }
+      // A later call with a different argument type is a conflict,
+      // not a reason to silently reuse the first call's signature.
+      // cppSignature refuses the function when one is recorded.
+      if (f.calls) {
+        for (let jj = 0; jj < params.length; ++jj) {
+          for (let kk = 1; kk < f.calls.length; ++kk) {
+            let t = cppTypeOfValue(f.calls[kk][jj]);
+            if (t !== null && params[jj] !== null && t !== params[jj]) {
+              if (!paramsConflict) paramsConflict = [];
+              paramsConflict.push({ index: jj, first: params[jj], other: t, call: kk });
+              break;
+            }
+          }
+        }
+      }
+    }
+    // Same for returns: differing return types across calls.
+    let returnsConflict = null;
+    if (f.returnValues && f.returnValues.length > 1) {
+      let first = cppTypeOfValue(f.returnValues[0]);
+      for (let kk = 1; kk < f.returnValues.length; ++kk) {
+        let t = cppTypeOfValue(f.returnValues[kk]);
+        if (t !== null && first !== null && t !== first) {
+          returnsConflict = { first: first, other: t, call: kk };
+          break;
+        }
       }
     }
     ctx.funcs[funcNames[ii]] = {
@@ -323,6 +362,10 @@ function makeJSEmitter(target, report, env, hints) {
       returnValue: f.returns !== null && f.returns !== void 0 ? f.returns : null,
       paramsFrom: params ? "trace" : null,
       returnsFrom: f.returns !== null && f.returns !== void 0 ? "trace" : null,
+      paramsConflict: paramsConflict,
+      returnsConflict: returnsConflict,
+      callCount: f.calls ? f.calls.length : 0,
+      returnCount: f.returnValues ? f.returnValues.length : 0,
     };
   }
   if (hints && hints.functions) {
@@ -406,18 +449,54 @@ function makeJSEmitter(target, report, env, hints) {
     return unsupportedExpr("literal of unsupported type", "Literal");
   }
 
-  // C++ helper: render an expression as a string for concatenation.
-  function cppStringOf(node) {
+  // Python helper: render an expression as a string for concatenation.
+  // Python "+" refuses str + number at runtime, so non-strings must be
+  // converted — str() for ints, the JS "true"/"false" ternary for
+  // bools, __iroh_jsnum for doubles (str() formats 1e16 as "1e+16",
+  // where JS prints "10000000000000000").
+  function pyStringOf(node) {
     let t = inferType(node, ctx);
     let s = expr(node, 16);
     if (t === "std::string") return s;
-    if (t === "int") return "std::to_string(" + s + ")";
-    if (t === "bool") return "((" + s + ') ? "true" : "false")';
+    if (t === "int") return "str(" + s + ")";
+    if (t === "bool") return '("true" if ' + s + ' else "false")';
     if (t === "double") {
+      needs.jsnum = true;
+      return "__iroh_jsnum(" + s + ")";
+    }
+    if (t && t.indexOf("std::vector<") === 0) {
       return unsupportedExpr(
-        "string concatenation of a double value in C++ (std::to_string prints 6 decimals, unlike JS)",
+        "string concatenation of an array in Python (JS joins with commas; Python str() prints brackets)",
         "BinaryExpression"
       );
+    }
+    recordAssumption(
+      report,
+      "string concatenation operand assumed to be a string",
+      "No static or trace type for the operand; emitted as-is"
+    );
+    return s;
+  }
+
+  // C++ helper: render an expression as a string for concatenation.
+  // Every result must be a real std::string: a bare string literal is
+  // const char*, and `"a" + const char*` is pointer arithmetic, not
+  // concatenation — so literals and the bool ternary (whose arms are
+  // literals) are wrapped in std::string(...).
+  function cppStringOf(node) {
+    let t = inferType(node, ctx);
+    let s = expr(node, 16);
+    if (t === "std::string") {
+      if (node.type === "Literal" && typeof node.value === "string") return "std::string(" + s + ")";
+      return s;
+    }
+    if (t === "int") return "std::to_string(" + s + ")";
+    if (t === "bool") return "std::string(((" + s + ') ? "true" : "false"))';
+    if (t === "double") {
+      // JS Number -> string: the shortest decimal that round-trips,
+      // formatted the way JS String(v) formats it (see __iroh_jsnum).
+      needs.jsnum = true;
+      return "__iroh_jsnum(" + s + ")";
     }
     recordAssumption(
       report,
@@ -435,15 +514,40 @@ function makeJSEmitter(target, report, env, hints) {
         let raw = q.value.cooked !== void 0 && q.value.cooked !== null ? q.value.cooked : q.value.raw;
         parts.push(raw.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/{/g, "{{").replace(/}/g, "}}"));
         if (ii < node.expressions.length) {
-          parts.push("{" + expr(node.expressions[ii], 16) + "}");
+          // f"{x}" uses str(x): "True" for bools (JS prints "true")
+          // and "1e+16" for 1e16 (JS prints "10000000000000000") —
+          // so route bools and doubles explicitly. Arrays join with
+          // commas in JS and print brackets in Python: refuse loudly.
+          let e = node.expressions[ii];
+          let t = inferType(e, ctx);
+          if (t === "std::string" || t === "int") {
+            parts.push("{" + expr(e, 16) + "}");
+          } else if (t === "bool") {
+            parts.push("{(\"true\" if " + expr(e, 16) + " else \"false\")}");
+          } else if (t === "double") {
+            needs.jsnum = true;
+            parts.push("{__iroh_jsnum(" + expr(e, 16) + ")}");
+          } else if (t && t.indexOf("std::vector<") === 0) {
+            return unsupportedExpr(
+              "template literal interpolation of an array in Python (JS joins with commas; Python str() prints brackets)",
+              "TemplateLiteral"
+            );
+          } else {
+            recordAssumption(
+              report,
+              "template literal interpolation assumed to be a string or number",
+              "No static or trace type for the interpolation; emitted as-is"
+            );
+            parts.push("{" + expr(e, 16) + "}");
+          }
         }
       }
       parts.push('"');
       return parts.join("");
     }
-    // C++: "a" + std::to_string(x) + "b" — only string/integral
-    // interpolations; doubles would print with 6 decimals via
-    // std::to_string, which does not match JS output.
+    // C++: "a" + std::to_string(x) + "b" — string/integral/double
+    // interpolations; doubles go through __iroh_jsnum so they print
+    // the way JS does (std::to_string would print 6 decimals).
     let parts = [];
     for (let ii = 0; ii < node.quasis.length; ++ii) {
       let q = node.quasis[ii];
@@ -455,9 +559,12 @@ function makeJSEmitter(target, report, env, hints) {
         if (t === "std::string") parts.push(expr(e, 16));
         else if (t === "int") parts.push("std::to_string(" + expr(e, 16) + ")");
         else if (t === "bool") parts.push("((" + expr(e, 16) + ') ? "true" : "false")');
-        else {
+        else if (t === "double") {
+          needs.jsnum = true;
+          parts.push("__iroh_jsnum(" + expr(e, 16) + ")");
+        } else {
           return unsupportedExpr(
-            "template literal interpolation of non-string, non-integer value in C++ (std::to_string would print doubles with 6 decimals, unlike JS)",
+            "template literal interpolation of non-string, non-integer, non-double value in C++",
             "TemplateLiteral"
           );
         }
@@ -503,6 +610,11 @@ function makeJSEmitter(target, report, env, hints) {
             args.push(a.value ? '"true"' : '"false"');
           } else if (inferType(a, ctx) === "bool") {
             args.push('("true" if ' + expr(a, 16) + ' else "false")');
+          } else if (inferType(a, ctx) === "double") {
+            // print() uses str(), which formats 1e16 as "1e+16"
+            // where JS prints "10000000000000000".
+            needs.jsnum = true;
+            args.push("__iroh_jsnum(" + expr(a, 16) + ")");
           } else {
             args.push(expr(a, 16));
           }
@@ -570,7 +682,37 @@ function makeJSEmitter(target, report, env, hints) {
         return "std::stod(" + expr(node.arguments[0], 16) + ")";
       }
       if (name === "String") {
-        if (isPy) return "str(" + expr(node.arguments[0], 16) + ")";
+        if (isPy) {
+          let at = inferType(node.arguments[0], ctx);
+          if (at === "double") {
+            // str() formats 1e16 as "1e+16"; JS prints "10000000000000000".
+            needs.jsnum = true;
+            return "__iroh_jsnum(" + expr(node.arguments[0], 16) + ")";
+          }
+          if (at === "bool") {
+            // str(True) is "True"; JS String(true) is "true".
+            return '("true" if ' + expr(node.arguments[0], 16) + ' else "false")';
+          }
+          if (at && at.indexOf("std::vector<") === 0) {
+            return unsupportedExpr(
+              "String() of an array in Python (JS joins with commas; Python str() prints brackets)",
+              "CallExpression"
+            );
+          }
+          return "str(" + expr(node.arguments[0], 16) + ")";
+        }
+        // std::to_string prints doubles with 6 decimals ("1.500000"),
+        // unlike JS String(1.5) ("1.5") — route doubles through the
+        // JS number formatter. std::to_string(true) is "1", not
+        // "true" — bools get the ternary. Ints and strings keep
+        // std::to_string.
+        if (inferType(node.arguments[0], ctx) === "double") {
+          needs.jsnum = true;
+          return "__iroh_jsnum(" + expr(node.arguments[0], 16) + ")";
+        }
+        if (inferType(node.arguments[0], ctx) === "bool") {
+          return "std::string(((" + expr(node.arguments[0], 16) + ') ? "true" : "false"))';
+        }
         return "std::to_string(" + expr(node.arguments[0], 16) + ")";
       }
       if (name === "Number") {
@@ -627,30 +769,56 @@ function makeJSEmitter(target, report, env, hints) {
       needs.cmath = true;
       return "std::pow(" + expr(node.left, 16) + ", " + expr(node.right, 16) + ")";
     }
+    if (op === "%") {
+      if (isPy) {
+        // JS % is the truncated remainder; Python % is floored (it
+        // takes the divisor's sign). math.fmod has the right sign but
+        // returns a float, which would print "-2.0" where JS prints
+        // "-2" — so use the truncating identity through a helper,
+        // which keeps ints int and floats float.
+        needs.jsmod = true;
+        return "__iroh_jsmod(" + expr(node.left, 16) + ", " + expr(node.right, 16) + ")";
+      }
+      // C++ % is truncated like JS, but only for integers — % on
+      // doubles does not compile. Route double operands through
+      // std::fmod (also truncated, so the semantics match).
+      let lt = inferType(node.left, ctx);
+      let rt = inferType(node.right, ctx);
+      if (lt === "double" || rt === "double") {
+        needs.cmath = true;
+        return "std::fmod(" + expr(node.left, 16) + ", " + expr(node.right, 16) + ")";
+      }
+    }
     let outOp = op;
     if (op === "===") outOp = "==";
     else if (op === "!==") outOp = "!=";
     else if (op === "&&") outOp = isPy ? "and" : "&&";
     else if (op === "||") outOp = isPy ? "or" : "||";
     let myPrec = precedence(node);
-    if (!isPy && op === "+") {
+    if (isPy && op === "+") {
       // String concatenation: either side a string (or a string
-      // literal) makes the whole `+` a concat. A literal on its own
-      // is const char*, so `"a" + 1` would compile as pointer
-      // arithmetic — route everything through cppStringOf, and wrap
-      // two literals so the left one is a real std::string.
+      // literal) makes the whole `+` a concat. Python refuses str +
+      // number at runtime, so route non-strings through pyStringOf.
       let lt = inferType(node.left, ctx);
       let rt = inferType(node.right, ctx);
       let leftIsStr = lt === "std::string" || (node.left.type === "Literal" && typeof node.left.value === "string");
       let rightIsStr = rt === "std::string" || (node.right.type === "Literal" && typeof node.right.value === "string");
       if (leftIsStr || rightIsStr) {
-        let l = cppStringOf(node.left);
-        let r = cppStringOf(node.right);
-        if (node.left.type === "Literal" && typeof node.left.value === "string" &&
-            node.right.type === "Literal" && typeof node.right.value === "string") {
-          l = "std::string(" + l + ")";
-        }
-        return l + " + " + r;
+        return pyStringOf(node.left) + " + " + pyStringOf(node.right);
+      }
+    }
+    if (!isPy && op === "+") {
+      // String concatenation: either side a string (or a string
+      // literal) makes the whole `+` a concat. A literal on its own
+      // is const char*, so `"a" + 1` would compile as pointer
+      // arithmetic — route everything through cppStringOf, which
+      // wraps literals and bool ternaries in std::string(...).
+      let lt = inferType(node.left, ctx);
+      let rt = inferType(node.right, ctx);
+      let leftIsStr = lt === "std::string" || (node.left.type === "Literal" && typeof node.left.value === "string");
+      let rightIsStr = rt === "std::string" || (node.right.type === "Literal" && typeof node.right.value === "string");
+      if (leftIsStr || rightIsStr) {
+        return cppStringOf(node.left) + " + " + cppStringOf(node.right);
       }
     }
     return (
@@ -829,12 +997,29 @@ function makeJSEmitter(target, report, env, hints) {
         );
         return null;
       }
+      // A conflict recorded across calls (trace types only — a hint
+      // fills gaps but never overrides trace evidence, so it cannot
+      // rescue a conflict). One C++ signature cannot cover two types.
+      if (traceFn && traceFn.paramsFrom === "trace" && traceFn.paramsConflict) {
+        for (let ci = 0; ci < traceFn.paramsConflict.length; ++ci) {
+          let c = traceFn.paramsConflict[ci];
+          if (c.index === ii) {
+            markUnsupported(
+              report,
+              "FunctionDeclaration",
+              "C++ parameter '" + pname + "' of '" + fnName + "' was called with conflicting types (" + c.first + " in the first call, " + c.other + " in call " + (c.call + 1) + ") — one C++ signature cannot cover both; split the function into one per argument type (a type hint cannot override trace evidence)"
+            );
+            return null;
+          }
+        }
+      }
       sig.params.push(t + " " + pname + def);
     }
     if (paramsFromTrace) {
+      let callCount = (traceFn && traceFn.callCount) || 1;
       recordAssumption(
         report,
-        "parameter types of '" + fnName + "' (" + sig.params.join(", ") + ") taken from the trace (first call only — later calls with different argument types would break the translation)",
+        "parameter types of '" + fnName + "' (" + sig.params.join(", ") + ") taken from the trace (verified consistent across " + callCount + " call" + (callCount === 1 ? "" : "s") + ")",
         "FUNCTION_CALL '" + fnName + "' arguments " + JSON.stringify(traceFn.args || [])
       );
     }
@@ -870,15 +1055,25 @@ function makeJSEmitter(target, report, env, hints) {
         }
         if (allSame) ret = first;
         else if (traceFn && traceFn.returns) {
+          // Conflicting return types across calls refuse, like params.
+          if (traceFn.returnsConflict) {
+            markUnsupported(
+              report,
+              "FunctionDeclaration",
+              "C++ return type of '" + fnName + "' differs across calls (" + traceFn.returnsConflict.first + " in the first call, " + traceFn.returnsConflict.other + " in call " + (traceFn.returnsConflict.call + 1) + ") — one C++ signature cannot cover both; split the function into one per argument type (a type hint cannot override trace evidence)"
+            );
+            return null;
+          }
           ret = traceFn.returns;
           if (traceFn.returnsFrom === "trace") retFromTrace = true;
         }
       }
     }
     if (retFromTrace) {
+      let returnCount = (traceFn && traceFn.returnCount) || 1;
       recordAssumption(
         report,
-        "return type of '" + fnName + "' (" + ret + ") taken from the trace (first return only)",
+        "return type of '" + fnName + "' (" + ret + ") taken from the trace (verified consistent across " + returnCount + " return" + (returnCount === 1 ? "" : "s") + ")",
         "FUNCTION_RETURN '" + fnName + "' value " + JSON.stringify(traceFn.returnValue)
       );
     }
@@ -1077,6 +1272,12 @@ function makeJSEmitter(target, report, env, hints) {
             if (a.type === "Literal" && a.value === null) piece = '"null"';
             else if (a.type === "Literal" && typeof a.value === "boolean") piece = a.value ? '"true"' : '"false"';
             else if (inferType(a, ctx) === "bool") piece = "((" + expr(a, 16) + ') ? "true" : "false")';
+            else if (inferType(a, ctx) === "double") {
+              // std::cout defaults to 6 significant digits ("0.3"
+              // for 0.1 + 0.2); JS prints "0.30000000000000004".
+              needs.jsnum = true;
+              piece = "__iroh_jsnum(" + expr(a, 16) + ")";
+            }
             else if (a.type === "ArrayExpression" || (inferType(a, ctx) || "").indexOf("std::vector<") === 0) {
               needs.vectorHelper = true;
               piece = null;
@@ -1365,6 +1566,60 @@ function makeJSEmitter(target, report, env, hints) {
       let header = [];
       if (needs.math) header.push("import math");
       if (needs.random) header.push("import random");
+      if (needs.jsmod) {
+        // JS % is the truncated remainder; Python % is floored.
+        // int(a / b) truncates toward zero, so this keeps ints int
+        // and floats float, matching JS output exactly.
+        header.push("def __iroh_jsmod(a, b):");
+        header.push("    return a - int(a / b) * b");
+        header.push("");
+      }
+      if (needs.jsnum) {
+        // JS Number -> string: the shortest decimal that round-trips,
+        // formatted the way JS String(v) formats it. Python repr is
+        // already shortest, but it switches to exponential at 1e16
+        // (JS waits until 1e21) and zero-pads exponents ("1e-07"
+        // where JS prints "1e-7") — so take repr's digits and
+        // exponent, then place the point per the ECMAScript
+        // Number::toString rules (k = decimal exponent, n = digit
+        // count): 0 < k <= n <= 21 writes the digits with the point
+        // at k; n < k <= 21 appends zeros; -6 < k <= 0 writes "0."
+        // with -k zeros; otherwise exponential with a bare exponent.
+        header.push("def __iroh_jsnum(v):");
+        header.push("    if v != v: return \"NaN\"");
+        header.push("    if v == float(\"inf\"): return \"Infinity\"");
+        header.push("    if v == float(\"-inf\"): return \"-Infinity\"");
+        header.push("    if v == 0: return \"0\"");
+        header.push("    neg = v < 0");
+        header.push("    if neg: v = -v");
+        header.push("    s = repr(v)");
+        header.push("    if \"e\" in s:");
+        header.push("        mant, exp = s.split(\"e\")");
+        header.push("        k = int(exp) + 1");
+        header.push("        digits = mant.replace(\".\", \"\")");
+        header.push("    elif \".\" in s:");
+        header.push("        ip, fp = s.split(\".\")");
+        header.push("        k = len(ip)");
+        header.push("        digits = ip + fp");
+        header.push("    else:");
+        header.push("        k = len(s)");
+        header.push("        digits = s");
+        header.push("    digits = digits.rstrip(\"0\") or \"0\"");
+        header.push("    n = len(digits)");
+        header.push("    if 0 < k <= n <= 21:");
+        header.push("        out = digits[:k]");
+        header.push("        if k < n: out += \".\" + digits[k:]");
+        header.push("    elif n < k <= 21:");
+        header.push("        out = digits + \"0\" * (k - n)");
+        header.push("    elif -6 < k <= 0:");
+        header.push("        out = \"0.\" + \"0\" * (-k) + digits");
+        header.push("    else:");
+        header.push("        out = digits[0]");
+        header.push("        if n > 1: out += \".\" + digits[1:]");
+        header.push("        out += \"e\" + (\"+\" if k - 1 >= 0 else \"-\") + str(abs(k - 1))");
+        header.push("    return (\"-\" if neg else \"\") + out");
+        header.push("");
+      }
       if (needs.unsupportedHelper) {
         header.push("def _iroh_unsupported(msg):");
         header.push("    raise NotImplementedError(\"IrohRedux: \" + msg)");
@@ -1407,6 +1662,67 @@ function makeJSEmitter(target, report, env, hints) {
       header.push("    std::cout << v[i];");
       header.push("  }");
       header.push("  std::cout << \"]\";");
+      header.push("}");
+    }
+    if (needs.jsnum) {
+      // JS Number -> string: the shortest decimal that round-trips,
+      // formatted the way JS String(v) formats it. std::to_string
+      // prints 6 decimals and std::cout defaults to 6 significant
+      // digits, neither of which matches JS — so find the shortest
+      // digits that round-trip (via %e at increasing precision),
+      // then place the point per the ECMAScript Number::toString
+      // rules (k = decimal exponent, n = digit count): k <= n <= 21
+      // writes the digits with the point at k; n < k <= 21 appends
+      // zeros; -6 < k <= 0 writes "0." with -k zeros; otherwise
+      // exponential with a bare exponent ("1e+21", "1e-7").
+      header.push("");
+      header.push("#include <cmath>");
+      header.push("#include <cstdio>");
+      header.push("#include <sstream>");
+      header.push("std::string __iroh_jsnum(double v) {");
+      header.push("  if (std::isnan(v)) return \"NaN\";");
+      header.push("  if (std::isinf(v)) return v > 0 ? \"Infinity\" : \"-Infinity\";");
+      header.push("  if (v == 0) return \"0\";");
+      header.push("  bool neg = v < 0;");
+      header.push("  if (neg) v = -v;");
+      header.push("  std::string digits;");
+      header.push("  int k = 0;");
+      header.push("  char buf[64];");
+      header.push("  for (int p = 1; p <= 17; ++p) {");
+      header.push("    std::snprintf(buf, sizeof(buf), \"%.*e\", p - 1, v);");
+      header.push("    std::string s(buf);");
+      header.push("    size_t epos = s.find('e');");
+      header.push("    int e = std::stoi(s.substr(epos + 1));");
+      header.push("    std::string d;");
+      header.push("    d += s[0];");
+      header.push("    size_t dot = s.find('.');");
+      header.push("    if (dot != std::string::npos) {");
+      header.push("      for (size_t j = dot + 1; j < epos; ++j) d += s[j];");
+      header.push("    }");
+      header.push("    while (d.size() > 1 && d[d.size() - 1] == '0') d.pop_back();");
+      header.push("    if (std::stod(s) == v) { digits = d; k = e + 1; break; }");
+      header.push("  }");
+      header.push("  if (digits.empty()) { std::ostringstream os; os << v; return os.str(); }");
+      header.push("  int n = (int)digits.size();");
+      header.push("  std::string out = neg ? \"-\" : \"\";");
+      header.push("  if (k > 0 && k <= n && n <= 21) {");
+      header.push("    out += digits.substr(0, k);");
+      header.push("    if (k < n) { out += \".\"; out += digits.substr(k); }");
+      header.push("  } else if (n < k && k <= 21) {");
+      header.push("    out += digits;");
+      header.push("    for (int i = 0; i < k - n; ++i) out += \"0\";");
+      header.push("  } else if (k > -6 && k <= 0) {");
+      header.push("    out += \"0.\";");
+      header.push("    for (int i = 0; i < -k; ++i) out += \"0\";");
+      header.push("    out += digits;");
+      header.push("  } else {");
+      header.push("    out += digits.substr(0, 1);");
+      header.push("    if (n > 1) { out += \".\"; out += digits.substr(1); }");
+      header.push("    out += \"e\";");
+      header.push("    out += (k - 1 >= 0 ? \"+\" : \"-\");");
+      header.push("    out += std::to_string(k - 1 >= 0 ? k - 1 : -(k - 1));");
+      header.push("  }");
+      header.push("  return out;");
       header.push("}");
     }
     header.push("");
@@ -1651,8 +1967,10 @@ function makePyJSEmitter(report) {
         if (op === "Mult") return "(" + l + " * " + r + ")";
         if (op === "Div") return "(" + l + " / " + r + ")";
         if (op === "Mod") {
-          noteOnce("mod", "Python % and JS % differ for negative operands (Python takes the divisor's sign).");
-          return "(" + l + " % " + r + ")";
+          // Python % is floored; JS % is truncated (it takes the
+          // dividend's sign). The floored form below matches Python
+          // for every sign combination, including negative divisors.
+          return "((" + l + " % " + r + ") + " + r + ") % " + r;
         }
         if (op === "Pow") return "(" + l + " ** " + r + ")";
         if (op === "FloorDiv") return "Math.floor(" + l + " / " + r + ")";

@@ -14,7 +14,7 @@ var extend = function(cls, prot) {
   }
 };
 
-var version = "1.0.0";
+var version = "1.0.1";
 
 // indent factor
 var INDENT_FACTOR = 1;
@@ -8000,6 +8000,93 @@ var acorn_3 = acorn$1.TokenType;
 // bundled into the browser build by buble.
 var atToken = new acorn_3("@", { startsExpr: true });
 
+// NOTE: Acorn's `tokTypes` is NOT imported. Rollup cannot see it as a
+// named export of acorn's CJS dist (the browser bundle fails with
+// "'tokTypes' is not exported by node_modules/acorn/dist/acorn.js"),
+// so token types are compared by their stable `.label` strings
+// instead: "(" "=" ";" "}" "eof" "[" "]". The `@` token is this
+// file's own TokenType, compared by identity.
+
+// The tokens that can follow a complete class-element name: `(` for
+// a method, `=` for a field with an initializer, `;` / `}` / `@` for
+// a field that ends there (or the next decorated element). Anything
+// else after a `]` — an identifier, another `[` — means the bracket
+// belonged to the decorator expression (a computed member access),
+// and the element's name follows it.
+function isElementNameTerminator(type) {
+  return (
+    type.label === "(" ||
+    type.label === "=" ||
+    type.label === ";" ||
+    type.label === "}" ||
+    type === atToken
+  );
+}
+
+// The token after the token starting at `offset`. Found by
+// tokenizing with a throwaway parser — Acorn's token stream is a
+// function of the input and options alone, so a fresh parser over
+// the same input produces the same tokens as the real one, and no
+// tokenizer state has to be saved and restored. Returns the token
+// object, or null at end of input.
+function tokenAfterOffset(options, input, offset) {
+  var probeOptions = Object.assign({}, options, {
+    onToken: void 0,
+    onComment: void 0,
+  });
+  var probe = new DecoratorParser(probeOptions, input);
+  for (;;) {
+    var tok = probe.getToken();
+    if (tok.type.label === "eof") { return null; }
+    if (tok.start === offset) {
+      var next = probe.getToken();
+      return next.type.label === "eof" ? null : next;
+    }
+  }
+}
+
+// True when a token can start a class-element name (mirrors
+// Acorn's isClassElementNameStart, by label — see the tokTypes
+// note above).
+function isNameStartToken(type) {
+  return (
+    type.label === "name" ||
+    type.label === "privateId" ||
+    type.label === "num" ||
+    type.label === "string" ||
+    type.label === "[" ||
+    !!type.keyword
+  );
+}
+function tokenAfterBracket(options, input, bracketStart) {
+  var probeOptions = Object.assign({}, options, {
+    onToken: void 0,
+    onComment: void 0,
+  });
+  var probe = new DecoratorParser(probeOptions, input);
+  var depth = 0;
+  var started = false;
+  for (;;) {
+    var tok = probe.getToken();
+    if (tok.type.label === "eof") { return null; }
+    if (!started) {
+      if (tok.start === bracketStart && tok.type.label === "[") {
+        started = true;
+        depth = 1;
+      }
+      continue;
+    }
+    if (tok.type.label === "[") { depth += 1; }
+    else if (tok.type.label === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        var next = probe.getToken();
+        return next.type.label === "eof" ? null : next;
+      }
+    }
+  }
+}
+
 function decoratorsPlugin(BaseParser) {
   return (function (BaseParser) {
     function anonymous () {
@@ -8019,10 +8106,16 @@ function decoratorsPlugin(BaseParser) {
     };
 
     // Parse one or more `@expr` decorators. The expression is a
-    // LeftHandSideExpression: parseExprSubscripts parses an atom plus
-    // member/call chains, and stops before binary operators, so
-    // `@a + b` is a decorator `@a` followed by `+ b` (a later error),
-    // while `@(a + b)` and `@factory()` parse as written.
+    // LeftHandSideExpression (identifier, member chain, call, ...).
+    // parseExprSubscripts parses an atom plus member/call chains, and
+    // stops before binary operators, so `@a + b` is a decorator `@a`
+    // followed by `+ b` (a later error), while `@(a + b)` and
+    // `@factory()` parse as written. A `[` that begins a computed
+    // class-element name is NOT part of the decorator:
+    // `@dec [key]` is a decorator `dec` on a computed element, while
+    // `@dec[key] m()` is a member decorator on a method `m` — told
+    // apart by the token after the matching `]` (see
+    // parseDecoratorExpression).
     anonymous.prototype.parseDecorators = function parseDecorators () {
       var this$1 = this;
 
@@ -8030,10 +8123,63 @@ function decoratorsPlugin(BaseParser) {
       while (this.type === atToken) {
         var node = this$1.startNode();
         this$1.next();
-        node.expression = this$1.parseExprSubscripts(null, false);
+        node.expression = this$1.parseDecoratorExpression();
         decorators.push(this$1.finishNode(node, "Decorator"));
       }
       return decorators;
+    };
+
+    // True when the next subscript step would be a `[` that begins a
+    // computed class-element name (not a member access on the
+    // decorator). Decided by the token after the matching `]`.
+    anonymous.prototype.computedElementNameAhead = function computedElementNameAhead () {
+      if (this.type.label !== "[") { return false; }
+      var after = tokenAfterBracket(this.options, this.input, this.start);
+      return after !== null && isElementNameTerminator(after.type);
+    };
+
+    // A decorator's LeftHandSideExpression, stopping before a `[`
+    // that begins a computed class-element name. Mirrors
+    // parseExprSubscripts / parseSubscripts, but the subscript loop
+    // breaks (leaving the `[` unconsumed, for the element parser)
+    // when computedElementNameAhead() says the bracket is the
+    // element's name. Everything else — dot members, calls, optional
+    // chaining, template tags, async arrows — goes through Acorn's
+    // own parseSubscript, so decorator expressions parse exactly as
+    // they did before.
+    anonymous.prototype.parseDecoratorExpression = function parseDecoratorExpression () {
+      var this$1 = this;
+
+      var startPos = this.start, startLoc = this.startLoc;
+      var expr = this.parseExprAtom(null, false);
+      if (expr.type === "ArrowFunctionExpression" && this.input.slice(this.lastTokStart, this.lastTokEnd) !== ")") {
+        return expr;
+      }
+      var maybeAsyncArrow = this.options.ecmaVersion >= 8 && expr.type === "Identifier" && expr.name === "async" &&
+        this.lastTokEnd === expr.end && !this.canInsertSemicolon() && expr.end - expr.start === 5 &&
+        this.potentialArrowAt === expr.start;
+      var optionalChained = false;
+      for (;;) {
+        if (this$1.computedElementNameAhead()) { break; }
+        var element = this$1.parseSubscript(expr, startPos, startLoc, false, maybeAsyncArrow, optionalChained, false);
+        if (element.optional) { optionalChained = true; }
+        if (element.end === expr.end || element.type === "ArrowFunctionExpression") {
+          if (optionalChained) {
+            var chainNode = this$1.startNodeAt(startPos, startLoc);
+            chainNode.expression = element;
+            element = this$1.finishNode(chainNode, "ChainExpression");
+          }
+          return element;
+        }
+        expr = element;
+        maybeAsyncArrow = false;
+      }
+      if (optionalChained) {
+        var chainNode$1 = this.startNodeAt(startPos, startLoc);
+        chainNode$1.expression = expr;
+        expr = this.finishNode(chainNode$1, "ChainExpression");
+      }
+      return expr;
     };
 
     // `@dec class C {}`, `@dec export class C {}`,
@@ -8062,6 +8208,26 @@ function decoratorsPlugin(BaseParser) {
       }
       target.decorators = decorators;
       return result;
+    };
+
+    // `accessor x = 1` — the decorators proposal's accessor field.
+    // Acorn has no `accessor` keyword, so it is recognized here, at
+    // the element-name position (after `static`, and never after
+    // `get`/`set`/`async`/`*`, which Acorn consumes first). It is an
+    // accessor field only when a name follows: `accessor()`,
+    // `accessor = 1` and `accessor;` are a plain method/field named
+    // "accessor" and fall through to Acorn unchanged. The element is
+    // marked `__irohAccessor` for the desugar, which rewrites it
+    // into a private storage field plus a getter/setter pair.
+    anonymous.prototype.parseClassElementName = function parseClassElementName (element) {
+      if (this.type.label === "name" && this.value === "accessor") {
+        var next = tokenAfterOffset(this.options, this.input, this.start);
+        if (next !== null && isNameStartToken(next.type)) {
+          this.next();
+          element.__irohAccessor = true;
+        }
+      }
+      return BaseParser.prototype.parseClassElementName.call(this, element);
     };
 
     // `@dec` before a class element. Static blocks cannot be
@@ -11206,7 +11372,10 @@ Patcher.prototype.applyPatches = function(ast) {
 // the `@` in the source.
 //
 // Limitations (documented, not silent):
-//   - No `accessor` fields (the plugin does not parse them).
+//   - Decorators on private accessor fields are not supported yet
+//     (a clear error, not a silent drop); public accessor fields
+//     work, including computed keys and the {get, set} / {init}
+//     decorator returns.
 //   - Class expressions with decorated elements are hoisted into a
 //     temp variable before their statement, so a static block in such
 //     a class runs at the statement boundary rather than at the exact
@@ -11275,7 +11444,7 @@ function applyCall(patcher, hash, decoratorExpr, valueNode, contextNode) {
 // closures created inside the class body (see the static-block
 // handling in desugarDecorators — `holder` is a temp holding those
 // closures for the private case, null for the public case).
-function accessObject(kind, isStatic, isPrivate, className, keyName, holder) {
+function accessObject(kind, isStatic, isPrivate, className, keyName, holder, keyTemp, computed) {
   function fn(params, body) {
     return magic({
       type: "FunctionExpression",
@@ -11294,17 +11463,19 @@ function accessObject(kind, isStatic, isPrivate, className, keyName, holder) {
     return magic({
       type: "MemberExpression",
       object: obj,
-      property: ident(prop),
-      computed: false,
+      property: computed ? ident(keyTemp) : ident(prop),
+      computed: !!computed,
     });
   }
   function inCheck(obj) {
     return magic({
       type: "BinaryExpression",
       operator: "in",
-      left: isPrivate
-        ? { type: "PrivateIdentifier", name: keyName.slice(1) }
-        : lit(keyName),
+      left: computed
+        ? ident(keyTemp)
+        : isPrivate
+          ? { type: "PrivateIdentifier", name: keyName.slice(1) }
+          : lit(keyName),
       right: obj,
     });
   }
@@ -11338,7 +11509,7 @@ function accessObject(kind, isStatic, isPrivate, className, keyName, holder) {
         arguments: isStatic ? [] : [ident("o")],
       })));
     }
-    if (kind === "field" || kind === "setter") {
+    if (kind === "field" || kind === "setter" || kind === "accessor") {
       prop("set", fn(isStatic ? ["v"] : ["o", "v"], magic({
         type: "CallExpression",
         callee: member(ident(holder), "set"),
@@ -11417,15 +11588,16 @@ function contextObject(patcher, opts) {
     }));
   }
   prop("kind", lit(opts.kind));
-  // Computed keys keep their (cloned) expression as the name; the
-  // original key node stays on the element and is traced once.
-  prop("name", opts.computed ? cloneNode(opts.keyNode) : lit(opts.name));
+  // Computed keys read the key temp (assigned once, in the element's
+  // key sequence during class definition) — never the key
+  // expression itself, which would re-evaluate it.
+  prop("name", opts.computed ? (opts.keyTemp ? ident(opts.keyTemp) : cloneNode(opts.keyNode)) : lit(opts.name));
   prop("static", lit(opts.isStatic));
   prop("private", lit(opts.isPrivate));
   if (opts.kind !== "class") {
     prop("access", accessObject(
       opts.kind, opts.isStatic, opts.isPrivate,
-      opts.className, opts.name, opts.holder
+      opts.className, opts.name, opts.holder, opts.keyTemp, opts.computed
     ));
   }
   prop("addInitializer", magic({
@@ -11555,6 +11727,12 @@ function collectDecorated(ast) {
       } else if (node.type === "MethodDefinition" || node.type === "PropertyDefinition") {
         found.elements.push({ node: node, ancestors: ancestors.slice() });
       }
+    } else if (node.__irohAccessor && (node.type === "MethodDefinition" || node.type === "PropertyDefinition")) {
+      // An undecorated accessor field has no decorators, but it
+      // still needs desugaring — left as-is it would be generated
+      // as a plain field, a silent mistranslation.
+      node.decorators = [];
+      found.elements.push({ node: node, ancestors: ancestors.slice() });
     }
     var keys = Object.keys(node);
     for (var ii = 0; ii < keys.length; ++ii) {
@@ -11749,10 +11927,18 @@ function desugarDecorators(ast, patcher) {
     // Per-class temp arrays for addInitializer callbacks.
     var initsInst = temp();
     var initsStatic = temp();
+    // Only decorated instance elements can register initializers —
+    // an undecorated accessor field never calls addInitializer, so
+    // it must not force a constructor wrap on its class.
     var hasInstanceDecorators = false;
     for (var ei$2 = 0; ei$2 < elements.length; ++ei$2) {
-      if (!elements[ei$2].static) { hasInstanceDecorators = true; break; }
+      if (!elements[ei$2].static && elements[ei$2].decorators && elements[ei$2].decorators.length > 0) { hasInstanceDecorators = true; break; }
     }
+
+    // Accessor init temps (one per decorated accessor field), to
+    // initialize to the identity function before the class
+    // evaluates — see the accessor branch below.
+    var accessorInitTemps = [];
 
     // Wrap the constructor (or add one) so instance initializers
     // run at the end of construction, after field initializers.
@@ -11768,10 +11954,13 @@ function desugarDecorators(ast, patcher) {
       var isStatic = !!el$1.static;
       var isPrivate = el$1.key.type === "PrivateIdentifier";
       var isMethod = el$1.type === "MethodDefinition";
-      // The proposal's kinds: method, getter, setter, field.
-      var kind = isMethod
-        ? (el$1.kind === "get" ? "getter" : el$1.kind === "set" ? "setter" : "method")
-        : "field";
+      // The proposal's kinds: method, getter, setter, field,
+      // accessor.
+      var kind = el$1.__irohAccessor
+        ? "accessor"
+        : isMethod
+          ? (el$1.kind === "get" ? "getter" : el$1.kind === "set" ? "setter" : "method")
+          : "field";
       var keyName = elementKeyName(el$1);
       var computed = keyName === null;
       var initsArray = isStatic ? initsStatic : initsInst;
@@ -11781,6 +11970,63 @@ function desugarDecorators(ast, patcher) {
       // { ... }'?").
       if (isMethod && el$1.kind === "constructor") {
         throw new Error("Decorators can't be used with a constructor. Did you mean '@dec class { ... }'?");
+      }
+
+      // Computed keys and decorator expressions evaluate once,
+      // during class definition (phase 1), in definition order —
+      // before static blocks and static field initializers, which
+      // run in phase 2. They are evaluated together, as the
+      // element's key: the key becomes a sequence that assigns the
+      // key expression to a temp (computed keys) or the literal name
+      // to a temp (plain keys), then each decorator expression to a
+      // temp, and yields the key temp — so the context `name`, the
+      // method target and the field applies all read the temp, and
+      // nothing re-evaluates. Without this the key expression was
+      // cloned into the context `name` and the method target, so it
+      // ran once per clone — and instance elements' decorator
+      // expressions ran after the class definition, out of order
+      // with static fields'. The key sequence runs with the
+      // enclosing `this` and the class binding (both available in
+      // phase 1), exactly as the proposal requires. Private elements
+      // keep their old path (a private key cannot be a computed
+      // sequence): their decorator expressions still evaluate in
+      // the private static block, in phase 2.
+      var keyTemp = null;
+      if (!isPrivate && el$1.decorators.length > 0) {
+        keyTemp = temp();
+        var seqExprs = [];
+        if (computed) {
+          seqExprs.push(magic({
+            type: "AssignmentExpression",
+            operator: "=",
+            left: ident(keyTemp),
+            right: el$1.key,
+          }));
+        } else {
+          seqExprs.push(magic({
+            type: "AssignmentExpression",
+            operator: "=",
+            left: ident(keyTemp),
+            right: lit(keyName),
+          }));
+        }
+        for (var di = 0; di < el$1.decorators.length; ++di) {
+          var dec = el$1.decorators[di];
+          var decTemp = temp();
+          seqExprs.push(magic({
+            type: "AssignmentExpression",
+            operator: "=",
+            left: ident(decTemp),
+            right: dec.expression,
+          }));
+          dec.expression = ident(decTemp);
+        }
+        seqExprs.push(ident(keyTemp));
+        el$1.key = {
+          type: "SequenceExpression",
+          expressions: seqExprs,
+        };
+        el$1.computed = true;
       }
 
       // Private members need their `access` closures built inside
@@ -11854,13 +12100,14 @@ function desugarDecorators(ast, patcher) {
         cls.body.body.splice(cls.body.body.indexOf(el$1), 0, block$1);
       }
 
-      var makeContext = (function(elCopy, kindCopy, isStaticCopy, isPrivateCopy, keyNameCopy, computedCopy, initsArrayCopy, holderCopy) {
+      var makeContext = (function(elCopy, kindCopy, isStaticCopy, isPrivateCopy, keyNameCopy, computedCopy, keyTempCopy, initsArrayCopy, holderCopy) {
         return function(dec) {
           return contextObject(patcher, {
             kind: kindCopy,
             name: keyNameCopy,
             computed: computedCopy,
             keyNode: elCopy.key,
+            keyTemp: keyTempCopy,
             isStatic: isStaticCopy,
             isPrivate: isPrivateCopy,
             className: classNameForCtx,
@@ -11868,10 +12115,123 @@ function desugarDecorators(ast, patcher) {
             initsArray: initsArrayCopy,
           });
         };
-      })(el$1, kind, isStatic, isPrivate, keyName, computed, initsArray, holder);
+      })(el$1, kind, isStatic, isPrivate, keyName, computed, keyTemp, initsArray, holder);
 
-      if (isMethod) {
-        // target: C.prototype.m / C.m / tmp.prototype.m / tmp.m
+      if (el$1.__irohAccessor) {
+      // Accessor field: rewrite into a private storage field plus
+      // a getter/setter pair, and (when decorated) apply the
+      // decorators to the {get, set} pair. The storage name is
+      // derived from the element name where it is a plain
+      // identifier, else a fresh temp — it never collides with a
+      // user private field (the Iroh$$ prefix is the desugar's
+      // own namespace).
+      if (isPrivate && el$1.decorators.length > 0) {
+        // A private accessor's get/set cannot be reinstalled with
+        // defineProperty (a private name is not a property key),
+        // so decorated private accessors need the holder
+        // delegation pattern — not built in this pass. Loud, not
+        // silent: the program fails with a clear message rather
+        // than running with undecorated accessors.
+        throw new Error("Decorators on private accessor fields are not supported yet (public accessor fields are).");
+      }
+      var storageName = (!computed && keyName !== null && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(keyName))
+        ? "Iroh$$acc_" + keyName
+        : "Iroh$$acc_" + temp().replace(/^Iroh\$\$/, "");
+      // The getter takes the element's key (the key sequence for
+      // a decorated public element — it evaluates the key and the
+      // decorator expressions once, in phase 1, in definition
+      // order); the setter reads the key temp the sequence
+      // assigned. For an undecorated element the key is cloned
+      // (a plain name has no side effects). A key sequence is
+      // always computed (it needs brackets), even for a plain
+      // name — without them astring would emit `get (seq)()`,
+      // which is a syntax error.
+      var getterKey = el$1.key;
+      var setterKey = (void 0);
+      var accComputed = (void 0);
+      if (keyTemp !== null) {
+        setterKey = ident(keyTemp);
+        accComputed = true;
+      } else {
+        setterKey = cloneNode(el$1.key);
+        accComputed = computed;
+      }
+      // The init temp: the composed {init} chain (identity until
+      // a decorator returns one). Initialized in initStmts,
+      // before the class evaluates.
+      var accInitTemp = null;
+      var accInitUsed = null;
+      var rawInit = el$1.value ? el$1.value : parseExpression("undefined");
+      var storageValue = rawInit;
+      if (el$1.decorators.length > 0) {
+        accInitTemp = temp();
+        accInitUsed = temp();
+        accessorInitTemps.push({ init: accInitTemp, used: accInitUsed });
+        storageValue = magic({
+          type: "CallExpression",
+          callee: ident(accInitTemp),
+          arguments: [rawInit],
+        });
+      }
+      var storageField = magic({
+        type: "PropertyDefinition",
+        key: { type: "PrivateIdentifier", name: storageName },
+        value: storageValue,
+        computed: false,
+        static: isStatic,
+      });
+      function accFn(params, bodyStmt) {
+        return magic({
+          type: "FunctionExpression",
+          id: null,
+          params: params.map(function(p) { return ident(p); }),
+          body: magic({ type: "BlockStatement", body: [bodyStmt] }),
+        });
+      }
+      var getter = magic({
+        type: "MethodDefinition",
+        kind: "get",
+        key: getterKey,
+        value: accFn([], magic({
+          type: "ReturnStatement",
+          argument: magic({
+            type: "MemberExpression",
+            object: parseExpression("this"),
+            property: { type: "PrivateIdentifier", name: storageName },
+            computed: false,
+          }),
+        })),
+        computed: accComputed,
+        static: isStatic,
+      });
+      var setter = magic({
+        type: "MethodDefinition",
+        kind: "set",
+        key: setterKey,
+        value: accFn(["v"], magic({
+          type: "ExpressionStatement",
+          expression: magic({
+            type: "AssignmentExpression",
+            operator: "=",
+            left: magic({
+              type: "MemberExpression",
+              object: parseExpression("this"),
+              property: { type: "PrivateIdentifier", name: storageName },
+              computed: false,
+            }),
+            right: ident("v"),
+          }),
+        })),
+        computed: accComputed,
+        static: isStatic,
+      });
+      var elIdx = cls.body.body.indexOf(el$1);
+      cls.body.body.splice(elIdx, 1, storageField, getter, setter);
+      if (el$1.decorators.length > 0) {
+        // Apply the decorators to the {get, set} pair, one at a
+        // time (in reverse, so the outermost decorator's result
+        // is the final pair), merging get/set per decorator and
+        // composing any {init} returns into accInitTemp.
         var targetObj = (void 0);
         if (isStatic) {
           targetObj = ident(valueName);
@@ -11883,10 +12243,227 @@ function desugarDecorators(ast, patcher) {
             computed: false,
           });
         }
+        var keyArg = computed ? ident(keyTemp) : lit(keyName);
+        var descTemp = temp();
+        applyStmts.push(stmt(magic({
+          type: "AssignmentExpression",
+          operator: "=",
+          left: ident(descTemp),
+          right: magic({
+            type: "CallExpression",
+            callee: magic({
+              type: "MemberExpression",
+              object: ident("Object"),
+              property: ident("getOwnPropertyDescriptor"),
+              computed: false,
+            }),
+            arguments: [cloneNode(targetObj), cloneNode(keyArg)],
+          }),
+        })));
+        var valueTemp = temp();
+        applyStmts.push(stmt(magic({
+          type: "AssignmentExpression",
+          operator: "=",
+          left: ident(valueTemp),
+          right: magic({
+            type: "ObjectExpression",
+            properties: [
+              magic({ type: "Property", key: ident("get"), value: magic({ type: "MemberExpression", object: ident(descTemp), property: ident("get"), computed: false }), kind: "init", computed: false, shorthand: false, method: false }),
+              magic({ type: "Property", key: ident("set"), value: magic({ type: "MemberExpression", object: ident(descTemp), property: ident("set"), computed: false }), kind: "init", computed: false, shorthand: false, method: false }) ],
+          }),
+        })));
+        for (var di$1 = el$1.decorators.length - 1; di$1 >= 0; --di$1) {
+          var dec$1 = el$1.decorators[di$1];
+          var hash = nextHash(patcher);
+          patcher.nodes[hash] = { hash: hash, node: cloneNode(dec$1) };
+          var resTemp = temp();
+          applyStmts.push(stmt(magic({
+            type: "AssignmentExpression",
+            operator: "=",
+            left: ident(resTemp),
+            right: applyCall(patcher, hash, dec$1.expression, ident(valueTemp), makeContext(dec$1)),
+          })));
+          // Merge: a decorator returning undefined keeps the
+          // pair; a returned {get}/{set} replaces only the
+          // property it defines.
+          var merged = magic({
+            type: "ObjectExpression",
+            properties: [
+              magic({ type: "Property", key: ident("get"), value: magic({
+                type: "ConditionalExpression",
+                test: magic({ type: "BinaryExpression", operator: "!==", left: magic({ type: "MemberExpression", object: ident(resTemp), property: ident("get"), computed: false }), right: parseExpression("undefined") }),
+                consequent: magic({ type: "MemberExpression", object: ident(resTemp), property: ident("get"), computed: false }),
+                alternate: magic({ type: "MemberExpression", object: ident(valueTemp), property: ident("get"), computed: false }),
+              }), kind: "init", computed: false, shorthand: false, method: false }),
+              magic({ type: "Property", key: ident("set"), value: magic({
+                type: "ConditionalExpression",
+                test: magic({ type: "BinaryExpression", operator: "!==", left: magic({ type: "MemberExpression", object: ident(resTemp), property: ident("set"), computed: false }), right: parseExpression("undefined") }),
+                consequent: magic({ type: "MemberExpression", object: ident(resTemp), property: ident("set"), computed: false }),
+                alternate: magic({ type: "MemberExpression", object: ident(valueTemp), property: ident("set"), computed: false }),
+              }), kind: "init", computed: false, shorthand: false, method: false }) ],
+          });
+          applyStmts.push(stmt(magic({
+            type: "AssignmentExpression",
+            operator: "=",
+            left: ident(valueTemp),
+            right: magic({
+              type: "ConditionalExpression",
+              test: magic({ type: "BinaryExpression", operator: "!==", left: ident(resTemp), right: parseExpression("undefined") }),
+              consequent: merged,
+              alternate: ident(valueTemp),
+            }),
+          })));
+          // {init}: compose it onto accInitTemp (outermost last,
+          // so the innermost decorator's init runs first — the
+          // field semantics) and mark it used.
+          var prevInit = temp();
+          var initBody = magic({
+            type: "BlockStatement",
+            body: [magic({
+              type: "ReturnStatement",
+              argument: magic({
+                type: "CallExpression",
+                callee: magic({ type: "MemberExpression", object: ident(resTemp), property: ident("init"), computed: false }),
+                arguments: [magic({
+                  type: "CallExpression",
+                  callee: ident(prevInit),
+                  arguments: [ident("v")],
+                })],
+              }),
+            })],
+          });
+          applyStmts.push(magic({
+            type: "IfStatement",
+            test: magic({
+              type: "LogicalExpression",
+              operator: "&&",
+              left: magic({
+                type: "BinaryExpression",
+                operator: "!==",
+                left: ident(resTemp),
+                right: parseExpression("undefined"),
+              }),
+              right: magic({
+                type: "BinaryExpression",
+                operator: "===",
+                left: magic({
+                  type: "UnaryExpression",
+                  operator: "typeof",
+                  prefix: true,
+                  argument: magic({ type: "MemberExpression", object: ident(resTemp), property: ident("init"), computed: false }),
+                }),
+                right: lit("function"),
+              }),
+            }),
+            consequent: magic({
+              type: "BlockStatement",
+              body: [
+                stmt(magic({
+                  type: "AssignmentExpression",
+                  operator: "=",
+                  left: ident(prevInit),
+                  right: ident(accInitTemp),
+                })),
+                stmt(magic({
+                  type: "AssignmentExpression",
+                  operator: "=",
+                  left: ident(accInitTemp),
+                  right: magic({
+                    type: "FunctionExpression",
+                    id: null,
+                    params: [ident("v")],
+                    body: initBody,
+                  }),
+                })),
+                stmt(magic({
+                  type: "AssignmentExpression",
+                  operator: "=",
+                  left: ident(accInitUsed),
+                  right: lit(true),
+                })) ],
+            }),
+            alternate: null,
+          }));
+        }
+        // Install the (possibly replaced) pair.
+        applyStmts.push(stmt(magic({
+          type: "CallExpression",
+          callee: magic({
+            type: "MemberExpression",
+            object: ident("Object"),
+            property: ident("defineProperty"),
+            computed: false,
+          }),
+          arguments: [
+            cloneNode(targetObj),
+            cloneNode(keyArg),
+            magic({
+              type: "ObjectExpression",
+              properties: [
+                magic({ type: "Property", key: ident("get"), value: magic({ type: "MemberExpression", object: ident(valueTemp), property: ident("get"), computed: false }), kind: "init", computed: false, shorthand: false, method: false }),
+                magic({ type: "Property", key: ident("set"), value: magic({ type: "MemberExpression", object: ident(valueTemp), property: ident("set"), computed: false }), kind: "init", computed: false, shorthand: false, method: false }),
+                magic({ type: "Property", key: ident("configurable"), value: lit(true), kind: "init", computed: false, shorthand: false, method: false }),
+                magic({ type: "Property", key: ident("enumerable"), value: lit(false), kind: "init", computed: false, shorthand: false, method: false }) ],
+            }) ],
+        })));
+        if (isStatic) {
+          // A static storage field initializes during class
+          // definition, before the applies compose accInitTemp —
+          // so if a decorator returned {init}, re-apply the
+          // transform through the (now decorated) accessors.
+          var readMember = magic({
+            type: "MemberExpression",
+            object: cloneNode(targetObj),
+            property: computed ? ident(keyTemp) : ident(keyName),
+            computed: computed,
+          });
+          applyStmts.push(magic({
+            type: "IfStatement",
+            test: ident(accInitUsed),
+            consequent: magic({
+              type: "BlockStatement",
+              body: [stmt(magic({
+                type: "AssignmentExpression",
+                operator: "=",
+                left: cloneNode(readMember),
+                right: magic({
+                  type: "CallExpression",
+                  callee: ident(accInitTemp),
+                  arguments: [cloneNode(readMember)],
+                }),
+              }))],
+            }),
+            alternate: null,
+          }));
+        }
+        }
+        continue;
+      }
+
+      if (isMethod) {
+        // The method target / descriptor key. For a computed key
+        // that was rewritten to a sequence, read the temp — cloning
+        // the sequence would re-evaluate the key and the decorator
+        // expressions. For a plain key, the literal name.
+        var targetKey = computed
+          ? (keyTemp !== null ? ident(keyTemp) : cloneNode(el$1.key))
+          : ident(keyName);
+        // target: C.prototype.m / C.m / tmp.prototype.m / tmp.m
+        var targetObj$1 = (void 0);
+        if (isStatic) {
+          targetObj$1 = ident(valueName);
+        } else {
+          targetObj$1 = magic({
+            type: "MemberExpression",
+            object: ident(valueName),
+            property: ident("prototype"),
+            computed: false,
+          });
+        }
         var target = magic({
           type: "MemberExpression",
-          object: targetObj,
-          property: computed ? cloneNode(el$1.key) : ident(keyName),
+          object: targetObj$1,
+          property: targetKey,
           computed: computed,
         });
         var valueNode = target;
@@ -11907,7 +12484,7 @@ function desugarDecorators(ast, patcher) {
                 property: ident("getOwnPropertyDescriptor"),
                 computed: false,
               }),
-              arguments: [cloneNode(targetObj), computed ? cloneNode(el$1.key) : lit(keyName)],
+              arguments: [cloneNode(targetObj$1), computed ? cloneNode(targetKey) : lit(keyName)],
             }),
             property: ident(descProp),
             computed: false,
@@ -11931,8 +12508,8 @@ function desugarDecorators(ast, patcher) {
               computed: false,
             }),
             arguments: [
-              targetObj,
-              computed ? cloneNode(el$1.key) : lit(keyName),
+              targetObj$1,
+              computed ? cloneNode(targetKey) : lit(keyName),
               magic({
                 type: "ObjectExpression",
                 properties: [
@@ -11977,10 +12554,47 @@ function desugarDecorators(ast, patcher) {
           });
           el$1.value = seq;
         } else {
+          // Instance field: the applies run in a static block
+          // spliced before the element, so they happen during
+          // class definition (phase 2), in definition order
+          // interleaved with static field initializers — not after
+          // the class, where a static field's decorators would
+          // have run first regardless of definition order. The
+          // initializer temps are assigned in the block and read
+          // by the field's value at construction time.
           el$1.value = value;
-          applyStmts.push(inits.assignStmt);
+          cls.body.body.splice(cls.body.body.indexOf(el$1), 0, magic({
+            type: "StaticBlock",
+            body: [inits.assignStmt],
+          }));
         }
       }
+    }
+
+    // Class decorator expressions evaluate during class definition,
+    // after the elements' decorators — hoist them into temps in a
+    // trailing static block, so the applies (after the class) read
+    // the temps instead of evaluating the expressions there. One
+    // caveat: a class decorator expression that reads `this` sees
+    // the class inside a static block, where the proposal gives it
+    // the enclosing `this`.
+    if (cls.decorators && cls.decorators.length > 0) {
+      var classDecStmts = [];
+      for (var di$2 = 0; di$2 < cls.decorators.length; ++di$2) {
+        var dec$2 = cls.decorators[di$2];
+        var decTemp$1 = temp();
+        classDecStmts.push(stmt(magic({
+          type: "AssignmentExpression",
+          operator: "=",
+          left: ident(decTemp$1),
+          right: dec$2.expression,
+        })));
+        dec$2.expression = ident(decTemp$1);
+      }
+      cls.body.body.push(magic({
+        type: "StaticBlock",
+        body: classDecStmts,
+      }));
     }
 
     // Class decorators apply last, after all element applies.
@@ -12062,6 +12676,35 @@ function desugarDecorators(ast, patcher) {
         left: ident(initsInst),
         right: magic({ type: "ArrayExpression", elements: [] }),
       })) ];
+    // Accessor {init} temps start as the identity function (and
+    // their "used" flags as false), before the class evaluates: a
+    // static accessor's storage field calls the temp during class
+    // definition, so it must already be a function by then.
+    for (var ai$2 = 0; ai$2 < accessorInitTemps.length; ++ai$2) {
+      initStmts.push(stmt(magic({
+        type: "AssignmentExpression",
+        operator: "=",
+        left: ident(accessorInitTemps[ai$2].init),
+        right: magic({
+          type: "FunctionExpression",
+          id: null,
+          params: [ident("v")],
+          body: magic({
+            type: "BlockStatement",
+            body: [magic({
+              type: "ReturnStatement",
+              argument: ident("v"),
+            })],
+          }),
+        }),
+      })));
+      initStmts.push(stmt(magic({
+        type: "AssignmentExpression",
+        operator: "=",
+        left: ident(accessorInitTemps[ai$2].used),
+        right: lit(false),
+      })));
+    }
 
     // Run static addInitializer callbacks after the class is
     // defined (element applies included). Static initializers run
@@ -12375,7 +13018,7 @@ function buildPrivateBlock(patcher, el, kind, isStatic, keyName, holder, fnTemp,
     if (kind !== "setter") {
       accProp("get", accFn([], privMember(ident(clsTmp))));
     }
-    if (kind === "field" || kind === "setter") {
+    if (kind === "field" || kind === "setter" || kind === "accessor") {
       accProp("set", accFn(["v"], magic({
         type: "AssignmentExpression",
         operator: "=",
@@ -12393,7 +13036,7 @@ function buildPrivateBlock(patcher, el, kind, isStatic, keyName, holder, fnTemp,
     if (kind !== "setter") {
       accProp("get", accFn(["o"], privMember(ident("o"))));
     }
-    if (kind === "field" || kind === "setter") {
+    if (kind === "field" || kind === "setter" || kind === "accessor") {
       accProp("set", accFn(["o", "v"], magic({
         type: "AssignmentExpression",
         operator: "=",
@@ -14165,11 +14808,12 @@ function attachTraceEvents(err, events) {
 // Internal run machinery, shared with the director engine
 // (src/direct.js): createTraceRun builds a Stage and attaches the event
 // listeners, compileRunner turns a Stage's generated script into a
-// runnable function, attachTraceEvents puts the events so far on a
-// thrown error. Exported as one plain object — not as functions — so
-// extend() in src/index.js, which only copies functions, does not put
-// them on the Iroh singleton.
-var runInternals = { createTraceRun: createTraceRun, compileRunner: compileRunner, attachTraceEvents: attachTraceEvents };
+// runnable function, importTracedModule runs an instrumented module
+// through a temp .mjs file and dynamic import, attachTraceEvents puts
+// the events so far on a thrown error. Exported as one plain object —
+// not as functions — so extend() in src/index.js, which only copies
+// functions, does not put them on the Iroh singleton.
+var runInternals = { createTraceRun: createTraceRun, compileRunner: compileRunner, importTracedModule: importTracedModule, attachTraceEvents: attachTraceEvents };
 
 // Async version of trace(): awaits the program's completion value before
 // returning, so events from async continuations (await, promises) are
@@ -14260,49 +14904,20 @@ var irohStagesUsers = 0;
 var irohStagesHadPrevious = false;
 var irohStagesPrevious = void 0;
 
-// One-shot tracing for ES modules. Returns a Promise of { events,
-// result }: `events` is the list of plain event objects (same shape
-// as trace()), `result` is the module namespace object — every export,
-// named and default (as `.default`), live, not serialized.
-//
-// How it runs: the instrumented code is written to a temp `.mjs` file
-// and dynamic-imported — Node 24's vm.SourceTextModule still needs
-// --experimental-vm-modules, so it is not used. The generated script's
-// header (`const $$STx1 = Iroh.stages[...]`) cannot name an `Iroh`
-// binding in a module, so it is rewritten to a `globalThis.__irohStages`
-// registry holding the same `Iroh.stages` object the _Stage wrapper
-// registers into — instance identity is exact in both the CJS and ESM
-// dists, and importing the dist from the generated module (which would
-// give a second singleton in one of the two shapes) is avoided.
-// Relative imports in the traced code resolve against `options.filename`
-// when given (the temp file is written next to it); without it they
-// resolve against a fresh temp directory under os.tmpdir() and will
-// usually fail. `import.meta.url` in traced code is the temp file's
-// URL. The temp file is deleted after the import settles.
-//
-// Options: events, onEvent, stageOptions (sourceType is forced to
-// "module"), filename (base path for relative imports). A parse error
-// rejects before running; a runtime error rejects with the events that
-// fired before it attached as error.events. Requires Node.js — in a
-// browser it rejects with a clear error.
-function traceModule(code, options) {
+// The import half of traceModule(), shared with directModule():
+// write the instrumented module to a temp .mjs file and dynamic-
+// import it, with the globalThis.__irohStages registry the generated
+// module reads its stage through. Returns a Promise of { events,
+// result } (result = the module namespace). Requires Node.js — in a
+// browser it rejects with a clear error. `run` is a createTraceRun
+// result; `options.filename` bases relative imports, as in
+// traceModule().
+function importTracedModule(iroh, run, options) {
   options = options || {};
-  var iroh = this;
   if (!isNodeRuntime()) {
     return Promise.reject(new Error(
-      "Iroh.traceModule() requires Node.js — modules run through a temp .mjs file and dynamic import()"
+      "Modules require Node.js — they run through a temp .mjs file and dynamic import()"
     ));
-  }
-  var stageOptions = Object.assign({}, options.stageOptions, {
-    sourceType: "module",
-  });
-  var run;
-  try {
-    run = createTraceRun(iroh, code, Object.assign({}, options, {
-      stageOptions: stageOptions,
-    }));
-  } catch (e) {
-    return Promise.reject(e);
   }
   // The header rewrite: first occurrence of `Iroh.stages[` is the
   // generated header, the first statement of the script.
@@ -14375,6 +14990,48 @@ function traceModule(code, options) {
       }
     );
   });
+}
+
+// One-shot tracing for ES modules. Returns a Promise of { events,
+// result }: `events` is the list of plain event objects (same shape
+// as trace()), `result` is the module namespace object — every export,
+// named and default (as `.default`), live, not serialized.
+//
+// How it runs: the instrumented code is written to a temp `.mjs` file
+// and dynamic-imported — Node 24's vm.SourceTextModule still needs
+// --experimental-vm-modules, so it is not used. The generated script's
+// header (`const $$STx1 = Iroh.stages[...]`) cannot name an `Iroh`
+// binding in a module, so it is rewritten to a `globalThis.__irohStages`
+// registry holding the same `Iroh.stages` object the _Stage wrapper
+// registers into — instance identity is exact in both the CJS and ESM
+// dists, and importing the dist from the generated module (which would
+// give a second singleton in one of the two shapes) is avoided.
+// Relative imports in the traced code resolve against `options.filename`
+// when given (the temp file is written next to it); without it they
+// resolve against a fresh temp directory under os.tmpdir() and will
+// usually fail. `import.meta.url` in traced code is the temp file's
+// URL. The temp file is deleted after the import settles.
+//
+// Options: events, onEvent, stageOptions (sourceType is forced to
+// "module"), filename (base path for relative imports). A parse error
+// rejects before running; a runtime error rejects with the events that
+// fired before it attached as error.events. Requires Node.js — in a
+// browser it rejects with a clear error.
+function traceModule(code, options) {
+  options = options || {};
+  var iroh = this;
+  var stageOptions = Object.assign({}, options.stageOptions, {
+    sourceType: "module",
+  });
+  var run;
+  try {
+    run = createTraceRun(iroh, code, Object.assign({}, options, {
+      stageOptions: stageOptions,
+    }));
+  } catch (e) {
+    return Promise.reject(e);
+  }
+  return importTracedModule(iroh, run, options);
 }
 
 function greet() {
@@ -15705,11 +16362,18 @@ var _live = Object.freeze({
 //          whose test compares that variable with a literal bound: the
 //          comparison is evaluated with the set value, and the test is
 //          flipped to false only when the set value makes it false.
-//          Member assignments (`obj.prop = v`) are written inside
-//          DEBUG_ASSIGN before the event fires, and compound
-//          assignments (`x += v`) pass only the right-hand value
-//          through event.result — neither is a set point, and a set
-//          never applies there.
+//          Member assignments (`obj.prop = v`, including compound
+//          `obj.prop += v`) are written before the event fires, so a
+//          set for "obj.prop" overwrites the property on the live
+//          object after the write — which runs a setter a second time
+//          when the property is one, so use it on plain data
+//          properties. A plain compound assignment (`x += v`) passes
+//          only the right-hand value through event.result — it is not
+//          a set point, and a set never applies there.
+//          A set may carry `scope`: the name of the function it applies
+//          in (the innermost function at the interception point, as the
+//          stage tracks it; null means top level). An omitted scope
+//          matches any scope — the 1.0.0 behaviour.
 //   skip — FUNCTION_CALL fires "before" with event.call (the function)
 //          and event.arguments, and only then applies the callee. A
 //          listener that replaces event.call with a stub makes the call
@@ -15743,9 +16407,9 @@ var _live = Object.freeze({
 // Each directive applies once, at the first matching point, then it is
 // consumed. A directive that never matches is recorded with
 // applied: false and a reason — the audit log never pretends a
-// directive took effect. Matching is by name only, not by scope: a
-// set for "i" applies to the first `i` assignment reached, in
-// whichever scope that is.
+// directive took effect. Matching is by name, and by scope when the
+// directive carries one: a set for "i" in scope "inner" applies only
+// to the `i` in that function, not to an outer or top-level `i`.
 //
 // The director receives { findings, allFindings, snapshot, event,
 // eventIndex, directives } and returns a directive, an array of
@@ -15754,9 +16418,9 @@ var _live = Object.freeze({
 // directives, analysis) makes the run auditable, not a black box.
 //
 // Limits (also in CHANGELOG.md): direct() runs scripts synchronously
-// (like trace()) — top-level await and modules are rejected with the
-// same pointers trace() gives; use traceAsync()/traceModule() for
-// those, without direction. Python/C++ traces cannot be directed —
+// (like trace()) — top-level await is rejected with the same pointer
+// trace() gives; use directAsync() for that. Modules are directed by
+// directModule(). Python/C++ traces cannot be directed —
 // their events arrive buffered after the run, so there is nothing
 // live to direct; the CLI --direct flag is JavaScript-only.
 
@@ -15856,7 +16520,10 @@ function normalizeDirectives(answer) {
 // A director bug fails loudly: an unknown directive type, or a set/skip
 // without a name or a value, throws instead of being silently ignored.
 // The returned object keeps only the known fields, so the audit log
-// never carries a director's stray properties.
+// never carries a director's stray properties. A set's `scope`, when
+// given, must be a string (the function name) or null (top level); a
+// dotted set name must be exactly "object.property" (one level) —
+// deeper paths are not a set point.
 function validateDirective(d) {
   if (!d || typeof d !== "object") {
     throw new Error(
@@ -15867,10 +16534,32 @@ function validateDirective(d) {
     if (typeof d.name !== "string" || d.name === "") {
       throw new Error("A \"set\" directive needs a non-empty string `name`.");
     }
+    if (d.name.indexOf(".") !== -1) {
+      var parts = d.name.split(".");
+      var ident = /^[$A-Za-z_][$\w]*$/;
+      if (
+        parts.length !== 2 ||
+        !ident.test(parts[0]) ||
+        !ident.test(parts[1])
+      ) {
+        throw new Error(
+          "A \"set\" directive name with a dot must be exactly \"object.property\" (one level) — got: " + d.name
+        );
+      }
+    }
     if (!Object.prototype.hasOwnProperty.call(d, "value")) {
       throw new Error("A \"set\" directive needs a `value`.");
     }
-    return { type: "set", name: d.name, value: d.value };
+    var out = { type: "set", name: d.name, value: d.value };
+    if (Object.prototype.hasOwnProperty.call(d, "scope")) {
+      if (d.scope !== null && typeof d.scope !== "string") {
+        throw new Error(
+          "A \"set\" directive `scope` must be a string (the function name) or null (top level) — got: " + String(d.scope)
+        );
+      }
+      out.scope = d.scope;
+    }
+    return out;
   }
   if (d.type === "skip") {
     if (typeof d.name !== "string" || d.name === "") {
@@ -15904,6 +16593,9 @@ function validateDirective(d) {
 //   onEvent(line): called for every JSON event line as it fires.
 //   onDirective(entry): called when a directive is applied (or when a
 //           stop is issued).
+//   onFinding(findings): called with the findings that just fired
+//           (HOT_LOOP carries its loop info), for a caller that wants
+//           to print them live without being the director.
 //   hotLoopThreshold, deepRecursionThreshold,
 //   repeatSequenceMinOccurrences, oneSidedMinTests: live analyzer
 //           thresholds, as for liveAnalyzer().
@@ -15916,9 +16608,17 @@ function validateDirective(d) {
 // before it attached as error.events (like trace()) and the direction
 // record so far as error.direct. A directed stop is not an error: it
 // returns normally with stopped: true.
-function direct(code, director, options) {
+//
+// directInternal is the shared core of direct() (sync), directAsync()
+// and directModule(): the same setup, the same director calls, the
+// same completion handling — only the runner differs (compileRunner's
+// sync form, its async wrapper, or the temp-file import for modules).
+// Written with Promise chains, not async/await, because the browser
+// bundle is transpiled by buble.
+function directInternal(iroh, code, director, options, mode) {
   options = options || {};
-  var iroh = this;
+  var allowAsync = mode === "async";
+  var isModule = mode === "module";
   if (
     director !== null &&
     director !== void 0 &&
@@ -15956,6 +16656,18 @@ function direct(code, director, options) {
     return entry;
   }
 
+  // Whether this directive's scope matches the current point: an
+  // omitted scope matches anywhere; a string matches only that
+  // function (the innermost, as the stage tracks it); null matches
+  // only top level. Without a stage the scope cannot be checked, so
+  // a scoped directive does not apply.
+  function scopeMatches(d) {
+    if (!Object.prototype.hasOwnProperty.call(d, "scope")) { return true; }
+    if (stage === null) { return false; }
+    if (d.scope === null) { return stage.currentScope === null; }
+    return stage.currentScope === d.scope;
+  }
+
   // Try to apply one pending set/skip entry at this raw event. Returns
   // true when it applied (the entry is then consumed). The raw event is
   // the live object the DEBUG function is about to use, so mutating it
@@ -15970,7 +16682,8 @@ function direct(code, director, options) {
       if (
         raw.type === INSTR.VAR_INIT &&
         trigger === "after" &&
-        raw.name === d.name
+        raw.name === d.name &&
+        scopeMatches(d)
       ) {
         raw.value = d.value;
         // The line carries the safe projection of the value (like
@@ -15991,7 +16704,8 @@ function direct(code, director, options) {
         raw.type === INSTR.ASSIGN &&
         trigger === "fire" &&
         raw.object === d.name &&
-        raw.property === null
+        raw.property === null &&
+        scopeMatches(d)
       ) {
         var node = null;
         try {
@@ -16007,6 +16721,70 @@ function direct(code, director, options) {
           return true;
         }
       }
+      // Member assignment `obj.prop = v` (or `obj.prop += v`): the
+      // write already happened before the event fires, so a set for
+      // "obj.prop" overwrites the property on the live object. The
+      // object variable name comes from the AST — the event carries
+      // the object itself, not its name. A setter property runs twice
+      // (once for the original write, once for the overwrite), so use
+      // this on plain data properties. The recorded line is updated
+      // alongside (result and the object projection) so the trace
+      // shows the directed value.
+      if (
+        raw.type === INSTR.ASSIGN &&
+        trigger === "fire" &&
+        raw.property !== null &&
+        d.name.indexOf(".") !== -1 &&
+        scopeMatches(d)
+      ) {
+        var parts = d.name.split(".");
+        var node$1 = null;
+        try {
+          node$1 = raw.getASTNode();
+        } catch (e) {
+          node$1 = null;
+        }
+        if (
+          node$1 !== null &&
+          node$1.left &&
+          node$1.left.type === "MemberExpression" &&
+          node$1.left.object &&
+          node$1.left.object.type === "Identifier" &&
+          node$1.left.object.name === parts[0]
+        ) {
+          var propName = null;
+          if (!node$1.left.computed && node$1.left.property) {
+            propName = node$1.left.property.name;
+          } else if (
+            node$1.left.computed &&
+            node$1.left.property &&
+            node$1.left.property.type === "Literal"
+          ) {
+            propName = String(node$1.left.property.value);
+          }
+          if (
+            propName === parts[1] &&
+            raw.property === parts[1] &&
+            raw.object !== null &&
+            typeof raw.object === "object"
+          ) {
+            try {
+              raw.object[raw.property] = d.value;
+            } catch (e) {
+              return false;
+            }
+            line.result = iroh.safeValue(d.value, 3, new Set());
+            line.object = iroh.safeValue(raw.object, 3, new Set());
+            entry.applied = true;
+            entry.appliedVia = "member";
+            entry.note =
+              "Member assignment: the write had already happened when the event fired, so the property was overwritten on the live object" +
+              (node$1.operator === "=" ? "" : " (compound " + node$1.operator + " — the overwrite replaces the computed result)") +
+              "; a setter property would run twice.";
+            return true;
+          }
+        }
+      }
       // Loop test: the loop compares this variable with a literal
       // bound. Flip the test to false only when the set value makes
       // the comparison false — a set that keeps the test true is not
@@ -16014,7 +16792,8 @@ function direct(code, director, options) {
       if (
         raw.type === INSTR.LOOP_TEST &&
         trigger === "test" &&
-        raw.value === true
+        raw.value === true &&
+        scopeMatches(d)
       ) {
         var info = resolveLoopTest(stage, raw.hash);
         if (info !== null && info.counter === d.name) {
@@ -16128,26 +16907,123 @@ function direct(code, director, options) {
       }
     }
     var fired = live.feed(line);
-    if (director && fired.length > 0) {
-      var answer = director({
-        findings: enrichFindings(fired),
-        allFindings: live.findings(),
-        snapshot: live.snapshot(),
-        event: line,
-        eventIndex: eventIndex,
-        directives: log.slice(),
-      });
-      issueDirectives(answer, eventIndex, raw, trigger, line);
+    if (fired.length > 0) {
+      var enriched = enrichFindings(fired);
+      if (director) {
+        var answer = director({
+          findings: enriched,
+          allFindings: live.findings(),
+          snapshot: live.snapshot(),
+          event: line,
+          eventIndex: eventIndex,
+          directives: log.slice(),
+        });
+        issueDirectives(answer, eventIndex, raw, trigger, line);
+      }
+      // Live findings as they fire, for a caller that wants to print
+      // them (the CLI --live flag) without being the director.
+      if (options.onFinding) { options.onFinding(enriched); }
     }
   }
 
-  run = runInternals.createTraceRun(
-    iroh,
-    code,
-    Object.assign({}, options, { events: "ALL", rawOnEvent: handleRaw })
-  );
+  // Parse errors reject/throw before anything runs; the two errors
+  // users hit most often get a pointer at the right entry point
+  // (directAsync / directModule) instead of createTraceRun's
+  // traceAsync / traceModule pointers.
+  var runOptions = Object.assign({}, options, { events: "ALL", rawOnEvent: handleRaw });
+  if (allowAsync) {
+    runOptions.stageOptions = Object.assign({}, options.stageOptions, {
+      allowAwaitOutsideFunction: true,
+    });
+  }
+  if (isModule) {
+    runOptions.stageOptions = Object.assign({}, options.stageOptions, {
+      sourceType: "module",
+    });
+  }
+  try {
+    run = runInternals.createTraceRun(iroh, code, runOptions);
+  } catch (e) {
+    if (e instanceof Error && typeof e.message === "string" && !isModule) {
+      if (e.message.indexOf("This program uses top-level await") === 0) {
+        throw new Error(
+          "This program uses top-level await — run it with Iroh.directAsync() (or Iroh.directModule() for modules); Iroh.direct() runs synchronously"
+        );
+      }
+      if (e.message.indexOf("This program uses import/export") === 0) {
+        throw new Error(
+          "This program uses import/export (or import.meta) — direct it with Iroh.directModule(); Iroh.direct() and Iroh.directAsync() run scripts only"
+        );
+      }
+    }
+    throw e;
+  }
   stage = run.stage;
-  var runner = runInternals.compileRunner(iroh, run.stage, false);
+  var runner = isModule ? null : runInternals.compileRunner(iroh, run.stage, allowAsync);
+
+  // The run completed normally: directives that never matched stay in
+  // the audit log as unapplied, with the reason — the log never
+  // pretends one took effect. A stop that was swallowed the same way:
+  // the run completed, so the stop did not take effect.
+  function finishSuccess(result) {
+    for (var ii = 0; ii < pending.length; ++ii) {
+      pending[ii].note =
+        "Never applied: no matching interception point was reached before the run ended.";
+    }
+    if (stopPending && stopEntry !== null) {
+      stopEntry.applied = false;
+      stopEntry.note =
+        "Stop requested but the program caught the director's stop signal and ran to completion — a program that swallows every thrown value defeats a stop.";
+    }
+    var summary = live.finish();
+    return {
+      result: result,
+      stopped: false,
+      stopReason: null,
+      events: run.events,
+      findings: summary.findings,
+      directives: log,
+      analysis: summary,
+    };
+  }
+
+  // The run ended by a directed stop or an error. A directed stop is
+  // a normal outcome, not an error: the analysis is the live finish()
+  // over the trace as it stands — a loop the run never reached counts
+  // as zero-iteration in the recorded trace. A runtime error (or a
+  // director bug) throws with the trace so far attached, like trace(),
+  // plus the direction record so far.
+  function finishError(e) {
+    if (e === DIRECTOR_STOP) {
+      if (stopEntry !== null) {
+        stopEntry.applied = true;
+        stopEntry.appliedAtEvent = run.events.length - 1;
+        stopEntry.appliedVia = "stop";
+      }
+      var summary = live.finish();
+      return {
+        result: void 0,
+        stopped: true,
+        stopReason: stopReason,
+        events: run.events,
+        findings: summary.findings,
+        directives: log,
+        analysis: summary,
+      };
+    }
+    runInternals.attachTraceEvents(e, run.events);
+    e.direct = {
+      result: void 0,
+      stopped: false,
+      stopReason: null,
+      events: run.events,
+      findings: live.findings(),
+      directives: log,
+      analysis: live.snapshot(),
+    };
+    throw e;
+  }
+
   var result;
   try {
     // Start call: the director may issue initial directives (e.g. skip
@@ -16163,65 +17039,64 @@ function direct(code, director, options) {
       });
       issueDirectives(answer, -1, null, null, null);
     }
+    if (isModule) {
+      // The module runs through the temp-file import; its result is
+      // the namespace (like traceModule()), and a directed stop thrown
+      // from a listener rejects the import with the sentinel, which
+      // finishError turns into the stopped record.
+      return runInternals.importTracedModule(iroh, run, options).then(
+        function(out) { return finishSuccess(out.result); },
+        finishError
+      );
+    }
+    if (allowAsync) {
+      return runner(iroh).then(finishSuccess, finishError);
+    }
     result = runner(iroh);
   } catch (e) {
-    if (e === DIRECTOR_STOP) {
-      // Directed stop: a normal outcome, not an error. The analysis is
-      // the live finish() over the trace as it stands — a loop the run
-      // never reached counts as zero-iteration in the recorded trace.
-      if (stopEntry !== null) {
-        stopEntry.applied = true;
-        stopEntry.appliedAtEvent = run.events.length - 1;
-        stopEntry.appliedVia = "stop";
-      }
-      var summary$1 = live.finish();
-      return {
-        result: void 0,
-        stopped: true,
-        stopReason: stopReason,
-        events: run.events,
-        findings: summary$1.findings,
-        directives: log,
-        analysis: summary$1,
-      };
-    }
-    // A runtime error (or a director bug): the trace so far is
-    // attached, like trace(), plus the direction record so far.
-    runInternals.attachTraceEvents(e, run.events);
-    e.direct = {
-      result: void 0,
-      stopped: false,
-      stopReason: null,
-      events: run.events,
-      findings: live.findings(),
-      directives: log,
-      analysis: live.snapshot(),
-    };
-    throw e;
+    return finishError(e);
   }
-  // Directives that never matched stay in the audit log as unapplied,
-  // with the reason — the log never pretends one took effect. A stop
-  // that was swallowed the same way: the run completed, so the stop
-  // did not take effect.
-  for (var ii = 0; ii < pending.length; ++ii) {
-    pending[ii].note =
-      "Never applied: no matching interception point was reached before the run ended.";
+  return finishSuccess(result);
+}
+
+// Synchronous directed run: direct() in the 1.0.0 sense.
+function direct(code, director, options) {
+  return directInternal(this, code, director, options, "sync");
+}
+
+// Async directed run: the same engine, but the program runs through
+// compileRunner's async wrapper, so top-level await works and async
+// continuations are included. Returns a Promise of the directed
+// record. A parse error or module code rejects (never throws
+// synchronously) — like traceAsync() — and a runtime error rejects
+// with the events that fired before it attached as error.events and
+// the direction record so far as error.direct.
+function directAsync(code, director, options) {
+  var out;
+  try {
+    out = directInternal(this, code, director, options, "async");
+  } catch (e) {
+    return Promise.reject(e);
   }
-  if (stopPending && stopEntry !== null) {
-    stopEntry.applied = false;
-    stopEntry.note =
-      "Stop requested but the program caught the director's stop signal and ran to completion — a program that swallows every thrown value defeats a stop.";
+  return Promise.resolve(out);
+}
+
+// Module directed run: the same engine, but the program runs as an ES
+// module through the temp-file import, so import/export and top-level
+// await both work. Returns a Promise of the directed record; the
+// record's result is the module namespace (like traceModule()).
+// Options.filename bases relative imports, as in traceModule(). A
+// parse error rejects before running; a runtime error rejects with the
+// events that fired before it attached as error.events and the
+// direction record so far as error.direct. Requires Node.js.
+function directModule(code, director, options) {
+  var out;
+  try {
+    out = directInternal(this, code, director, options, "module");
+  } catch (e) {
+    return Promise.reject(e);
   }
-  var summary = live.finish();
-  return {
-    result: result,
-    stopped: false,
-    stopReason: null,
-    events: run.events,
-    findings: summary.findings,
-    directives: log,
-    analysis: summary,
-  };
+  return Promise.resolve(out);
 }
 
 // The built-in director: a runaway-loop guard. When HOT_LOOP fires it
@@ -16286,6 +17161,8 @@ function runawayGuard(options) {
 
 var _direct = Object.freeze({
 	direct: direct,
+	directAsync: directAsync,
+	directModule: directModule,
 	runawayGuard: runawayGuard
 });
 
@@ -16411,14 +17288,21 @@ function buildTraceEnv(events) {
     } else if (e.event === "FUNCTION_CALL" && e.trigger === "before" && e.name) {
       env.called[e.name] = true;
       if (!env.funcs[e.name]) {
-        env.funcs[e.name] = { args: e.arguments || [], returns: null };
+        env.funcs[e.name] = { args: e.arguments || [], returns: null, calls: [], returnValues: [] };
       }
+      // Every call's arguments, not just the first: a later call with
+      // a different argument type must not silently reuse the first
+      // call's signature (see the ctx seeding below).
+      env.funcs[e.name].calls.push(e.arguments || []);
     } else if (e.event === "FUNCTION_RETURN" && e.name) {
       if (!env.funcs[e.name]) {
-        env.funcs[e.name] = { args: null, returns: null };
+        env.funcs[e.name] = { args: null, returns: null, calls: [], returnValues: [] };
       }
-      if (env.funcs[e.name].returns === null && e.return !== void 0) {
-        env.funcs[e.name].returns = e.return;
+      if (e.return !== void 0) {
+        env.funcs[e.name].returnValues.push(e.return);
+        if (env.funcs[e.name].returns === null) {
+          env.funcs[e.name].returns = e.return;
+        }
       }
     } else if (e.event === "IF_TEST") {
       var g = env.ifOutcomes[e.hash];
@@ -16438,7 +17322,11 @@ function inferType(node, ctx) {
   switch (node.type) {
     case "Literal": {
       if (typeof node.value === "number") {
-        return Number.isInteger(node.value) ? "int" : "double";
+        // Only a safe integer is a C++ int: JS numbers are doubles,
+        // and a literal like 1e21 is integer-valued but cannot be a
+        // C++ int (nor a long long) — String(1e21) must format as
+        // "1e+21", not std::to_string's full digits.
+        return Number.isSafeInteger(node.value) ? "int" : "double";
       }
       if (typeof node.value === "string") { return "std::string"; }
       if (typeof node.value === "boolean") { return "bool"; }
@@ -16576,7 +17464,7 @@ function makeJSEmitter(target, report, env, hints) {
   var isPy = target === "python";
   var lines = [];
   var indentLevel = 0;
-  var needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, vectorHelper: false, unsupportedHelper: false, cout: false };
+  var needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false };
   var noted = {};
   function noteOnce(key, text) {
     if (!noted[key]) {
@@ -16598,10 +17486,38 @@ function makeJSEmitter(target, report, env, hints) {
   for (var ii$1 = 0; ii$1 < funcNames.length; ++ii$1) {
     var f = env.funcs[funcNames[ii$1]];
     var params = null;
+    var paramsConflict = null;
     if (f.args) {
       params = [];
       for (var jj = 0; jj < f.args.length; ++jj) {
         params.push(cppTypeOfValue(f.args[jj]));
+      }
+      // A later call with a different argument type is a conflict,
+      // not a reason to silently reuse the first call's signature.
+      // cppSignature refuses the function when one is recorded.
+      if (f.calls) {
+        for (var jj$1 = 0; jj$1 < params.length; ++jj$1) {
+          for (var kk = 1; kk < f.calls.length; ++kk) {
+            var t = cppTypeOfValue(f.calls[kk][jj$1]);
+            if (t !== null && params[jj$1] !== null && t !== params[jj$1]) {
+              if (!paramsConflict) { paramsConflict = []; }
+              paramsConflict.push({ index: jj$1, first: params[jj$1], other: t, call: kk });
+              break;
+            }
+          }
+        }
+      }
+    }
+    // Same for returns: differing return types across calls.
+    var returnsConflict = null;
+    if (f.returnValues && f.returnValues.length > 1) {
+      var first = cppTypeOfValue(f.returnValues[0]);
+      for (var kk$1 = 1; kk$1 < f.returnValues.length; ++kk$1) {
+        var t$1 = cppTypeOfValue(f.returnValues[kk$1]);
+        if (t$1 !== null && first !== null && t$1 !== first) {
+          returnsConflict = { first: first, other: t$1, call: kk$1 };
+          break;
+        }
       }
     }
     ctx.funcs[funcNames[ii$1]] = {
@@ -16612,6 +17528,10 @@ function makeJSEmitter(target, report, env, hints) {
       returnValue: f.returns !== null && f.returns !== void 0 ? f.returns : null,
       paramsFrom: params ? "trace" : null,
       returnsFrom: f.returns !== null && f.returns !== void 0 ? "trace" : null,
+      paramsConflict: paramsConflict,
+      returnsConflict: returnsConflict,
+      callCount: f.calls ? f.calls.length : 0,
+      returnCount: f.returnValues ? f.returnValues.length : 0,
     };
   }
   if (hints && hints.functions) {
@@ -16695,18 +17615,54 @@ function makeJSEmitter(target, report, env, hints) {
     return unsupportedExpr("literal of unsupported type", "Literal");
   }
 
-  // C++ helper: render an expression as a string for concatenation.
-  function cppStringOf(node) {
+  // Python helper: render an expression as a string for concatenation.
+  // Python "+" refuses str + number at runtime, so non-strings must be
+  // converted — str() for ints, the JS "true"/"false" ternary for
+  // bools, __iroh_jsnum for doubles (str() formats 1e16 as "1e+16",
+  // where JS prints "10000000000000000").
+  function pyStringOf(node) {
     var t = inferType(node, ctx);
     var s = expr(node, 16);
     if (t === "std::string") { return s; }
-    if (t === "int") { return "std::to_string(" + s + ")"; }
-    if (t === "bool") { return "((" + s + ') ? "true" : "false")'; }
+    if (t === "int") { return "str(" + s + ")"; }
+    if (t === "bool") { return '("true" if ' + s + ' else "false")'; }
     if (t === "double") {
+      needs.jsnum = true;
+      return "__iroh_jsnum(" + s + ")";
+    }
+    if (t && t.indexOf("std::vector<") === 0) {
       return unsupportedExpr(
-        "string concatenation of a double value in C++ (std::to_string prints 6 decimals, unlike JS)",
+        "string concatenation of an array in Python (JS joins with commas; Python str() prints brackets)",
         "BinaryExpression"
       );
+    }
+    recordAssumption(
+      report,
+      "string concatenation operand assumed to be a string",
+      "No static or trace type for the operand; emitted as-is"
+    );
+    return s;
+  }
+
+  // C++ helper: render an expression as a string for concatenation.
+  // Every result must be a real std::string: a bare string literal is
+  // const char*, and `"a" + const char*` is pointer arithmetic, not
+  // concatenation — so literals and the bool ternary (whose arms are
+  // literals) are wrapped in std::string(...).
+  function cppStringOf(node) {
+    var t = inferType(node, ctx);
+    var s = expr(node, 16);
+    if (t === "std::string") {
+      if (node.type === "Literal" && typeof node.value === "string") { return "std::string(" + s + ")"; }
+      return s;
+    }
+    if (t === "int") { return "std::to_string(" + s + ")"; }
+    if (t === "bool") { return "std::string(((" + s + ') ? "true" : "false"))'; }
+    if (t === "double") {
+      // JS Number -> string: the shortest decimal that round-trips,
+      // formatted the way JS String(v) formats it (see __iroh_jsnum).
+      needs.jsnum = true;
+      return "__iroh_jsnum(" + s + ")";
     }
     recordAssumption(
       report,
@@ -16724,29 +17680,57 @@ function makeJSEmitter(target, report, env, hints) {
         var raw = q.value.cooked !== void 0 && q.value.cooked !== null ? q.value.cooked : q.value.raw;
         parts$1.push(raw.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/{/g, "{{").replace(/}/g, "}}"));
         if (ii < node.expressions.length) {
-          parts$1.push("{" + expr(node.expressions[ii], 16) + "}");
+          // f"{x}" uses str(x): "True" for bools (JS prints "true")
+          // and "1e+16" for 1e16 (JS prints "10000000000000000") —
+          // so route bools and doubles explicitly. Arrays join with
+          // commas in JS and print brackets in Python: refuse loudly.
+          var e = node.expressions[ii];
+          var t = inferType(e, ctx);
+          if (t === "std::string" || t === "int") {
+            parts$1.push("{" + expr(e, 16) + "}");
+          } else if (t === "bool") {
+            parts$1.push("{(\"true\" if " + expr(e, 16) + " else \"false\")}");
+          } else if (t === "double") {
+            needs.jsnum = true;
+            parts$1.push("{__iroh_jsnum(" + expr(e, 16) + ")}");
+          } else if (t && t.indexOf("std::vector<") === 0) {
+            return unsupportedExpr(
+              "template literal interpolation of an array in Python (JS joins with commas; Python str() prints brackets)",
+              "TemplateLiteral"
+            );
+          } else {
+            recordAssumption(
+              report,
+              "template literal interpolation assumed to be a string or number",
+              "No static or trace type for the interpolation; emitted as-is"
+            );
+            parts$1.push("{" + expr(e, 16) + "}");
+          }
         }
       }
       parts$1.push('"');
       return parts$1.join("");
     }
-    // C++: "a" + std::to_string(x) + "b" — only string/integral
-    // interpolations; doubles would print with 6 decimals via
-    // std::to_string, which does not match JS output.
+    // C++: "a" + std::to_string(x) + "b" — string/integral/double
+    // interpolations; doubles go through __iroh_jsnum so they print
+    // the way JS does (std::to_string would print 6 decimals).
     var parts = [];
     for (var ii$1 = 0; ii$1 < node.quasis.length; ++ii$1) {
       var q$1 = node.quasis[ii$1];
       var raw$1 = q$1.value.cooked !== void 0 && q$1.value.cooked !== null ? q$1.value.cooked : q$1.value.raw;
       if (raw$1 !== "") { parts.push("std::string(" + JSON.stringify(raw$1) + ")"); }
       if (ii$1 < node.expressions.length) {
-        var e = node.expressions[ii$1];
-        var t = inferType(e, ctx);
-        if (t === "std::string") { parts.push(expr(e, 16)); }
-        else if (t === "int") { parts.push("std::to_string(" + expr(e, 16) + ")"); }
-        else if (t === "bool") { parts.push("((" + expr(e, 16) + ') ? "true" : "false")'); }
-        else {
+        var e$1 = node.expressions[ii$1];
+        var t$1 = inferType(e$1, ctx);
+        if (t$1 === "std::string") { parts.push(expr(e$1, 16)); }
+        else if (t$1 === "int") { parts.push("std::to_string(" + expr(e$1, 16) + ")"); }
+        else if (t$1 === "bool") { parts.push("((" + expr(e$1, 16) + ') ? "true" : "false")'); }
+        else if (t$1 === "double") {
+          needs.jsnum = true;
+          parts.push("__iroh_jsnum(" + expr(e$1, 16) + ")");
+        } else {
           return unsupportedExpr(
-            "template literal interpolation of non-string, non-integer value in C++ (std::to_string would print doubles with 6 decimals, unlike JS)",
+            "template literal interpolation of non-string, non-integer, non-double value in C++",
             "TemplateLiteral"
           );
         }
@@ -16792,6 +17776,11 @@ function makeJSEmitter(target, report, env, hints) {
             args.push(a.value ? '"true"' : '"false"');
           } else if (inferType(a, ctx) === "bool") {
             args.push('("true" if ' + expr(a, 16) + ' else "false")');
+          } else if (inferType(a, ctx) === "double") {
+            // print() uses str(), which formats 1e16 as "1e+16"
+            // where JS prints "10000000000000000".
+            needs.jsnum = true;
+            args.push("__iroh_jsnum(" + expr(a, 16) + ")");
           } else {
             args.push(expr(a, 16));
           }
@@ -16859,7 +17848,37 @@ function makeJSEmitter(target, report, env, hints) {
         return "std::stod(" + expr(node.arguments[0], 16) + ")";
       }
       if (name === "String") {
-        if (isPy) { return "str(" + expr(node.arguments[0], 16) + ")"; }
+        if (isPy) {
+          var at = inferType(node.arguments[0], ctx);
+          if (at === "double") {
+            // str() formats 1e16 as "1e+16"; JS prints "10000000000000000".
+            needs.jsnum = true;
+            return "__iroh_jsnum(" + expr(node.arguments[0], 16) + ")";
+          }
+          if (at === "bool") {
+            // str(True) is "True"; JS String(true) is "true".
+            return '("true" if ' + expr(node.arguments[0], 16) + ' else "false")';
+          }
+          if (at && at.indexOf("std::vector<") === 0) {
+            return unsupportedExpr(
+              "String() of an array in Python (JS joins with commas; Python str() prints brackets)",
+              "CallExpression"
+            );
+          }
+          return "str(" + expr(node.arguments[0], 16) + ")";
+        }
+        // std::to_string prints doubles with 6 decimals ("1.500000"),
+        // unlike JS String(1.5) ("1.5") — route doubles through the
+        // JS number formatter. std::to_string(true) is "1", not
+        // "true" — bools get the ternary. Ints and strings keep
+        // std::to_string.
+        if (inferType(node.arguments[0], ctx) === "double") {
+          needs.jsnum = true;
+          return "__iroh_jsnum(" + expr(node.arguments[0], 16) + ")";
+        }
+        if (inferType(node.arguments[0], ctx) === "bool") {
+          return "std::string(((" + expr(node.arguments[0], 16) + ') ? "true" : "false"))';
+        }
         return "std::to_string(" + expr(node.arguments[0], 16) + ")";
       }
       if (name === "Number") {
@@ -16916,30 +17935,56 @@ function makeJSEmitter(target, report, env, hints) {
       needs.cmath = true;
       return "std::pow(" + expr(node.left, 16) + ", " + expr(node.right, 16) + ")";
     }
+    if (op === "%") {
+      if (isPy) {
+        // JS % is the truncated remainder; Python % is floored (it
+        // takes the divisor's sign). math.fmod has the right sign but
+        // returns a float, which would print "-2.0" where JS prints
+        // "-2" — so use the truncating identity through a helper,
+        // which keeps ints int and floats float.
+        needs.jsmod = true;
+        return "__iroh_jsmod(" + expr(node.left, 16) + ", " + expr(node.right, 16) + ")";
+      }
+      // C++ % is truncated like JS, but only for integers — % on
+      // doubles does not compile. Route double operands through
+      // std::fmod (also truncated, so the semantics match).
+      var lt = inferType(node.left, ctx);
+      var rt = inferType(node.right, ctx);
+      if (lt === "double" || rt === "double") {
+        needs.cmath = true;
+        return "std::fmod(" + expr(node.left, 16) + ", " + expr(node.right, 16) + ")";
+      }
+    }
     var outOp = op;
     if (op === "===") { outOp = "=="; }
     else if (op === "!==") { outOp = "!="; }
     else if (op === "&&") { outOp = isPy ? "and" : "&&"; }
     else if (op === "||") { outOp = isPy ? "or" : "||"; }
     var myPrec = precedence(node);
+    if (isPy && op === "+") {
+      // String concatenation: either side a string (or a string
+      // literal) makes the whole `+` a concat. Python refuses str +
+      // number at runtime, so route non-strings through pyStringOf.
+      var lt$1 = inferType(node.left, ctx);
+      var rt$1 = inferType(node.right, ctx);
+      var leftIsStr = lt$1 === "std::string" || (node.left.type === "Literal" && typeof node.left.value === "string");
+      var rightIsStr = rt$1 === "std::string" || (node.right.type === "Literal" && typeof node.right.value === "string");
+      if (leftIsStr || rightIsStr) {
+        return pyStringOf(node.left) + " + " + pyStringOf(node.right);
+      }
+    }
     if (!isPy && op === "+") {
       // String concatenation: either side a string (or a string
       // literal) makes the whole `+` a concat. A literal on its own
       // is const char*, so `"a" + 1` would compile as pointer
-      // arithmetic — route everything through cppStringOf, and wrap
-      // two literals so the left one is a real std::string.
-      var lt = inferType(node.left, ctx);
-      var rt = inferType(node.right, ctx);
-      var leftIsStr = lt === "std::string" || (node.left.type === "Literal" && typeof node.left.value === "string");
-      var rightIsStr = rt === "std::string" || (node.right.type === "Literal" && typeof node.right.value === "string");
-      if (leftIsStr || rightIsStr) {
-        var l = cppStringOf(node.left);
-        var r = cppStringOf(node.right);
-        if (node.left.type === "Literal" && typeof node.left.value === "string" &&
-            node.right.type === "Literal" && typeof node.right.value === "string") {
-          l = "std::string(" + l + ")";
-        }
-        return l + " + " + r;
+      // arithmetic — route everything through cppStringOf, which
+      // wraps literals and bool ternaries in std::string(...).
+      var lt$2 = inferType(node.left, ctx);
+      var rt$2 = inferType(node.right, ctx);
+      var leftIsStr$1 = lt$2 === "std::string" || (node.left.type === "Literal" && typeof node.left.value === "string");
+      var rightIsStr$1 = rt$2 === "std::string" || (node.right.type === "Literal" && typeof node.right.value === "string");
+      if (leftIsStr$1 || rightIsStr$1) {
+        return cppStringOf(node.left) + " + " + cppStringOf(node.right);
       }
     }
     return (
@@ -17118,12 +18163,29 @@ function makeJSEmitter(target, report, env, hints) {
         );
         return null;
       }
+      // A conflict recorded across calls (trace types only — a hint
+      // fills gaps but never overrides trace evidence, so it cannot
+      // rescue a conflict). One C++ signature cannot cover two types.
+      if (traceFn && traceFn.paramsFrom === "trace" && traceFn.paramsConflict) {
+        for (var ci = 0; ci < traceFn.paramsConflict.length; ++ci) {
+          var c = traceFn.paramsConflict[ci];
+          if (c.index === ii) {
+            markUnsupported(
+              report,
+              "FunctionDeclaration",
+              "C++ parameter '" + pname + "' of '" + fnName + "' was called with conflicting types (" + c.first + " in the first call, " + c.other + " in call " + (c.call + 1) + ") — one C++ signature cannot cover both; split the function into one per argument type (a type hint cannot override trace evidence)"
+            );
+            return null;
+          }
+        }
+      }
       sig.params.push(t + " " + pname + def);
     }
     if (paramsFromTrace) {
+      var callCount = (traceFn && traceFn.callCount) || 1;
       recordAssumption(
         report,
-        "parameter types of '" + fnName + "' (" + sig.params.join(", ") + ") taken from the trace (first call only — later calls with different argument types would break the translation)",
+        "parameter types of '" + fnName + "' (" + sig.params.join(", ") + ") taken from the trace (verified consistent across " + callCount + " call" + (callCount === 1 ? "" : "s") + ")",
         "FUNCTION_CALL '" + fnName + "' arguments " + JSON.stringify(traceFn.args || [])
       );
     }
@@ -17159,15 +18221,25 @@ function makeJSEmitter(target, report, env, hints) {
         }
         if (allSame) { ret = first; }
         else if (traceFn && traceFn.returns) {
+          // Conflicting return types across calls refuse, like params.
+          if (traceFn.returnsConflict) {
+            markUnsupported(
+              report,
+              "FunctionDeclaration",
+              "C++ return type of '" + fnName + "' differs across calls (" + traceFn.returnsConflict.first + " in the first call, " + traceFn.returnsConflict.other + " in call " + (traceFn.returnsConflict.call + 1) + ") — one C++ signature cannot cover both; split the function into one per argument type (a type hint cannot override trace evidence)"
+            );
+            return null;
+          }
           ret = traceFn.returns;
           if (traceFn.returnsFrom === "trace") { retFromTrace = true; }
         }
       }
     }
     if (retFromTrace) {
+      var returnCount = (traceFn && traceFn.returnCount) || 1;
       recordAssumption(
         report,
-        "return type of '" + fnName + "' (" + ret + ") taken from the trace (first return only)",
+        "return type of '" + fnName + "' (" + ret + ") taken from the trace (verified consistent across " + returnCount + " return" + (returnCount === 1 ? "" : "s") + ")",
         "FUNCTION_RETURN '" + fnName + "' value " + JSON.stringify(traceFn.returnValue)
       );
     }
@@ -17366,6 +18438,12 @@ function makeJSEmitter(target, report, env, hints) {
             if (a.type === "Literal" && a.value === null) { piece = '"null"'; }
             else if (a.type === "Literal" && typeof a.value === "boolean") { piece = a.value ? '"true"' : '"false"'; }
             else if (inferType(a, ctx) === "bool") { piece = "((" + expr(a, 16) + ') ? "true" : "false")'; }
+            else if (inferType(a, ctx) === "double") {
+              // std::cout defaults to 6 significant digits ("0.3"
+              // for 0.1 + 0.2); JS prints "0.30000000000000004".
+              needs.jsnum = true;
+              piece = "__iroh_jsnum(" + expr(a, 16) + ")";
+            }
             else if (a.type === "ArrayExpression" || (inferType(a, ctx) || "").indexOf("std::vector<") === 0) {
               needs.vectorHelper = true;
               piece = null;
@@ -17654,6 +18732,60 @@ function makeJSEmitter(target, report, env, hints) {
       var header$1 = [];
       if (needs.math) { header$1.push("import math"); }
       if (needs.random) { header$1.push("import random"); }
+      if (needs.jsmod) {
+        // JS % is the truncated remainder; Python % is floored.
+        // int(a / b) truncates toward zero, so this keeps ints int
+        // and floats float, matching JS output exactly.
+        header$1.push("def __iroh_jsmod(a, b):");
+        header$1.push("    return a - int(a / b) * b");
+        header$1.push("");
+      }
+      if (needs.jsnum) {
+        // JS Number -> string: the shortest decimal that round-trips,
+        // formatted the way JS String(v) formats it. Python repr is
+        // already shortest, but it switches to exponential at 1e16
+        // (JS waits until 1e21) and zero-pads exponents ("1e-07"
+        // where JS prints "1e-7") — so take repr's digits and
+        // exponent, then place the point per the ECMAScript
+        // Number::toString rules (k = decimal exponent, n = digit
+        // count): 0 < k <= n <= 21 writes the digits with the point
+        // at k; n < k <= 21 appends zeros; -6 < k <= 0 writes "0."
+        // with -k zeros; otherwise exponential with a bare exponent.
+        header$1.push("def __iroh_jsnum(v):");
+        header$1.push("    if v != v: return \"NaN\"");
+        header$1.push("    if v == float(\"inf\"): return \"Infinity\"");
+        header$1.push("    if v == float(\"-inf\"): return \"-Infinity\"");
+        header$1.push("    if v == 0: return \"0\"");
+        header$1.push("    neg = v < 0");
+        header$1.push("    if neg: v = -v");
+        header$1.push("    s = repr(v)");
+        header$1.push("    if \"e\" in s:");
+        header$1.push("        mant, exp = s.split(\"e\")");
+        header$1.push("        k = int(exp) + 1");
+        header$1.push("        digits = mant.replace(\".\", \"\")");
+        header$1.push("    elif \".\" in s:");
+        header$1.push("        ip, fp = s.split(\".\")");
+        header$1.push("        k = len(ip)");
+        header$1.push("        digits = ip + fp");
+        header$1.push("    else:");
+        header$1.push("        k = len(s)");
+        header$1.push("        digits = s");
+        header$1.push("    digits = digits.rstrip(\"0\") or \"0\"");
+        header$1.push("    n = len(digits)");
+        header$1.push("    if 0 < k <= n <= 21:");
+        header$1.push("        out = digits[:k]");
+        header$1.push("        if k < n: out += \".\" + digits[k:]");
+        header$1.push("    elif n < k <= 21:");
+        header$1.push("        out = digits + \"0\" * (k - n)");
+        header$1.push("    elif -6 < k <= 0:");
+        header$1.push("        out = \"0.\" + \"0\" * (-k) + digits");
+        header$1.push("    else:");
+        header$1.push("        out = digits[0]");
+        header$1.push("        if n > 1: out += \".\" + digits[1:]");
+        header$1.push("        out += \"e\" + (\"+\" if k - 1 >= 0 else \"-\") + str(abs(k - 1))");
+        header$1.push("    return (\"-\" if neg else \"\") + out");
+        header$1.push("");
+      }
       if (needs.unsupportedHelper) {
         header$1.push("def _iroh_unsupported(msg):");
         header$1.push("    raise NotImplementedError(\"IrohRedux: \" + msg)");
@@ -17696,6 +18828,67 @@ function makeJSEmitter(target, report, env, hints) {
       header.push("    std::cout << v[i];");
       header.push("  }");
       header.push("  std::cout << \"]\";");
+      header.push("}");
+    }
+    if (needs.jsnum) {
+      // JS Number -> string: the shortest decimal that round-trips,
+      // formatted the way JS String(v) formats it. std::to_string
+      // prints 6 decimals and std::cout defaults to 6 significant
+      // digits, neither of which matches JS — so find the shortest
+      // digits that round-trip (via %e at increasing precision),
+      // then place the point per the ECMAScript Number::toString
+      // rules (k = decimal exponent, n = digit count): k <= n <= 21
+      // writes the digits with the point at k; n < k <= 21 appends
+      // zeros; -6 < k <= 0 writes "0." with -k zeros; otherwise
+      // exponential with a bare exponent ("1e+21", "1e-7").
+      header.push("");
+      header.push("#include <cmath>");
+      header.push("#include <cstdio>");
+      header.push("#include <sstream>");
+      header.push("std::string __iroh_jsnum(double v) {");
+      header.push("  if (std::isnan(v)) return \"NaN\";");
+      header.push("  if (std::isinf(v)) return v > 0 ? \"Infinity\" : \"-Infinity\";");
+      header.push("  if (v == 0) return \"0\";");
+      header.push("  bool neg = v < 0;");
+      header.push("  if (neg) v = -v;");
+      header.push("  std::string digits;");
+      header.push("  int k = 0;");
+      header.push("  char buf[64];");
+      header.push("  for (int p = 1; p <= 17; ++p) {");
+      header.push("    std::snprintf(buf, sizeof(buf), \"%.*e\", p - 1, v);");
+      header.push("    std::string s(buf);");
+      header.push("    size_t epos = s.find('e');");
+      header.push("    int e = std::stoi(s.substr(epos + 1));");
+      header.push("    std::string d;");
+      header.push("    d += s[0];");
+      header.push("    size_t dot = s.find('.');");
+      header.push("    if (dot != std::string::npos) {");
+      header.push("      for (size_t j = dot + 1; j < epos; ++j) d += s[j];");
+      header.push("    }");
+      header.push("    while (d.size() > 1 && d[d.size() - 1] == '0') d.pop_back();");
+      header.push("    if (std::stod(s) == v) { digits = d; k = e + 1; break; }");
+      header.push("  }");
+      header.push("  if (digits.empty()) { std::ostringstream os; os << v; return os.str(); }");
+      header.push("  int n = (int)digits.size();");
+      header.push("  std::string out = neg ? \"-\" : \"\";");
+      header.push("  if (k > 0 && k <= n && n <= 21) {");
+      header.push("    out += digits.substr(0, k);");
+      header.push("    if (k < n) { out += \".\"; out += digits.substr(k); }");
+      header.push("  } else if (n < k && k <= 21) {");
+      header.push("    out += digits;");
+      header.push("    for (int i = 0; i < k - n; ++i) out += \"0\";");
+      header.push("  } else if (k > -6 && k <= 0) {");
+      header.push("    out += \"0.\";");
+      header.push("    for (int i = 0; i < -k; ++i) out += \"0\";");
+      header.push("    out += digits;");
+      header.push("  } else {");
+      header.push("    out += digits.substr(0, 1);");
+      header.push("    if (n > 1) { out += \".\"; out += digits.substr(1); }");
+      header.push("    out += \"e\";");
+      header.push("    out += (k - 1 >= 0 ? \"+\" : \"-\");");
+      header.push("    out += std::to_string(k - 1 >= 0 ? k - 1 : -(k - 1));");
+      header.push("  }");
+      header.push("  return out;");
       header.push("}");
     }
     header.push("");
@@ -17939,8 +19132,10 @@ function makePyJSEmitter(report) {
         if (op === "Mult") { return "(" + l + " * " + r + ")"; }
         if (op === "Div") { return "(" + l + " / " + r + ")"; }
         if (op === "Mod") {
-          noteOnce("mod", "Python % and JS % differ for negative operands (Python takes the divisor's sign).");
-          return "(" + l + " % " + r + ")";
+          // Python % is floored; JS % is truncated (it takes the
+          // dividend's sign). The floored form below matches Python
+          // for every sign combination, including negative divisors.
+          return "((" + l + " % " + r + ") + " + r + ") % " + r;
         }
         if (op === "Pow") { return "(" + l + " ** " + r + ")"; }
         if (op === "FloorDiv") { return "Math.floor(" + l + " / " + r + ")"; }

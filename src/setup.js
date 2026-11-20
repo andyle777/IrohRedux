@@ -266,11 +266,12 @@ function attachTraceEvents(err, events) {
 // Internal run machinery, shared with the director engine
 // (src/direct.js): createTraceRun builds a Stage and attaches the event
 // listeners, compileRunner turns a Stage's generated script into a
-// runnable function, attachTraceEvents puts the events so far on a
-// thrown error. Exported as one plain object — not as functions — so
-// extend() in src/index.js, which only copies functions, does not put
-// them on the Iroh singleton.
-export const runInternals = { createTraceRun, compileRunner, attachTraceEvents };
+// runnable function, importTracedModule runs an instrumented module
+// through a temp .mjs file and dynamic import, attachTraceEvents puts
+// the events so far on a thrown error. Exported as one plain object —
+// not as functions — so extend() in src/index.js, which only copies
+// functions, does not put them on the Iroh singleton.
+export const runInternals = { createTraceRun, compileRunner, importTracedModule, attachTraceEvents };
 
 // Async version of trace(): awaits the program's completion value before
 // returning, so events from async continuations (await, promises) are
@@ -361,49 +362,20 @@ let irohStagesUsers = 0;
 let irohStagesHadPrevious = false;
 let irohStagesPrevious = void 0;
 
-// One-shot tracing for ES modules. Returns a Promise of { events,
-// result }: `events` is the list of plain event objects (same shape
-// as trace()), `result` is the module namespace object — every export,
-// named and default (as `.default`), live, not serialized.
-//
-// How it runs: the instrumented code is written to a temp `.mjs` file
-// and dynamic-imported — Node 24's vm.SourceTextModule still needs
-// --experimental-vm-modules, so it is not used. The generated script's
-// header (`const $$STx1 = Iroh.stages[...]`) cannot name an `Iroh`
-// binding in a module, so it is rewritten to a `globalThis.__irohStages`
-// registry holding the same `Iroh.stages` object the _Stage wrapper
-// registers into — instance identity is exact in both the CJS and ESM
-// dists, and importing the dist from the generated module (which would
-// give a second singleton in one of the two shapes) is avoided.
-// Relative imports in the traced code resolve against `options.filename`
-// when given (the temp file is written next to it); without it they
-// resolve against a fresh temp directory under os.tmpdir() and will
-// usually fail. `import.meta.url` in traced code is the temp file's
-// URL. The temp file is deleted after the import settles.
-//
-// Options: events, onEvent, stageOptions (sourceType is forced to
-// "module"), filename (base path for relative imports). A parse error
-// rejects before running; a runtime error rejects with the events that
-// fired before it attached as error.events. Requires Node.js — in a
-// browser it rejects with a clear error.
-export function traceModule(code, options) {
+// The import half of traceModule(), shared with directModule():
+// write the instrumented module to a temp .mjs file and dynamic-
+// import it, with the globalThis.__irohStages registry the generated
+// module reads its stage through. Returns a Promise of { events,
+// result } (result = the module namespace). Requires Node.js — in a
+// browser it rejects with a clear error. `run` is a createTraceRun
+// result; `options.filename` bases relative imports, as in
+// traceModule().
+function importTracedModule(iroh, run, options) {
   options = options || {};
-  let iroh = this;
   if (!isNodeRuntime()) {
     return Promise.reject(new Error(
-      "Iroh.traceModule() requires Node.js — modules run through a temp .mjs file and dynamic import()"
+      "Modules require Node.js — they run through a temp .mjs file and dynamic import()"
     ));
-  }
-  let stageOptions = Object.assign({}, options.stageOptions, {
-    sourceType: "module",
-  });
-  let run;
-  try {
-    run = createTraceRun(iroh, code, Object.assign({}, options, {
-      stageOptions: stageOptions,
-    }));
-  } catch (e) {
-    return Promise.reject(e);
   }
   // The header rewrite: first occurrence of `Iroh.stages[` is the
   // generated header, the first statement of the script.
@@ -477,6 +449,48 @@ export function traceModule(code, options) {
       }
     );
   });
+}
+
+// One-shot tracing for ES modules. Returns a Promise of { events,
+// result }: `events` is the list of plain event objects (same shape
+// as trace()), `result` is the module namespace object — every export,
+// named and default (as `.default`), live, not serialized.
+//
+// How it runs: the instrumented code is written to a temp `.mjs` file
+// and dynamic-imported — Node 24's vm.SourceTextModule still needs
+// --experimental-vm-modules, so it is not used. The generated script's
+// header (`const $$STx1 = Iroh.stages[...]`) cannot name an `Iroh`
+// binding in a module, so it is rewritten to a `globalThis.__irohStages`
+// registry holding the same `Iroh.stages` object the _Stage wrapper
+// registers into — instance identity is exact in both the CJS and ESM
+// dists, and importing the dist from the generated module (which would
+// give a second singleton in one of the two shapes) is avoided.
+// Relative imports in the traced code resolve against `options.filename`
+// when given (the temp file is written next to it); without it they
+// resolve against a fresh temp directory under os.tmpdir() and will
+// usually fail. `import.meta.url` in traced code is the temp file's
+// URL. The temp file is deleted after the import settles.
+//
+// Options: events, onEvent, stageOptions (sourceType is forced to
+// "module"), filename (base path for relative imports). A parse error
+// rejects before running; a runtime error rejects with the events that
+// fired before it attached as error.events. Requires Node.js — in a
+// browser it rejects with a clear error.
+export function traceModule(code, options) {
+  options = options || {};
+  let iroh = this;
+  let stageOptions = Object.assign({}, options.stageOptions, {
+    sourceType: "module",
+  });
+  let run;
+  try {
+    run = createTraceRun(iroh, code, Object.assign({}, options, {
+      stageOptions: stageOptions,
+    }));
+  } catch (e) {
+    return Promise.reject(e);
+  }
+  return importTracedModule(iroh, run, options);
 };
 
 export function greet() {

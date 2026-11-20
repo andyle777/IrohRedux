@@ -238,7 +238,12 @@ test("CLI --live end-to-end on a Python program", () => {
     assert.equal(found.length, 1);
     assert.equal(found[0].code, "HOT_LOOP");
     assert.equal(found[0].evidence.iterations, 100);
-    assert.equal(found[0].firedAt, 100);
+    // firedAt is the event count when HOT_LOOP trips: 1 initial
+    // ASSIGN (total = 0) + 2 events per iteration (LOOP_TEST and the
+    // ASSIGN for total += i) x 100 iterations. The per-iteration
+    // ASSIGN is the 1.0.1 Python tracer's; before it, firedAt was
+    // 100 (one event per iteration).
+    assert.equal(found[0].firedAt, 200);
     let summary = lines.find((l) => l.type === "live-summary");
     assert.ok(summary, "expected a live-summary line");
     assert.equal(summary.findings[0].evidence.iterations, 150);

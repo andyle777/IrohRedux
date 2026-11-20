@@ -122,7 +122,10 @@ importing a sibling module works — the tracer puts the script's
 directory at `sys.path[0]`, as `python3 prog.py` does. The program's
 stdout is redirected to stderr while it runs, so the JSONL stream stays
 clean; the result line is `{"type":"result","value":null}`. Honest
-limits: no per-assignment events, only the target file is traced,
+limits: per-assignment events fire for simple Name targets only
+(tuple targets, attributes and subscripts are blind spots, and the
+event carries the post-assignment value, unlike JS compound
+assignments, which carry the RHS), only the target file is traced,
 comprehensions/`async for`/lambdas are not loop/branch instrumented,
 single-threaded.
 
@@ -235,14 +238,19 @@ const out = Iroh.direct(code, (ctx) => {
 
 Three directives: `{ type: "set", name, value }` writes a variable at
 its next assignment (or flips a loop test when the counter advances by
-`++`); `{ type: "skip", name, value }` makes the next call of that
-name evaluate to the value without running; `{ type: "stop", reason }`
-ends the run. Each applies once, at the first matching point, and the
-record says whether and how it applied — a directive that never matches
-stays in the audit log with `applied: false` and a reason, never a
-pretence it took effect. A runtime error throws with the events so far
-and the direction record so far attached; a directed stop returns
-normally with `stopped: true`. From the CLI:
+`++`); a set may carry `scope` (a function name, or `null` for the top
+level) and may name a member (`"obj.prop"`, one level, including
+compound member assignments); `{ type: "skip", name, value }` makes the
+next call of that name evaluate to the value without running;
+`{ type: "stop", reason }` ends the run. Each applies once, at the
+first matching point, and the record says whether and how it applied — a
+directive that never matches stays in the audit log with
+`applied: false` and a reason, never a pretence it took effect. A
+runtime error throws with the events so far and the direction record so
+far attached; a directed stop returns normally with `stopped: true`.
+Async programs and modules have their own entries: `directAsync()`
+(top-level await works there) and `directModule()` (Node.js only).
+From the CLI:
 
 ```sh
 node cli/iroh.js program.js --direct
@@ -252,8 +260,12 @@ node cli/iroh.js program.js --direct
 ```
 
 `--direct=stop` makes the guard stop the run instead of throttling it.
-Direct mode is JavaScript scripts only — Python/C++ traces are buffered
-after the run, so there is nothing live to direct.
+Direct mode is JavaScript only — Python/C++ traces are buffered
+after the run, so there is nothing live to direct — but modules and
+top-level await work: `--direct` on a `.mjs` file or a script with
+top-level await directs it (via `directModule()` / `directAsync()`).
+`--direct` combines with `--analyze`, `--scan`, and `--live`; the
+analysis and scan lines follow the direct-summary.
 
 The rest of this guide uses the classic Stage API, which is still fully
 supported and gives you live listeners that can change values mid-flight.

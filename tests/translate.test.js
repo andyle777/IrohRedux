@@ -390,3 +390,76 @@ test("CLI --translate infers --from from a .py file", () => {
   assert.equal(lines[0].to, "javascript");
   assert.match(lines[0].code, /function add/);
 });
+
+// --- 1.0.1 fixes: remainder, number formatting, string conversion,
+// and cross-call type consistency -------------------------------------
+
+checkBothWays(
+  "remainder with negative operands (JS % semantics)",
+  "console.log(-5 % 3); console.log(5 % -3); console.log(5 % 3); console.log(-5.5 % 2);",
+  "-2\n2\n2\n-1.5\n"
+);
+
+checkBothWays(
+  "string + double concatenation",
+  'console.log("x" + 1.5); console.log("y" + 0.1);',
+  "x1.5\ny0.1\n"
+);
+
+checkBothWays(
+  "string + boolean concatenation",
+  'console.log("b" + true); console.log("c" + false);',
+  "btrue\ncfalse\n"
+);
+
+checkBothWays(
+  "number formatting matches JS (no early exponential, no padded exponent)",
+  "console.log(10000000000000000); console.log(1000000000000000000000); console.log(0.0000001); console.log(0.000001); console.log(0.1 + 0.2);",
+  "10000000000000000\n1e+21\n1e-7\n0.000001\n0.30000000000000004\n"
+);
+
+checkBothWays(
+  "String() of a double and a boolean",
+  "console.log(String(1.5)); console.log(String(true)); console.log(String(1000000000000000000000));",
+  "1.5\ntrue\n1e+21\n"
+);
+
+checkBothWays(
+  "template literal interpolating a double and a boolean",
+  "console.log(`v=${1.5} b=${true}`);",
+  "v=1.5 b=true\n"
+);
+
+checkPyToJs(
+  "remainder is floored (Python % semantics)",
+  "print(-5 % 3)\nprint(5 % -3)\nprint(5 % 3)\nprint(-5.5 % 2)\n",
+  "1\n-1\n2\n0.5\n"
+);
+
+test("C++ refuses a function called with conflicting argument types", () => {
+  let out = Iroh.translate(
+    'function f(a) { return a; } console.log(f(1)); console.log(f("a"));',
+    { to: "cpp" }
+  );
+  assert.equal(out.report.ok, false);
+  assert.match(out.report.unsupported[0].message, /conflicting types/);
+  assert.match(out.report.unsupported[0].message, /cannot override trace evidence/);
+});
+
+test("C++ accepts a function called with consistent types across calls", () => {
+  let out = Iroh.translate(
+    "function f(a) { return a; } console.log(f(1)); console.log(f(2));",
+    { to: "cpp" }
+  );
+  assert.equal(out.report.ok, true);
+  assert.match(out.report.assumptions[0].what, /verified consistent across 2 calls/);
+});
+
+test("C++ refuses a function whose return type differs across calls", () => {
+  let out = Iroh.translate(
+    'function f(a) { if (a) { return 1; } return "s"; } console.log(f(true)); console.log(f(false));',
+    { to: "cpp" }
+  );
+  assert.equal(out.report.ok, false);
+  assert.match(out.report.unsupported[0].message, /differs across calls/);
+});

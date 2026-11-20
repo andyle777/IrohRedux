@@ -184,10 +184,144 @@ test("decorator: @ on a function is a parse error, not a silent drop", () => {
   );
 });
 
-test("decorator: accessor fields are not supported (parse error)", () => {
+test("decorator: undecorated accessor field reads and writes", () => {
+  let { result } = Iroh.trace(`
+    class C { accessor x = 1; }
+    let c = new C();
+    let before = c.x;
+    c.x = 5;
+    [before, c.x];
+  `);
+  assert.deepEqual(result, [1, 5]);
+});
+
+test("decorator: undecorated static accessor field reads and writes", () => {
+  let { result } = Iroh.trace(`
+    class C { static accessor y = 2; }
+    let before = C.y;
+    C.y = 9;
+    [before, C.y];
+  `);
+  assert.deepEqual(result, [2, 9]);
+});
+
+test("decorator: accessor decorator sees kind accessor and may replace get/set", () => {
+  let { result } = Iroh.trace(`
+    let seen = [];
+    function dec(v, ctx) {
+      seen.push(ctx.kind + ":" + ctx.name);
+      return { get: function() { return 100; }, set: function(v) {} };
+    }
+    class C { @dec accessor x = 1; }
+    let c = new C();
+    [c.x, seen];
+  `);
+  assert.deepEqual(result, [100, ["accessor:x"]]);
+});
+
+test("decorator: accessor decorator returning undefined keeps the value", () => {
+  let { result } = Iroh.trace(`
+    let seen = [];
+    function dec(v, ctx) { seen.push(ctx.kind); }
+    class C { @dec accessor x = 4; }
+    [new C().x, seen];
+  `);
+  assert.deepEqual(result, [4, ["accessor"]]);
+});
+
+test("decorator: accessor decorator {init} transforms the initial value", () => {
+  let { result } = Iroh.trace(`
+    function dec(v, ctx) { return { init: function(x) { return x * 10; } }; }
+    class C { @dec accessor x = 3; }
+    new C().x;
+  `);
+  assert.equal(result, 30);
+});
+
+test("decorator: accessor {init} functions run innermost first", () => {
+  let { result } = Iroh.trace(`
+    function d1(v, ctx) { return { init: function(x) { return x + 100; } }; }
+    function d2(v, ctx) { return { init: function(x) { return x * 2; } }; }
+    class C { @d1 @d2 accessor x = 3; }
+    new C().x;
+  `);
+  // d2 applies first, so its init runs first (3 * 2 = 6), then d1's (6 + 100).
+  assert.equal(result, 106);
+});
+
+test("decorator: static accessor decorator {init} applies after the class", () => {
+  let { result } = Iroh.trace(`
+    function dec(v, ctx) { return { init: function(x) { return x + 1; } }; }
+    class C { @dec static accessor y = 5; }
+    C.y;
+  `);
+  assert.equal(result, 6);
+});
+
+test("decorator: accessor context access reads and writes", () => {
+  let { result } = Iroh.trace(`
+    let acc;
+    function dec(v, ctx) { acc = ctx.access; return v; }
+    class C { @dec accessor x = 1; }
+    let c = new C();
+    let before = acc.get(c);
+    acc.set(c, 8);
+    [before, c.x, acc.has(c)];
+  `);
+  assert.deepEqual(result, [1, 8, true]);
+});
+
+test("decorator: computed accessor key evaluates exactly once", () => {
+  let { result } = Iroh.trace(`
+    let keyCalls = 0;
+    function key() { keyCalls++; return "m"; }
+    function dec(v, ctx) { return v; }
+    class C { @dec accessor [key()] = 13; }
+    let c = new C();
+    [c.m, keyCalls];
+  `);
+  assert.deepEqual(result, [13, 1]);
+});
+
+test("decorator: computed method key evaluates exactly once", () => {
+  let { result } = Iroh.trace(`
+    let keyCalls = 0;
+    function key() { keyCalls++; return "m"; }
+    function dec(fn) { return fn; }
+    class C { @dec [key()]() { return 42; } }
+    let c = new C();
+    [c.m(), keyCalls];
+  `);
+  assert.deepEqual(result, [42, 1]);
+});
+
+test("decorator: decorator expressions evaluate in definition order across static and instance", () => {
+  let { result } = Iroh.trace(`
+    let order = [];
+    function mk(name) { order.push("eval:" + name); return function(v, ctx) { order.push("apply:" + name); return v; }; }
+    class C {
+      @mk("inst") x = 1;
+      @mk("stat") static y = 2;
+    }
+    order;
+  `);
+  assert.deepEqual(result, ["eval:inst", "eval:stat", "apply:inst", "apply:stat"]);
+});
+
+test("decorator: accessor is still a plain name when no name follows it", () => {
+  let { result } = Iroh.trace(`
+    class A { accessor() { return 7; } }
+    class B { accessor = 3; }
+    class C { accessor; }
+    [new A().accessor(), new B().accessor, new C().accessor];
+  `);
+  assert.deepEqual(result, [7, 3, undefined]);
+});
+
+test("decorator: decorated private accessor is a clear error, not a silent drop", () => {
   assert.throws(
-    () => Iroh.trace("class C { accessor x = 1; }"),
-    { name: "SyntaxError" }
+    () => Iroh.trace("function dec(v) { return v; } class C { @dec accessor #p = 1; }"),
+    /private accessor/
   );
 });
 

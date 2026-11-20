@@ -450,7 +450,18 @@ export interface LiveAnalyzer {
 
 /** A directive a director returns: set a variable, skip a call, stop the run. */
 export type Directive =
-  | { type: "set"; name: string; value: unknown }
+  | {
+      type: "set";
+      name: string;
+      value: unknown;
+      /**
+       * Scope the set: a function name to set only that function's
+       * variable, null for the top level only, omitted for any scope
+       * (the 1.0.0 behaviour — the first matching assignment wins).
+       * A dotted name ("obj.prop", one level) sets a member.
+       */
+      scope?: string | null;
+    }
   | { type: "skip"; name: string; value: unknown }
   | { type: "stop"; reason?: string };
 
@@ -486,11 +497,12 @@ export interface DirectiveEntry {
   appliedAtEvent: number | null;
   /**
    * How it applied: "init" (a declaration's initial value), "assign"
-   * (a plain assignment), "loop-test" (a loop test flipped to false),
+   * (a plain assignment), "member" (a member assignment, "obj.prop"),
+   * "loop-test" (a loop test flipped to false),
    * "call" (a skipped call), "stop" (the run stopped); null when never
    * applied.
    */
-  appliedVia: "init" | "assign" | "loop-test" | "call" | "stop" | null;
+  appliedVia: "init" | "assign" | "member" | "loop-test" | "call" | "stop" | null;
   /** Why it applied this way, or why it never applied. */
   note: string | null;
 }
@@ -521,6 +533,13 @@ export interface DirectOptions extends LiveAnalyzerOptions {
   onEvent?: (line: TraceEvent) => void;
   /** Called when a directive is applied (or when a stop is issued). */
   onDirective?: (entry: DirectiveEntry) => void;
+  /**
+   * Called with the findings that just fired (the enriched live
+   * findings, with firedAt), after the director is consulted — for a
+   * caller that wants to print live findings without being the
+   * director.
+   */
+  onFinding?: (findings: DirectorFinding[]) => void;
 }
 
 /** The directed run's record: the outcome, the findings, and the full audit log. */
@@ -749,17 +768,34 @@ export interface IrohAPI {
    * at its next assignment/initialization (or flips a loop test when
    * the counter advances by ++), { type: "skip", name, value } makes
    * the next call of that name evaluate to the value without running,
-   * { type: "stop", reason } ends the run. The record is auditable:
+   * { type: "stop", reason } ends the run. A set may carry `scope`
+   * (a function name, or null for the top level) and may name a
+   * member ("obj.prop", one level). The record is auditable:
    * every directive carries whether and how it applied. A runtime
    * error throws with the events so far as error.events and the record
    * so far as error.direct; a directed stop returns normally with
    * stopped: true. Scripts only (synchronous, like trace()) — modules
-   * and top-level await are rejected with the trace() pointers, and
-   * Python/C++ traces cannot be directed. The `events` option is
-   * ignored: the director needs the full stream, so direct() always
-   * traces ALL categories.
+   * and top-level await are rejected with the direct() pointers (use
+   * directModule() / directAsync() for those), and Python/C++ traces
+   * cannot be directed. The `events` option is ignored: the director
+   * needs the full stream, so direct() always traces ALL categories.
    */
   direct(code: string, director: Director | null, options?: DirectOptions): DirectResult;
+  /**
+   * Like direct(), but asynchronous: runs `code` under trace with
+   * `director` and returns a promise of the record. Top-level await
+   * works here (direct() rejects it). Modules are rejected — use
+   * directModule() for those.
+   */
+  directAsync(code: string, director: Director | null, options?: DirectOptions): Promise<DirectResult>;
+  /**
+   * Like direct(), but for modules: runs `code` as a module under
+   * trace with `director` and returns a promise of the record.
+   * Top-level await and import/export work here. The result is the
+   * live module namespace (traceModule semantics), not the completion
+   * value. Node.js only.
+   */
+  directModule(code: string, director: Director | null, options?: DirectOptions): Promise<DirectResult>;
   /**
    * The built-in director: a runaway-loop guard. On HOT_LOOP it
    * throttles (sets the loop's counter past its limit) or, with

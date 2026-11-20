@@ -40,7 +40,10 @@
 // the `@` in the source.
 //
 // Limitations (documented, not silent):
-//   - No `accessor` fields (the plugin does not parse them).
+//   - Decorators on private accessor fields are not supported yet
+//     (a clear error, not a silent drop); public accessor fields
+//     work, including computed keys and the {get, set} / {init}
+//     decorator returns.
 //   - Class expressions with decorated elements are hoisted into a
 //     temp variable before their statement, so a static block in such
 //     a class runs at the statement boundary rather than at the exact
@@ -113,7 +116,7 @@ function applyCall(patcher, hash, decoratorExpr, valueNode, contextNode) {
 // closures created inside the class body (see the static-block
 // handling in desugarDecorators — `holder` is a temp holding those
 // closures for the private case, null for the public case).
-function accessObject(kind, isStatic, isPrivate, className, keyName, holder) {
+function accessObject(kind, isStatic, isPrivate, className, keyName, holder, keyTemp, computed) {
   function fn(params, body) {
     return magic({
       type: "FunctionExpression",
@@ -132,8 +135,8 @@ function accessObject(kind, isStatic, isPrivate, className, keyName, holder) {
     return magic({
       type: "MemberExpression",
       object: obj,
-      property: ident(prop),
-      computed: false,
+      property: computed ? ident(keyTemp) : ident(prop),
+      computed: !!computed,
     });
   }
   function privMember(obj) {
@@ -150,9 +153,11 @@ function accessObject(kind, isStatic, isPrivate, className, keyName, holder) {
     return magic({
       type: "BinaryExpression",
       operator: "in",
-      left: isPrivate
-        ? { type: "PrivateIdentifier", name: keyName.slice(1) }
-        : lit(keyName),
+      left: computed
+        ? ident(keyTemp)
+        : isPrivate
+          ? { type: "PrivateIdentifier", name: keyName.slice(1) }
+          : lit(keyName),
       right: obj,
     });
   }
@@ -186,7 +191,7 @@ function accessObject(kind, isStatic, isPrivate, className, keyName, holder) {
         arguments: isStatic ? [] : [ident("o")],
       })));
     }
-    if (kind === "field" || kind === "setter") {
+    if (kind === "field" || kind === "setter" || kind === "accessor") {
       prop("set", fn(isStatic ? ["v"] : ["o", "v"], magic({
         type: "CallExpression",
         callee: member(ident(holder), "set"),
@@ -265,15 +270,16 @@ function contextObject(patcher, opts) {
     }));
   }
   prop("kind", lit(opts.kind));
-  // Computed keys keep their (cloned) expression as the name; the
-  // original key node stays on the element and is traced once.
-  prop("name", opts.computed ? cloneNode(opts.keyNode) : lit(opts.name));
+  // Computed keys read the key temp (assigned once, in the element's
+  // key sequence during class definition) — never the key
+  // expression itself, which would re-evaluate it.
+  prop("name", opts.computed ? (opts.keyTemp ? ident(opts.keyTemp) : cloneNode(opts.keyNode)) : lit(opts.name));
   prop("static", lit(opts.isStatic));
   prop("private", lit(opts.isPrivate));
   if (opts.kind !== "class") {
     prop("access", accessObject(
       opts.kind, opts.isStatic, opts.isPrivate,
-      opts.className, opts.name, opts.holder
+      opts.className, opts.name, opts.holder, opts.keyTemp, opts.computed
     ));
   }
   prop("addInitializer", magic({
@@ -404,6 +410,12 @@ function collectDecorated(ast) {
       } else if (node.type === "MethodDefinition" || node.type === "PropertyDefinition") {
         found.elements.push({ node: node, ancestors: ancestors.slice() });
       }
+    } else if (node.__irohAccessor && (node.type === "MethodDefinition" || node.type === "PropertyDefinition")) {
+      // An undecorated accessor field has no decorators, but it
+      // still needs desugaring — left as-is it would be generated
+      // as a plain field, a silent mistranslation.
+      node.decorators = [];
+      found.elements.push({ node: node, ancestors: ancestors.slice() });
     }
     let keys = Object.keys(node);
     for (let ii = 0; ii < keys.length; ++ii) {
@@ -598,10 +610,18 @@ export function desugarDecorators(ast, patcher) {
     // Per-class temp arrays for addInitializer callbacks.
     let initsInst = temp();
     let initsStatic = temp();
+    // Only decorated instance elements can register initializers —
+    // an undecorated accessor field never calls addInitializer, so
+    // it must not force a constructor wrap on its class.
     let hasInstanceDecorators = false;
     for (let ei = 0; ei < elements.length; ++ei) {
-      if (!elements[ei].static) { hasInstanceDecorators = true; break; }
+      if (!elements[ei].static && elements[ei].decorators && elements[ei].decorators.length > 0) { hasInstanceDecorators = true; break; }
     }
+
+    // Accessor init temps (one per decorated accessor field), to
+    // initialize to the identity function before the class
+    // evaluates — see the accessor branch below.
+    let accessorInitTemps = [];
 
     // Wrap the constructor (or add one) so instance initializers
     // run at the end of construction, after field initializers.
@@ -617,10 +637,13 @@ export function desugarDecorators(ast, patcher) {
       let isStatic = !!el.static;
       let isPrivate = el.key.type === "PrivateIdentifier";
       let isMethod = el.type === "MethodDefinition";
-      // The proposal's kinds: method, getter, setter, field.
-      let kind = isMethod
-        ? (el.kind === "get" ? "getter" : el.kind === "set" ? "setter" : "method")
-        : "field";
+      // The proposal's kinds: method, getter, setter, field,
+      // accessor.
+      let kind = el.__irohAccessor
+        ? "accessor"
+        : isMethod
+          ? (el.kind === "get" ? "getter" : el.kind === "set" ? "setter" : "method")
+          : "field";
       let keyName = elementKeyName(el);
       let computed = keyName === null;
       let initsArray = isStatic ? initsStatic : initsInst;
@@ -630,6 +653,63 @@ export function desugarDecorators(ast, patcher) {
       // { ... }'?").
       if (isMethod && el.kind === "constructor") {
         throw new Error("Decorators can't be used with a constructor. Did you mean '@dec class { ... }'?");
+      }
+
+      // Computed keys and decorator expressions evaluate once,
+      // during class definition (phase 1), in definition order —
+      // before static blocks and static field initializers, which
+      // run in phase 2. They are evaluated together, as the
+      // element's key: the key becomes a sequence that assigns the
+      // key expression to a temp (computed keys) or the literal name
+      // to a temp (plain keys), then each decorator expression to a
+      // temp, and yields the key temp — so the context `name`, the
+      // method target and the field applies all read the temp, and
+      // nothing re-evaluates. Without this the key expression was
+      // cloned into the context `name` and the method target, so it
+      // ran once per clone — and instance elements' decorator
+      // expressions ran after the class definition, out of order
+      // with static fields'. The key sequence runs with the
+      // enclosing `this` and the class binding (both available in
+      // phase 1), exactly as the proposal requires. Private elements
+      // keep their old path (a private key cannot be a computed
+      // sequence): their decorator expressions still evaluate in
+      // the private static block, in phase 2.
+      let keyTemp = null;
+      if (!isPrivate && el.decorators.length > 0) {
+        keyTemp = temp();
+        let seqExprs = [];
+        if (computed) {
+          seqExprs.push(magic({
+            type: "AssignmentExpression",
+            operator: "=",
+            left: ident(keyTemp),
+            right: el.key,
+          }));
+        } else {
+          seqExprs.push(magic({
+            type: "AssignmentExpression",
+            operator: "=",
+            left: ident(keyTemp),
+            right: lit(keyName),
+          }));
+        }
+        for (let di = 0; di < el.decorators.length; ++di) {
+          let dec = el.decorators[di];
+          let decTemp = temp();
+          seqExprs.push(magic({
+            type: "AssignmentExpression",
+            operator: "=",
+            left: ident(decTemp),
+            right: dec.expression,
+          }));
+          dec.expression = ident(decTemp);
+        }
+        seqExprs.push(ident(keyTemp));
+        el.key = {
+          type: "SequenceExpression",
+          expressions: seqExprs,
+        };
+        el.computed = true;
       }
 
       // Private members need their `access` closures built inside
@@ -703,13 +783,14 @@ export function desugarDecorators(ast, patcher) {
         cls.body.body.splice(cls.body.body.indexOf(el), 0, block);
       }
 
-      let makeContext = (function(elCopy, kindCopy, isStaticCopy, isPrivateCopy, keyNameCopy, computedCopy, initsArrayCopy, holderCopy) {
+      let makeContext = (function(elCopy, kindCopy, isStaticCopy, isPrivateCopy, keyNameCopy, computedCopy, keyTempCopy, initsArrayCopy, holderCopy) {
         return function(dec) {
           return contextObject(patcher, {
             kind: kindCopy,
             name: keyNameCopy,
             computed: computedCopy,
             keyNode: elCopy.key,
+            keyTemp: keyTempCopy,
             isStatic: isStaticCopy,
             isPrivate: isPrivateCopy,
             className: classNameForCtx,
@@ -717,9 +798,344 @@ export function desugarDecorators(ast, patcher) {
             initsArray: initsArrayCopy,
           });
         };
-      })(el, kind, isStatic, isPrivate, keyName, computed, initsArray, holder);
+      })(el, kind, isStatic, isPrivate, keyName, computed, keyTemp, initsArray, holder);
+
+      if (el.__irohAccessor) {
+      // Accessor field: rewrite into a private storage field plus
+      // a getter/setter pair, and (when decorated) apply the
+      // decorators to the {get, set} pair. The storage name is
+      // derived from the element name where it is a plain
+      // identifier, else a fresh temp — it never collides with a
+      // user private field (the Iroh$$ prefix is the desugar's
+      // own namespace).
+      if (isPrivate && el.decorators.length > 0) {
+        // A private accessor's get/set cannot be reinstalled with
+        // defineProperty (a private name is not a property key),
+        // so decorated private accessors need the holder
+        // delegation pattern — not built in this pass. Loud, not
+        // silent: the program fails with a clear message rather
+        // than running with undecorated accessors.
+        throw new Error("Decorators on private accessor fields are not supported yet (public accessor fields are).");
+      }
+      let storageName = (!computed && keyName !== null && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(keyName))
+        ? "Iroh$$acc_" + keyName
+        : "Iroh$$acc_" + temp().replace(/^Iroh\$\$/, "");
+      // The getter takes the element's key (the key sequence for
+      // a decorated public element — it evaluates the key and the
+      // decorator expressions once, in phase 1, in definition
+      // order); the setter reads the key temp the sequence
+      // assigned. For an undecorated element the key is cloned
+      // (a plain name has no side effects). A key sequence is
+      // always computed (it needs brackets), even for a plain
+      // name — without them astring would emit `get (seq)()`,
+      // which is a syntax error.
+      let getterKey = el.key;
+      let setterKey;
+      let accComputed;
+      if (keyTemp !== null) {
+        setterKey = ident(keyTemp);
+        accComputed = true;
+      } else {
+        setterKey = cloneNode(el.key);
+        accComputed = computed;
+      }
+      // The init temp: the composed {init} chain (identity until
+      // a decorator returns one). Initialized in initStmts,
+      // before the class evaluates.
+      let accInitTemp = null;
+      let accInitUsed = null;
+      let rawInit = el.value ? el.value : parseExpression("undefined");
+      let storageValue = rawInit;
+      if (el.decorators.length > 0) {
+        accInitTemp = temp();
+        accInitUsed = temp();
+        accessorInitTemps.push({ init: accInitTemp, used: accInitUsed });
+        storageValue = magic({
+          type: "CallExpression",
+          callee: ident(accInitTemp),
+          arguments: [rawInit],
+        });
+      }
+      let storageField = magic({
+        type: "PropertyDefinition",
+        key: { type: "PrivateIdentifier", name: storageName },
+        value: storageValue,
+        computed: false,
+        static: isStatic,
+      });
+      function accFn(params, bodyStmt) {
+        return magic({
+          type: "FunctionExpression",
+          id: null,
+          params: params.map(function(p) { return ident(p); }),
+          body: magic({ type: "BlockStatement", body: [bodyStmt] }),
+        });
+      }
+      let getter = magic({
+        type: "MethodDefinition",
+        kind: "get",
+        key: getterKey,
+        value: accFn([], magic({
+          type: "ReturnStatement",
+          argument: magic({
+            type: "MemberExpression",
+            object: parseExpression("this"),
+            property: { type: "PrivateIdentifier", name: storageName },
+            computed: false,
+          }),
+        })),
+        computed: accComputed,
+        static: isStatic,
+      });
+      let setter = magic({
+        type: "MethodDefinition",
+        kind: "set",
+        key: setterKey,
+        value: accFn(["v"], magic({
+          type: "ExpressionStatement",
+          expression: magic({
+            type: "AssignmentExpression",
+            operator: "=",
+            left: magic({
+              type: "MemberExpression",
+              object: parseExpression("this"),
+              property: { type: "PrivateIdentifier", name: storageName },
+              computed: false,
+            }),
+            right: ident("v"),
+          }),
+        })),
+        computed: accComputed,
+        static: isStatic,
+      });
+      let elIdx = cls.body.body.indexOf(el);
+      cls.body.body.splice(elIdx, 1, storageField, getter, setter);
+      if (el.decorators.length > 0) {
+        // Apply the decorators to the {get, set} pair, one at a
+        // time (in reverse, so the outermost decorator's result
+        // is the final pair), merging get/set per decorator and
+        // composing any {init} returns into accInitTemp.
+        let targetObj;
+        if (isStatic) {
+          targetObj = ident(valueName);
+        } else {
+          targetObj = magic({
+            type: "MemberExpression",
+            object: ident(valueName),
+            property: ident("prototype"),
+            computed: false,
+          });
+        }
+        let keyArg = computed ? ident(keyTemp) : lit(keyName);
+        let descTemp = temp();
+        applyStmts.push(stmt(magic({
+          type: "AssignmentExpression",
+          operator: "=",
+          left: ident(descTemp),
+          right: magic({
+            type: "CallExpression",
+            callee: magic({
+              type: "MemberExpression",
+              object: ident("Object"),
+              property: ident("getOwnPropertyDescriptor"),
+              computed: false,
+            }),
+            arguments: [cloneNode(targetObj), cloneNode(keyArg)],
+          }),
+        })));
+        let valueTemp = temp();
+        applyStmts.push(stmt(magic({
+          type: "AssignmentExpression",
+          operator: "=",
+          left: ident(valueTemp),
+          right: magic({
+            type: "ObjectExpression",
+            properties: [
+              magic({ type: "Property", key: ident("get"), value: magic({ type: "MemberExpression", object: ident(descTemp), property: ident("get"), computed: false }), kind: "init", computed: false, shorthand: false, method: false }),
+              magic({ type: "Property", key: ident("set"), value: magic({ type: "MemberExpression", object: ident(descTemp), property: ident("set"), computed: false }), kind: "init", computed: false, shorthand: false, method: false }),
+            ],
+          }),
+        })));
+        for (let di = el.decorators.length - 1; di >= 0; --di) {
+          let dec = el.decorators[di];
+          let hash = nextHash(patcher);
+          patcher.nodes[hash] = { hash: hash, node: cloneNode(dec) };
+          let resTemp = temp();
+          applyStmts.push(stmt(magic({
+            type: "AssignmentExpression",
+            operator: "=",
+            left: ident(resTemp),
+            right: applyCall(patcher, hash, dec.expression, ident(valueTemp), makeContext(dec)),
+          })));
+          // Merge: a decorator returning undefined keeps the
+          // pair; a returned {get}/{set} replaces only the
+          // property it defines.
+          let merged = magic({
+            type: "ObjectExpression",
+            properties: [
+              magic({ type: "Property", key: ident("get"), value: magic({
+                type: "ConditionalExpression",
+                test: magic({ type: "BinaryExpression", operator: "!==", left: magic({ type: "MemberExpression", object: ident(resTemp), property: ident("get"), computed: false }), right: parseExpression("undefined") }),
+                consequent: magic({ type: "MemberExpression", object: ident(resTemp), property: ident("get"), computed: false }),
+                alternate: magic({ type: "MemberExpression", object: ident(valueTemp), property: ident("get"), computed: false }),
+              }), kind: "init", computed: false, shorthand: false, method: false }),
+              magic({ type: "Property", key: ident("set"), value: magic({
+                type: "ConditionalExpression",
+                test: magic({ type: "BinaryExpression", operator: "!==", left: magic({ type: "MemberExpression", object: ident(resTemp), property: ident("set"), computed: false }), right: parseExpression("undefined") }),
+                consequent: magic({ type: "MemberExpression", object: ident(resTemp), property: ident("set"), computed: false }),
+                alternate: magic({ type: "MemberExpression", object: ident(valueTemp), property: ident("set"), computed: false }),
+              }), kind: "init", computed: false, shorthand: false, method: false }),
+            ],
+          });
+          applyStmts.push(stmt(magic({
+            type: "AssignmentExpression",
+            operator: "=",
+            left: ident(valueTemp),
+            right: magic({
+              type: "ConditionalExpression",
+              test: magic({ type: "BinaryExpression", operator: "!==", left: ident(resTemp), right: parseExpression("undefined") }),
+              consequent: merged,
+              alternate: ident(valueTemp),
+            }),
+          })));
+          // {init}: compose it onto accInitTemp (outermost last,
+          // so the innermost decorator's init runs first — the
+          // field semantics) and mark it used.
+          let prevInit = temp();
+          let initBody = magic({
+            type: "BlockStatement",
+            body: [magic({
+              type: "ReturnStatement",
+              argument: magic({
+                type: "CallExpression",
+                callee: magic({ type: "MemberExpression", object: ident(resTemp), property: ident("init"), computed: false }),
+                arguments: [magic({
+                  type: "CallExpression",
+                  callee: ident(prevInit),
+                  arguments: [ident("v")],
+                })],
+              }),
+            })],
+          });
+          applyStmts.push(magic({
+            type: "IfStatement",
+            test: magic({
+              type: "LogicalExpression",
+              operator: "&&",
+              left: magic({
+                type: "BinaryExpression",
+                operator: "!==",
+                left: ident(resTemp),
+                right: parseExpression("undefined"),
+              }),
+              right: magic({
+                type: "BinaryExpression",
+                operator: "===",
+                left: magic({
+                  type: "UnaryExpression",
+                  operator: "typeof",
+                  prefix: true,
+                  argument: magic({ type: "MemberExpression", object: ident(resTemp), property: ident("init"), computed: false }),
+                }),
+                right: lit("function"),
+              }),
+            }),
+            consequent: magic({
+              type: "BlockStatement",
+              body: [
+                stmt(magic({
+                  type: "AssignmentExpression",
+                  operator: "=",
+                  left: ident(prevInit),
+                  right: ident(accInitTemp),
+                })),
+                stmt(magic({
+                  type: "AssignmentExpression",
+                  operator: "=",
+                  left: ident(accInitTemp),
+                  right: magic({
+                    type: "FunctionExpression",
+                    id: null,
+                    params: [ident("v")],
+                    body: initBody,
+                  }),
+                })),
+                stmt(magic({
+                  type: "AssignmentExpression",
+                  operator: "=",
+                  left: ident(accInitUsed),
+                  right: lit(true),
+                })),
+              ],
+            }),
+            alternate: null,
+          }));
+        }
+        // Install the (possibly replaced) pair.
+        applyStmts.push(stmt(magic({
+          type: "CallExpression",
+          callee: magic({
+            type: "MemberExpression",
+            object: ident("Object"),
+            property: ident("defineProperty"),
+            computed: false,
+          }),
+          arguments: [
+            cloneNode(targetObj),
+            cloneNode(keyArg),
+            magic({
+              type: "ObjectExpression",
+              properties: [
+                magic({ type: "Property", key: ident("get"), value: magic({ type: "MemberExpression", object: ident(valueTemp), property: ident("get"), computed: false }), kind: "init", computed: false, shorthand: false, method: false }),
+                magic({ type: "Property", key: ident("set"), value: magic({ type: "MemberExpression", object: ident(valueTemp), property: ident("set"), computed: false }), kind: "init", computed: false, shorthand: false, method: false }),
+                magic({ type: "Property", key: ident("configurable"), value: lit(true), kind: "init", computed: false, shorthand: false, method: false }),
+                magic({ type: "Property", key: ident("enumerable"), value: lit(false), kind: "init", computed: false, shorthand: false, method: false }),
+              ],
+            }),
+          ],
+        })));
+        if (isStatic) {
+          // A static storage field initializes during class
+          // definition, before the applies compose accInitTemp —
+          // so if a decorator returned {init}, re-apply the
+          // transform through the (now decorated) accessors.
+          let readMember = magic({
+            type: "MemberExpression",
+            object: cloneNode(targetObj),
+            property: computed ? ident(keyTemp) : ident(keyName),
+            computed: computed,
+          });
+          applyStmts.push(magic({
+            type: "IfStatement",
+            test: ident(accInitUsed),
+            consequent: magic({
+              type: "BlockStatement",
+              body: [stmt(magic({
+                type: "AssignmentExpression",
+                operator: "=",
+                left: cloneNode(readMember),
+                right: magic({
+                  type: "CallExpression",
+                  callee: ident(accInitTemp),
+                  arguments: [cloneNode(readMember)],
+                }),
+              }))],
+            }),
+            alternate: null,
+          }));
+        }
+        }
+        continue;
+      }
 
       if (isMethod) {
+        // The method target / descriptor key. For a computed key
+        // that was rewritten to a sequence, read the temp — cloning
+        // the sequence would re-evaluate the key and the decorator
+        // expressions. For a plain key, the literal name.
+        let targetKey = computed
+          ? (keyTemp !== null ? ident(keyTemp) : cloneNode(el.key))
+          : ident(keyName);
         // target: C.prototype.m / C.m / tmp.prototype.m / tmp.m
         let targetObj;
         if (isStatic) {
@@ -735,7 +1151,7 @@ export function desugarDecorators(ast, patcher) {
         let target = magic({
           type: "MemberExpression",
           object: targetObj,
-          property: computed ? cloneNode(el.key) : ident(keyName),
+          property: targetKey,
           computed: computed,
         });
         let valueNode = target;
@@ -756,7 +1172,7 @@ export function desugarDecorators(ast, patcher) {
                 property: ident("getOwnPropertyDescriptor"),
                 computed: false,
               }),
-              arguments: [cloneNode(targetObj), computed ? cloneNode(el.key) : lit(keyName)],
+              arguments: [cloneNode(targetObj), computed ? cloneNode(targetKey) : lit(keyName)],
             }),
             property: ident(descProp),
             computed: false,
@@ -781,7 +1197,7 @@ export function desugarDecorators(ast, patcher) {
             }),
             arguments: [
               targetObj,
-              computed ? cloneNode(el.key) : lit(keyName),
+              computed ? cloneNode(targetKey) : lit(keyName),
               magic({
                 type: "ObjectExpression",
                 properties: [
@@ -828,10 +1244,47 @@ export function desugarDecorators(ast, patcher) {
           });
           el.value = seq;
         } else {
+          // Instance field: the applies run in a static block
+          // spliced before the element, so they happen during
+          // class definition (phase 2), in definition order
+          // interleaved with static field initializers — not after
+          // the class, where a static field's decorators would
+          // have run first regardless of definition order. The
+          // initializer temps are assigned in the block and read
+          // by the field's value at construction time.
           el.value = value;
-          applyStmts.push(inits.assignStmt);
+          cls.body.body.splice(cls.body.body.indexOf(el), 0, magic({
+            type: "StaticBlock",
+            body: [inits.assignStmt],
+          }));
         }
       }
+    }
+
+    // Class decorator expressions evaluate during class definition,
+    // after the elements' decorators — hoist them into temps in a
+    // trailing static block, so the applies (after the class) read
+    // the temps instead of evaluating the expressions there. One
+    // caveat: a class decorator expression that reads `this` sees
+    // the class inside a static block, where the proposal gives it
+    // the enclosing `this`.
+    if (cls.decorators && cls.decorators.length > 0) {
+      let classDecStmts = [];
+      for (let di = 0; di < cls.decorators.length; ++di) {
+        let dec = cls.decorators[di];
+        let decTemp = temp();
+        classDecStmts.push(stmt(magic({
+          type: "AssignmentExpression",
+          operator: "=",
+          left: ident(decTemp),
+          right: dec.expression,
+        })));
+        dec.expression = ident(decTemp);
+      }
+      cls.body.body.push(magic({
+        type: "StaticBlock",
+        body: classDecStmts,
+      }));
     }
 
     // Class decorators apply last, after all element applies.
@@ -914,6 +1367,35 @@ export function desugarDecorators(ast, patcher) {
         right: magic({ type: "ArrayExpression", elements: [] }),
       })),
     ];
+    // Accessor {init} temps start as the identity function (and
+    // their "used" flags as false), before the class evaluates: a
+    // static accessor's storage field calls the temp during class
+    // definition, so it must already be a function by then.
+    for (let ai = 0; ai < accessorInitTemps.length; ++ai) {
+      initStmts.push(stmt(magic({
+        type: "AssignmentExpression",
+        operator: "=",
+        left: ident(accessorInitTemps[ai].init),
+        right: magic({
+          type: "FunctionExpression",
+          id: null,
+          params: [ident("v")],
+          body: magic({
+            type: "BlockStatement",
+            body: [magic({
+              type: "ReturnStatement",
+              argument: ident("v"),
+            })],
+          }),
+        }),
+      })));
+      initStmts.push(stmt(magic({
+        type: "AssignmentExpression",
+        operator: "=",
+        left: ident(accessorInitTemps[ai].used),
+        right: lit(false),
+      })));
+    }
 
     // Run static addInitializer callbacks after the class is
     // defined (element applies included). Static initializers run
@@ -1226,7 +1708,7 @@ function buildPrivateBlock(patcher, el, kind, isStatic, keyName, holder, fnTemp,
     if (kind !== "setter") {
       accProp("get", accFn([], privMember(ident(clsTmp))));
     }
-    if (kind === "field" || kind === "setter") {
+    if (kind === "field" || kind === "setter" || kind === "accessor") {
       accProp("set", accFn(["v"], magic({
         type: "AssignmentExpression",
         operator: "=",
@@ -1244,7 +1726,7 @@ function buildPrivateBlock(patcher, el, kind, isStatic, keyName, holder, fnTemp,
     if (kind !== "setter") {
       accProp("get", accFn(["o"], privMember(ident("o"))));
     }
-    if (kind === "field" || kind === "setter") {
+    if (kind === "field" || kind === "setter" || kind === "accessor") {
       accProp("set", accFn(["o", "v"], magic({
         type: "AssignmentExpression",
         operator: "=",

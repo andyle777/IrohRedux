@@ -2,12 +2,12 @@
 
 <p align="center">
   <a href="https://github.com/andyle777/IrohRedux/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/version-1.0.0-orange.svg?style=flat-square" alt="Version 1.0.0" />
+  <img src="https://img.shields.io/badge/version-1.0.1-orange.svg?style=flat-square" alt="Version 1.0.1" />
   <img src="https://img.shields.io/badge/node-%3E%3D%2018-339933.svg?style=flat-square" alt="Node >= 18" />
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-295%20passing-brightgreen.svg?style=flat-square" alt="295 tests passing" />
+  <img src="https://img.shields.io/badge/tests-348%20passing-brightgreen.svg?style=flat-square" alt="348 tests passing" />
 </p>
 
 <p align="center">
@@ -95,15 +95,23 @@ const out = Iroh.direct(code, (ctx) => {
 });
 // Directives: { type: "set", name, value } writes a variable at its next
 // assignment (or flips a loop test when the counter advances by ++);
+// a set may carry scope (a function name, or null for the top level)
+// and may name a member ("obj.prop", one level);
 // { type: "skip", name, value } makes the next call of that name evaluate
 // to the value without running; { type: "stop", reason } ends the run.
+// Async programs and modules have their own entries: directAsync()
+// (top-level await works there) and directModule() (Node.js only).
 ```
 
 From the CLI: `node cli/iroh.js program.js --direct` runs the script under
 the guard (throttle by default, `--direct=stop` stops instead), streaming
 `{"type":"directive",...}` lines as the guard acts and closing with a
 `{"type":"direct-summary",...}` — findings, the full directive audit log,
-and the analysis. Direct mode is JavaScript scripts only.
+and the analysis. Direct mode is JavaScript only, but modules and
+top-level await work: `--direct` on a `.mjs` file or a script with
+top-level await directs it (via directModule() / directAsync()).
+`--direct` combines with `--analyze`, `--scan`, and `--live`; the
+analysis and scan lines follow the direct-summary.
 
 ### One engine, three languages
 
@@ -303,11 +311,13 @@ names resolved by `dladdr` + `__cxa_demangle` with a `.symtab` fallback
 for local symbols (lambdas, `static` and anonymous-namespace
 functions), unresolved names carried as `null` with the raw address,
 never a faked name. Honest limits:
-Python sees no per-assignment events (every assignment is a blind spot),
-only the target file is traced, comprehensions/`async for`/lambdas are
-not loop/branch instrumented; C++ sees no loop/branch/line events at
-all, one `.cpp` file, `-O0` (inlined functions get no hooks). The full
-list is in the CHANGELOG.
+Python per-assignment events fire for simple Name targets only
+(tuple targets, attributes and subscripts are blind spots, and the
+event carries the post-assignment value, unlike JS compound
+assignments, which carry the RHS), only the target file is traced,
+comprehensions/`async for`/lambdas are not loop/branch instrumented;
+C++ sees no loop/branch/line events at all, one `.cpp` file, `-O0`
+(inlined functions get no hooks). The full list is in the CHANGELOG.
 
 And the scan mode, for AI consumers: one command, one compact document,
 no event flood:
@@ -398,7 +408,7 @@ buffer their events; for JavaScript they stream as the program runs.
   run — with a full audit log of what fired, what was directed, and what
   changed. The built-in runaway-loop guard throttles a hot loop (or stops
   it); `node cli/iroh.js program.js --direct` runs any script under it.
-- **No surprises.** 295 tests (261 Node + 25 Python + 9 C++), `npm test` runs
+- **No surprises.** 348 tests (314 Node + 25 Python + 9 C++), `npm test` runs
   them all, plus a TypeScript type test (`npm run test:types`). Zero runtime
   dependencies in the engine beyond Acorn, astring, and acorn-walk.
 
@@ -415,7 +425,7 @@ git clone https://github.com/andyle777/IrohRedux.git
 cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
-npm test            # 295 tests: 261 Node + 25 Python + 9 C++
+npm test            # 348 tests: 314 Node + 25 Python + 9 C++
 ```
 
 The Python client installs with `pip install -e python/`; the C++ client is
@@ -425,7 +435,7 @@ a single header — just `#include "iroh.hpp"`.
 
 - [Getting started](//github.com/andyle777/IrohRedux/blob/master/GETTING_STARTED.md) — worked examples you can run locally.
 - [API](//github.com/andyle777/IrohRedux/blob/master/API.md) — the full listener and event reference, including `Iroh.assert` / `Iroh.log` and the `INSTR` / `CATEGORY` / `OP` label tables.
-- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, 0.7.0, 0.8.0, 0.9.0, and 1.0.0.
+- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, 0.7.0, 0.8.0, 0.9.0, 1.0.0, and 1.0.1.
 
 ---
 
@@ -434,5 +444,8 @@ a single header — just `#include "iroh.hpp"`.
 0.5.0 CLI and polyglot clients, the 0.5.1 polish, the 0.6.0 syntax and
 modern SDK, and the 0.7.0 modules, top-level await, and decorators, and
 the 0.8.0 analysis layer and translation engine, the 0.9.0 native
-Python/C++ tracers, vector refracting, scan mode, and live wire, and the
-1.0.0 AI director and live code engine are the fork's.*
+Python/C++ tracers, vector refracting, scan mode, and live wire, the
+1.0.0 AI director and live code engine, and the 1.0.1 all-generations
+audit-and-patch pass (translator number formatting, director member and
+scoped sets, directAsync/directModule, decorated computed keys and
+accessor fields, Python per-assignment events) are the fork's.*

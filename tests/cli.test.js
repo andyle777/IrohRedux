@@ -112,3 +112,66 @@ test("CLI --no-result omits the result line", () => {
   assert.equal(proc.status, 0);
   assert.equal(lines.find((l) => l.type === "result"), undefined);
 });
+
+test("CLI rejects conflicting modes before reading the file (exit 2)", () => {
+  // --direct + --translate on a missing file: the mode error (exit 2)
+  // must win over the file-read error (exit 1).
+  let proc = spawnSync(process.execPath, [CLI, "/definitely/missing.js", "--direct", "--translate", "python"], { encoding: "utf8" });
+  assert.equal(proc.status, 2);
+  assert.match(proc.stderr, /--translate/);
+  let live = runCli("1;", ["--translate", "python", "--live"]);
+  assert.equal(live.proc.status, 2);
+  assert.match(live.proc.stderr, /--translate/);
+  let events = runCli("1;", ["--direct", "--events", "CALL"]);
+  assert.equal(events.proc.status, 2);
+  assert.match(events.proc.stderr, /--events/);
+  let include = runCli("1;", ["--include-events", "CALL"]);
+  assert.equal(include.proc.status, 2);
+  assert.match(include.proc.stderr, /--include-events/);
+});
+
+test("CLI --direct honours --analyze, --scan and --live together", () => {
+  let { proc, lines } = runCli(
+    "let i = 0; let total = 0; while (i < 10000) { total += i; i++; } total;",
+    ["--direct", "--analyze", "--scan", "--live"]
+  );
+  assert.equal(proc.status, 0);
+  assert.ok(lines.find((l) => l.type === "directive"), "a directive line streamed");
+  assert.ok(lines.find((l) => l.type === "live-finding"), "a live-finding line streamed");
+  assert.ok(lines.find((l) => l.type === "direct-summary"), "a direct-summary line closed the run");
+  assert.ok(lines.find((l) => l.type === "analysis"), "an analysis line followed");
+  assert.ok(lines.find((l) => l.type === "scan"), "a scan line followed");
+  let summary = lines.find((l) => l.type === "direct-summary");
+  assert.equal(summary.directives.length, 1);
+});
+
+test("CLI --direct runs top-level await from stdin", () => {
+  let { proc, lines } = runCli(
+    "await Promise.resolve(1); let i = 0; let total = 0; while (i < 10000) { total += i; i++; } total;",
+    ["--direct"]
+  );
+  assert.equal(proc.status, 0);
+  let summary = lines.find((l) => l.type === "direct-summary");
+  assert.ok(summary, "a direct-summary line closed the run");
+  assert.equal(summary.directives.length, 1);
+  let result = lines.find((l) => l.type === "result");
+  assert.equal(result.value, 4950);
+});
+
+test("CLI --direct runs a .mjs module file", () => {
+  let fs = require("node:fs");
+  let os = require("node:os");
+  let tmp = path.join(os.tmpdir(), "iroh-cli-direct-" + Date.now() + ".mjs");
+  fs.writeFileSync(tmp, "let i = 0; let total = 0; while (i < 10000) { total += i; i++; } total;");
+  try {
+    let proc = spawnSync(process.execPath, [CLI, tmp, "--direct"], { encoding: "utf8" });
+    assert.equal(proc.status, 0);
+    let lines = proc.stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    let summary = lines.find((l) => l.type === "direct-summary");
+    assert.ok(summary, "a direct-summary line closed the module run");
+    assert.equal(summary.directives.length, 1);
+    assert.equal(summary.directives[0].appliedVia, "loop-test");
+  } finally {
+    fs.unlinkSync(tmp);
+  }
+});
