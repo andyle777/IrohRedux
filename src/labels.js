@@ -119,7 +119,7 @@ export let CATEGORY = {};
 })();
 
 (() => {
-  let ii = 0;  
+  let ii = 0;
   OP["="] = ii++;
   OP["+"] = ii++;
   OP["-"] = ii++;
@@ -155,3 +155,35 @@ export let CATEGORY = {};
   OP["--"] = ii++;
 
 })();
+
+// Reachable categories per tracer (1.1.1, F4): the categories each
+// tracer CAN emit, read from the tracer's own emit sites — not from
+// one program's run, which might not exercise them all. A C++ trace
+// firing 2 categories is complete for its tracer (2 of 2 reachable),
+// not 28 short (2 of 30). The sets are:
+//   javascript: the Stage emits all 30 (the full engine).
+//   python: python/iroh/trace.py _emit sites — ASSIGN, CATCH, CALL,
+//     FUNCTION, IF, LOOP.
+//   cpp: cpp/iroh_trace_rt.cpp emit sites — CALL, FUNCTION only
+//     (function-level by design; no loop/branch instrumentation).
+//   irohscript: irohscript/src/tracer.py sink.emit sites — ASSIGN,
+//     CALL, FUNCTION, IF.
+//   basic: irohscript/src/basic_trace.py sink.emit sites — ASSIGN,
+//     CALL, FUNCTION, IF, LOOP.
+// A language not listed here (or an unknown one) falls back to all
+// 30, which is the JavaScript default — and that fallback is the
+// reason a consumer must never treat a missing `reachable` field as
+// `total`: it would read a non-JS trace as if it were JS.
+export const REACHABLE_CATEGORIES = {
+  javascript: null, // null = all categories (the full engine)
+  python: ["ASSIGN", "CATCH", "CALL", "FUNCTION", "IF", "LOOP"],
+  cpp: ["CALL", "FUNCTION"],
+  irohscript: ["ASSIGN", "CALL", "FUNCTION", "IF"],
+  basic: ["ASSIGN", "CALL", "FUNCTION", "IF", "LOOP"],
+};
+
+export function reachableCategories(language) {
+  let list = REACHABLE_CATEGORIES[language];
+  if (list === void 0 || list === null) return Object.keys(CATEGORY);
+  return list.slice();
+}
