@@ -177,7 +177,7 @@ their events. Options are the `analyze()` thresholds plus `source`
 (for the final scorecard) and `language` (default `\"javascript\"`).
 
 ``direct(code, director, options)``: AI director + live code engine
-(1.0.0) — run `code` under trace with `director` (a function, or
+(1.0.1) — run `code` under trace with `director` (a function, or
 `null` for an undirected run) and change it mid-flight. The director
 is called once before the run (`findings: []`, `event: null`), then
 whenever new live findings fire, with `{ findings, allFindings,
@@ -227,7 +227,7 @@ for modules — `import`/`export` and top-level await work here, and the
 result is the live module namespace (traceModule semantics). Returns a
 promise of the same record. Node.js only.
 
-``runawayGuard(options)``: The built-in director (1.0.0) — a factory
+``runawayGuard(options)``: The built-in director (1.0.1) — a factory
 returning a director function, so one guard instance directs one run.
 On `HOT_LOOP` it throttles by default: it sets the loop's counter to
 the value that makes its test false (`i < 10000` → set `i` to `10000`;
