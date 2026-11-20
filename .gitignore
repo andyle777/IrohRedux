@@ -102,3 +102,6 @@ ai-bundle/
 # Standalone Python builds for the translate execution-matrix gate
 # (indygreg python-build-standalone install_only tarballs; NOT checked in)
 .pythons/
+
+# Test suite output
+test-results/

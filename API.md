@@ -776,7 +776,7 @@ every flag in `iroh --help` appears in it.
   with the `language` field always set.
 - Event line:
   `{"type":"event","event":"FUNCTION_CALL","category":"CALL",
-  "trigger":"before","hash":11,"indent":1,"name":"factorial",
+  "trigger":"before","language":"javascript","hash":11,"indent":1,"name":"factorial",
   "arguments":[3],"external":false}`, followed by a result line
   `{"type":"result","value":6}` or an error line
   `{"type":"error","name":...,"message":...}`.

@@ -65,19 +65,18 @@ the finding list is a prefix, not the whole set — say so when you
 report it. Any score derived from the list is a score over a
 prefix. The dropped findings are counted, never hidden.
 
-## Translate report: no verify block
+## Translate verification
 
-Every `translate()` result carries `report` with `{ok, from, to,
-staticOnly, clean, assumptions, unsupported, notes}` — and nothing
-else. There is NO `verify` block in 1.0.1. `ok: true` means "text
-was produced", not "the text runs". Template literals to Python
-emit f-strings: `` `a=${x}` `` becomes `f"a={x}"`, and an
-interpolation containing a quote (a bool, a string literal, a
-ternary of strings) emits a line Python 3.9–3.11 cannot parse
-while the report says ok. That defect is present in this
-generation and is NOT fixed by this patch (the engine fix lives
-in the 1.1.1 patch). Run the emitted file on the target
-interpreter before trusting it.
+This patched 1.0.1 tree adds `report.verify`:
+`{attempted, ran, interpreter, exit}`, with `stderr` when execution
+fails or `reason` when it is not attempted. Only Python output is
+executed, under `python3` with a 10-second limit. `ran: null` means
+not attempted; `report.ok` alone is not proof that generated code ran.
+
+Template literals translated to Python use concatenation rather than
+f-strings, so quoted or boolean interpolation no longer creates the
+known Python 3.9–3.11 parse error. The verification block still reports
+the actual execution outcome and interpreter.
 
 ## What this file does not cover
 

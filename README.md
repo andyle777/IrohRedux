@@ -81,8 +81,8 @@ node cli/iroh.js program.js --events CALL,IF
 ```
 
 ```json
-{"type":"event","event":"FUNCTION_CALL","category":"CALL","trigger":"before","hash":11,"indent":1,"name":"factorial","arguments":[3],"external":false}
-{"type":"event","event":"FUNCTION_CALL_END","category":"CALL","trigger":"after","hash":11,"indent":1,"name":"factorial","return":6,"arguments":[3],"external":false}
+{"type":"event","event":"FUNCTION_CALL","category":"CALL","trigger":"before","language":"javascript","hash":11,"indent":1,"name":"factorial","arguments":[3],"external":false}
+{"type":"event","event":"FUNCTION_CALL_END","category":"CALL","trigger":"after","language":"javascript","hash":11,"indent":1,"name":"factorial","return":6,"arguments":[3],"external":false}
 {"type":"result","value":6}
 ```
 
@@ -224,6 +224,14 @@ rebuild (same version, this tree). The machine-readable form is
 - [Memory model](docs/memory.md) — the trace memory/state model
   for AI consumers.
 - [Generations registry](generations.json) — the table above, as JSON.
+- [JSON Schemas](schemas/) — CLI event, scan, translation, and error
+  contracts for AI clients.
+
+Build the local AI bundle with `npm run build:ai-bundle -- ./ai-bundle`.
+It contains the current release documentation, schemas, engine-generated
+JSON samples, the Python client, and per-file SHA-256 hashes. The CLI
+works offline and does not call an AI model; any client can consume the
+same JSON contracts.
 
 ---
 
@@ -301,7 +309,7 @@ change. Event streams are JSON lines, one object per line, with the
 
 - Event line:
   `{"type":"event","event":"FUNCTION_CALL","category":"CALL",
-  "trigger":"before","hash":11,"indent":1,"name":"factorial",
+  "trigger":"before","language":"javascript","hash":11,"indent":1,"name":"factorial",
   "arguments":[3],"external":false}`
   followed by a result line `{"type":"result","value":6}` or an
   error line `{"type":"error","name":...,"message":...}`.

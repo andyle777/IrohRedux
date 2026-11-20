@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/andyle777/IrohRedux/blob/1.0.1-patch/schemas/event.schema.json",
+  "title": "IrohRedux 1.0.1 CLI event line",
+  "type": "object",
+  "required": ["type", "event", "category", "trigger", "language"],
+  "properties": {
+    "type": { "const": "event" },
+    "event": { "type": "string" },
+    "category": { "type": "string" },
+    "trigger": { "type": "string" },
+    "language": { "enum": ["javascript", "python", "cpp"] },
+    "hash": { "type": "integer" },
+    "indent": { "type": "integer" },
+    "name": { "type": "string" },
+    "arguments": { "type": "array" },
+    "external": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

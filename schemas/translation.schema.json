@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/andyle777/IrohRedux/blob/1.0.1-patch/schemas/translation.schema.json",
+  "title": "IrohRedux 1.0.1 patched translation result",
+  "description": "The patched 1.0.1 report includes verification metadata; ran:null means translation was not executed.",
+  "type": "object",
+  "required": ["type", "from", "to", "code", "report"],
+  "properties": {
+    "type": { "const": "translation" },
+    "from": { "enum": ["javascript", "python", "cpp"] },
+    "to": { "enum": ["javascript", "python", "cpp"] },
+    "code": { "type": "string" },
+    "report": {
+      "type": "object",
+      "required": ["ok", "from", "to", "staticOnly", "clean", "assumptions", "unsupported", "notes", "verify"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "staticOnly": { "type": "boolean" },
+        "clean": { "type": "array" },
+        "assumptions": { "type": "array" },
+        "unsupported": { "type": "array" },
+        "notes": { "type": "array" },
+        "verify": {
+          "type": "object",
+          "required": ["attempted", "ran"],
+          "properties": {
+            "attempted": { "type": "boolean" },
+            "ran": { "type": ["boolean", "null"] },
+            "interpreter": { "type": "string" },
+            "exit": { "type": ["integer", "null"] },
+            "stderr": { "type": "string" },
+            "reason": { "type": "string" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
