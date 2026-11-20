@@ -432,6 +432,104 @@ checkBothWays(
   "v=1.5 b=true\n"
 );
 
+// --- D1: a bool in a template literal must not emit an f-string that
+// only parses on Python 3.12+ ---------------------------------------
+// The old emitter wrote print(f"b={("true" if b else "false")}"),
+// nesting the f-string's own delimiter inside a replacement field.
+// That is legal only on Python 3.12+ (PEP 701); on 3.9-3.11 it is
+// SyntaxError, and the report still said ok with zero unsupported
+// entries — a clean-looking scan hiding a dead artifact. The fix
+// routes the bool through a __iroh_jsbool(v) helper, so the field
+// holds a call, not a quote. The value tests below run on this box
+// (Python 3.12), which accepts the old code too, so they do not by
+// themselves prove the 3.9 claim. The compat test is the one that
+// enforces it — and it is a textual scan, not ast.parse: on Python
+// 3.12.3, ast.parse(src, feature_version=(3, 9)) ACCEPTS the old
+// buggy output (the 3.12 tokenizer is PEP 701-aware whatever
+// feature_version says), so that check would pass the broken build.
+// The scan below enforces the actual 3.9-3.11 rule instead: no "
+// inside any {...} replacement field of an f"..." string.
+function assertFStringFieldsHaveNoDoubleQuotes(code) {
+  let i = 0;
+  while (i < code.length) {
+    let isFString = code[i] === "f" && code[i + 1] === '"' &&
+      !(i > 0 && /[A-Za-z0-9_]/.test(code[i - 1]));
+    if (!isFString) { i++; continue; }
+    let j = i + 2;
+    let inField = false;
+    let depth = 0;
+    while (j < code.length) {
+      let c = code[j];
+      if (!inField) {
+        if (c === "\\") { j += 2; continue; }
+        if (c === '"') break; // end of the f-string
+        if (c === "{" && code[j + 1] === "{") { j += 2; continue; }
+        if (c === "}" && code[j + 1] === "}") { j += 2; continue; }
+        if (c === "{") { inField = true; depth = 0; j++; continue; }
+        j++;
+      } else {
+        // Inside a {...} field: any " is illegal before Python 3.12.
+        assert.notEqual(c, '"',
+          "double quote inside an f-string replacement field — breaks Python < 3.12 (PEP 701): " +
+          JSON.stringify(code.slice(i, j + 1)));
+        if (c === "(" || c === "[" || c === "{") depth++;
+        if (c === ")" || c === "]") depth--;
+        if (c === "}") {
+          if (depth === 0) { inField = false; j++; continue; }
+          depth--;
+        }
+        j++;
+      }
+    }
+    i = j;
+  }
+}
+
+test("D1: template literal bool runs and prints true/false (value)", { skip: !HAS_PYTHON }, () => {
+  for (let [js, expected] of [
+    ["const b = true; console.log(`b=${b}`);", "b=true\n"],
+    ["const b = false; console.log(`b=${b}`);", "b=false\n"],
+    ["console.log(`v=${1.5} b=${true}`);", "v=1.5 b=true\n"],
+  ]) {
+    let out = Iroh.translate(js, { to: "python" });
+    assert.equal(out.report.ok, true, "report: " + JSON.stringify(out.report.unsupported));
+    let run = runPython(out.code);
+    assert.equal(run.status, 0, "python failed: " + run.stderr + "\ncode:\n" + out.code);
+    assert.equal(run.stdout, expected);
+  }
+});
+
+test("D1: template literal bool emits no double quote inside an f-string field (3.9 compat)", () => {
+  for (let js of [
+    "const b = true; console.log(`b=${b}`);",
+    "const b = false; console.log(`b=${b}`);",
+    "console.log(`v=${1.5} b=${true}`);",
+  ]) {
+    let out = Iroh.translate(js, { to: "python" });
+    assert.equal(out.report.ok, true, "report: " + JSON.stringify(out.report.unsupported));
+    assert.match(out.code, /__iroh_jsbool\(/);
+    assertFStringFieldsHaveNoDoubleQuotes(out.code);
+  }
+});
+
+test("D1: bool string concat and String(bool) stay 3.9-safe (no f-string quotes)", { skip: !HAS_PYTHON }, () => {
+  for (let [js, expected] of [
+    ['let b = true; console.log("x=" + b);', "x=true\n"],
+    ["console.log(String(true));", "true\n"],
+    ["console.log(String(false));", "false\n"],
+  ]) {
+    let out = Iroh.translate(js, { to: "python" });
+    assert.equal(out.report.ok, true, "report: " + JSON.stringify(out.report.unsupported));
+    // These emit a standalone ternary, not an f-string field, so they
+    // are legal on 3.9+ as written — but the scan still applies, in
+    // case a future change nests one inside an f-string.
+    assertFStringFieldsHaveNoDoubleQuotes(out.code);
+    let run = runPython(out.code);
+    assert.equal(run.status, 0, "python failed: " + run.stderr + "\ncode:\n" + out.code);
+    assert.equal(run.stdout, expected);
+  }
+});
+
 checkPyToJs(
   "remainder is floored (Python % semantics)",
   "print(-5 % 3)\nprint(5 % -3)\nprint(5 % 3)\nprint(-5.5 % 2)\n",
