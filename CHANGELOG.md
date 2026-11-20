@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+- 1.0.1 patch (in place, same version, no 1.1.2, no version bump):
+  APK shell Fix B: Node ships as `lib/arm64-v8a/libnode.so`
+  (bundled Node v26.13.1), `extractNativeLibs=true`, targetSdk 34,
+  no copy, no chmod, no `assets/node` duplicate; versionCode 102.
+  The 1.0.1 APK has no server: the MainActivity is serve-free
+  (`iroh serve` does not exist in this generation) and the lib/
+  staging is skipped — the 1.0.1 tree has no lib/. `iroh --version`
+  prints version, dist hash, and the runtime actually embedded.
+  All four desktop EXEs rebuilt from the 1.0.1 engine (pkg 5.8.1,
+  node18 targets — the embedded runtime is Node v18.5.0, which
+  agrees with engines.node >= 18). README, GETTING_STARTED.md,
+  and API.md rewritten for two audiences (FOR HUMANS / FOR AI);
+  `docs/memory.md` is new (trace memory/state model — no
+  Stage.release in 1.0.1: measured ~44 MB residual heap after 200
+  traces of the 150-loop program, drop + GC); `generations.json`
+  is new (`iroh.generations.v1`). The AI bundle is regenerated
+  from the 1.0.1 engine (see `scripts/build-ai-bundle.mjs`) with
+  a per-file hash manifest; py/ is the tracer client only.
+  Works offline — no network required. Engine fix (this patch):
+  template literals to Python now emit concatenation, not
+  f-strings (Fix Spec 3.5 Option 1 — `__iroh_jsbool` /
+  `__iroh_jsnum` helpers, `str()` for int and unknown types,
+  arrays unsupported-loud), and every translate result carries
+  a `verify` block (3.7 — the emitted Python is executed under
+  python3 and the result recorded; ran:null is not ran:true).
+  Gates first: the f-string property check + execution matrix
+  (3.9/3.10/3.11/3.12) failed on the old dist (20 FAIL lines)
+  and pass on the fixed dist (6 cases x 4 interpreters). The
+  old defect, for the record: `b = True` emitted
+  `print(f"b={("true" if b else "false")}")` with
+  `report.ok: true` — a SyntaxError on Python 3.9–3.11.
+  Not verified: no phone install, no Windows/macOS run — the APK
+  is verified structurally (badging, signatures, alignment,
+  contents) and the Linux EXE by execution (150-loop → HOT_LOOP
+  hot 0.0259).
+
 ## 1.0.1 — All-generations audit-and-patch pass (20 Nov 2026)
 
 Every known limitation from 0.4.0 through 1.0.0, re-read and re-probed.
