@@ -238,7 +238,7 @@ saying so: `ZERO_ITERATION_LOOP` and `ONE_SIDED_BRANCH`. For Python
 and C++ the live lines print after the run, because the native tracers
 buffer their events; for JavaScript they stream as the program runs.
 
-## Direct the run (1.0.0)
+## Direct the run (1.0.1)
 
 Watching is half the story. The director acts on what the live wire
 finds — while the program is still running:
