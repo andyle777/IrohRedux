@@ -113,6 +113,11 @@ function createTraceRun(iroh, code, options) {
   }
   let events = [];
   let onEvent = options.onEvent;
+  // Raw-event hook for the director engine (src/direct.js): the raw
+  // event object, its trigger, and the JSON line — called synchronously
+  // inside the DEBUG call, after the line is recorded, so mutating the
+  // raw event changes the running program.
+  let rawOnEvent = options.rawOnEvent;
   // Indexed loops, not for...of: the browser bundle is transpiled by
   // buble, which cannot compile for...of.
   for (let ii = 0; ii < names.length; ++ii) {
@@ -122,6 +127,12 @@ function createTraceRun(iroh, code, options) {
       listener.on(trigger, (event) => {
         let line = iroh.eventToJSON(event, trigger);
         events.push(line);
+        // The raw hook runs before onEvent: a director mutates the raw
+        // event (and, through applyEntry, the line) so downstream
+        // consumers — onEvent, the live analyzer, the recorded events —
+        // all see the directed value, the value the program actually
+        // ran with.
+        if (rawOnEvent) rawOnEvent(event, trigger, line);
         if (onEvent) onEvent(line);
       });
     }
@@ -251,6 +262,15 @@ function attachTraceEvents(err, events) {
     err.events = events;
   }
 }
+
+// Internal run machinery, shared with the director engine
+// (src/direct.js): createTraceRun builds a Stage and attaches the event
+// listeners, compileRunner turns a Stage's generated script into a
+// runnable function, attachTraceEvents puts the events so far on a
+// thrown error. Exported as one plain object — not as functions — so
+// extend() in src/index.js, which only copies functions, does not put
+// them on the Iroh singleton.
+export const runInternals = { createTraceRun, compileRunner, attachTraceEvents };
 
 // Async version of trace(): awaits the program's completion value before
 // returning, so events from async continuations (await, promises) are

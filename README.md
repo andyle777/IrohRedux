@@ -2,12 +2,12 @@
 
 <p align="center">
   <a href="https://github.com/andyle777/IrohRedux/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/version-0.9.0-orange.svg?style=flat-square" alt="Version 0.9.0" />
+  <img src="https://img.shields.io/badge/version-1.0.0-orange.svg?style=flat-square" alt="Version 1.0.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D%2018-339933.svg?style=flat-square" alt="Node >= 18" />
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-275%20passing-brightgreen.svg?style=flat-square" alt="275 tests passing" />
+  <img src="https://img.shields.io/badge/tests-295%20passing-brightgreen.svg?style=flat-square" alt="295 tests passing" />
 </p>
 
 <p align="center">
@@ -59,6 +59,51 @@ call factorial ( [3] )
   call factorial end -> [2]
 call factorial end -> [6]
 ```
+
+### Direct the run (1.0.0)
+
+Tracing tells you what happened. 1.0.0 lets you *do something about it*
+while the program is still running. A director sits on the live wire,
+reads findings as they fire, and calls the shots — set a variable, skip
+a call, stop the run — and the record says what fired, what was
+directed, and what changed.
+
+```js
+const Iroh = require("iroh");
+
+// A program that would loop 10,000 times. The guard catches it live.
+let out = Iroh.direct(
+  "let i = 0; let total = 0; while (i < 10000) { total += i; i++; } total;",
+  Iroh.runawayGuard()
+);
+// out.result === 4950 — the loop ran 100 iterations, then the director cut it.
+// out.findings[0].code === "HOT_LOOP" (evidence.iterations === 100).
+// out.directives[0].directive === { type: "set", name: "i", value: 10000 },
+// applied: true, appliedVia: "loop-test".
+```
+
+The loop closes: trace → analyze live → direct → change → trace again.
+Your own director is a callback that receives the findings that just
+fired plus the current snapshot, and returns a directive (or `null`):
+
+```js
+const out = Iroh.direct(code, (ctx) => {
+  if (ctx.findings.some((f) => f.code === "HOT_LOOP")) {
+    return { type: "stop", reason: "loop is too hot" };
+  }
+  return null;
+});
+// Directives: { type: "set", name, value } writes a variable at its next
+// assignment (or flips a loop test when the counter advances by ++);
+// { type: "skip", name, value } makes the next call of that name evaluate
+// to the value without running; { type: "stop", reason } ends the run.
+```
+
+From the CLI: `node cli/iroh.js program.js --direct` runs the script under
+the guard (throttle by default, `--direct=stop` stops instead), streaming
+`{"type":"directive",...}` lines as the guard acts and closing with a
+`{"type":"direct-summary",...}` — findings, the full directive audit log,
+and the analysis. Direct mode is JavaScript scripts only.
 
 ### One engine, three languages
 
@@ -136,7 +181,7 @@ Modules trace too: `.mjs` files are detected automatically, or pass
 Python and C++ trace natively through the same command (0.9.0):
 `node cli/iroh.js program.py` or `program.cpp` — `--lang python|cpp`
 forces it, the extension infers it. `--analyze` and `--scan` work for all
-three languages; `--module` stays JavaScript-only. See the 0.9.0 section
+three languages; `--module` and `--direct` stay JavaScript-only. See the 0.9.0 section
 below for what each tracer sees and what it honestly cannot.
 
 #### Python — `from iroh import run` — and trace Python itself (0.9.0)
@@ -348,7 +393,12 @@ buffer their events; for JavaScript they stream as the program runs.
   back to JavaScript — hybrid (AST + trace evidence) out of JavaScript,
   static-only coming back, with an honest report of what translated, what
   needed an assumption, and what could not be translated.
-- **No surprises.** 275 tests (241 Node + 25 Python + 9 C++), `npm test` runs
+- **Direct the run.** An AI director reads live findings as they fire and
+  changes the program mid-flight — set a variable, skip a call, stop the
+  run — with a full audit log of what fired, what was directed, and what
+  changed. The built-in runaway-loop guard throttles a hot loop (or stops
+  it); `node cli/iroh.js program.js --direct` runs any script under it.
+- **No surprises.** 295 tests (261 Node + 25 Python + 9 C++), `npm test` runs
   them all, plus a TypeScript type test (`npm run test:types`). Zero runtime
   dependencies in the engine beyond Acorn, astring, and acorn-walk.
 
@@ -365,7 +415,7 @@ git clone https://github.com/andyle777/IrohRedux.git
 cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
-npm test            # 275 tests: 241 Node + 25 Python + 9 C++
+npm test            # 295 tests: 261 Node + 25 Python + 9 C++
 ```
 
 The Python client installs with `pip install -e python/`; the C++ client is
@@ -375,7 +425,7 @@ a single header — just `#include "iroh.hpp"`.
 
 - [Getting started](//github.com/andyle777/IrohRedux/blob/master/GETTING_STARTED.md) — worked examples you can run locally.
 - [API](//github.com/andyle777/IrohRedux/blob/master/API.md) — the full listener and event reference, including `Iroh.assert` / `Iroh.log` and the `INSTR` / `CATEGORY` / `OP` label tables.
-- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, 0.7.0, 0.8.0, and 0.9.0.
+- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, 0.7.0, 0.8.0, 0.9.0, and 1.0.0.
 
 ---
 
@@ -384,4 +434,5 @@ a single header — just `#include "iroh.hpp"`.
 0.5.0 CLI and polyglot clients, the 0.5.1 polish, the 0.6.0 syntax and
 modern SDK, and the 0.7.0 modules, top-level await, and decorators, and
 the 0.8.0 analysis layer and translation engine, the 0.9.0 native
-Python/C++ tracers, vector refracting, scan mode, and live wire are the fork's.*
+Python/C++ tracers, vector refracting, scan mode, and live wire, and the
+1.0.0 AI director and live code engine are the fork's.*

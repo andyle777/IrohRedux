@@ -13,6 +13,8 @@
 //   node cli/iroh.js program.js --analyze
 //   node cli/iroh.js program.py --scan
 //   node cli/iroh.js program.js --live
+//   node cli/iroh.js program.js --direct
+//   node cli/iroh.js program.js --direct=stop
 //   node cli/iroh.js program.js --translate python
 //   node cli/iroh.js program.py --translate javascript
 //
@@ -30,6 +32,11 @@
 //    "message":"...","evidence":{...},"neuron":{...},"firedAt":505}
 //   {"type":"live-summary","findings":[...],"scores":{...},"summary":{...},
 //    "neuron":{...},"vectors":{...},"finished":true}
+//   {"type":"directive","directive":{"type":"set","name":"i","value":10000},
+//    "issuedAtEvent":505,"applied":true,"appliedAtEvent":510,
+//    "appliedVia":"loop-test","note":"..."}
+//   {"type":"direct-summary","stopped":false,"stopReason":null,
+//    "findings":[...],"directives":[...],"analysis":{...}}
 //   {"type":"translation","from":"javascript","to":"python","code":"...","report":{...}}
 //
 // --analyze appends an analysis line (see src/analyze.js) after the
@@ -48,7 +55,16 @@
 // ONE_SIDED_BRANCH) fire in the summary instead, with a `note` saying
 // so. For JavaScript the live lines stream as the program runs; for
 // Python/C++ they print after the run, because the native tracers
-// buffer their events. --translate skips tracing and
+// buffer their events. --direct (see src/direct.js) runs a JavaScript
+// script under the built-in runaway-loop guard: event lines stream as
+// usual, {"type":"directive",...} lines print when the guard's
+// directives take effect, then the result line and one final
+// {"type":"direct-summary",...} with stopped/stopReason, the findings,
+// the full directive audit log and the analysis. --direct=stop makes
+// the guard stop the run instead of throttling the loop. Direct mode
+// is JavaScript scripts only — Python/C++ traces are buffered after
+// the run, so there is nothing live to direct, and modules run
+// through traceModule(), which has no direction hook. --translate skips tracing and
 // translates the program instead (see src/translate.js); it takes
 // precedence over --events and --module, and exits 1 when the report
 // lists anything unsupported. --from defaults by file extension (.py
@@ -130,6 +146,7 @@ function printUsage() {
     "       cat file.js | iroh [--events CALL,IF,VAR]\n" +
     "       iroh <file.js> --translate python|cpp [--from javascript]\n" +
     "       iroh <file.py|.cpp> --translate javascript [--from python|cpp]\n" +
+    "       iroh <file.js> --direct[=throttle|stop]\n" +
     "Events are streamed as JSON lines on stdout, then a result line.\n" +
     "Use --events ALL (default) or a comma list of categories, e.g. CALL.\n" +
     ".mjs files (or --module) run as ES modules through Iroh.traceModule();\n" +
@@ -139,7 +156,11 @@ function printUsage() {
     "instead of the event flood; --include-events embeds the raw events\n" +
     "in the scan document. --live streams live-finding lines as findings\n" +
     "trip while the program runs, then a final live-summary line with\n" +
-    "the findings, scores and vectors. --lang python|cpp|javascript selects the\n" +
+    "the findings, scores and vectors. --direct runs the script under\n" +
+    "the runaway-loop guard (throttle by default, --direct=stop stops\n" +
+    "the run instead): directive lines print as the guard acts, then a\n" +
+    "final direct-summary line with the findings, the directive audit\n" +
+    "log and the analysis. --lang python|cpp|javascript selects the\n" +
     "tracer (default: inferred from the file extension).\n" +
     "--translate prints one translation line instead of tracing; --from\n" +
     "defaults by file extension (.py -> python, .cpp/.cc/.cxx -> cpp).\n"
@@ -286,6 +307,7 @@ async function main() {
   let scanFlag = false;
   let includeEventsFlag = false;
   let liveFlag = false;
+  let directMode = null; // "throttle" | "stop" once --direct is given
   let translateTo = null;
   let fromArg = null;
   let langArg = null;
@@ -313,6 +335,17 @@ async function main() {
       includeEventsFlag = true;
     } else if (arg === "--live") {
       liveFlag = true;
+    } else if (arg === "--direct") {
+      directMode = "throttle";
+    } else if (arg.startsWith("--direct=")) {
+      let mode = arg.slice("--direct=".length);
+      if (mode !== "throttle" && mode !== "stop") {
+        process.stderr.write("Unknown --direct mode: " + mode + " (use throttle or stop)\n");
+        printUsage();
+        process.exitCode = 2;
+        return;
+      }
+      directMode = mode;
     } else if (arg === "--lang") {
       langArg = args[++ii];
       if (langArg === void 0) { printUsage(); process.exitCode = 2; return; }
@@ -441,6 +474,69 @@ async function main() {
     for (let ii = 0; ii < fired.length; ++ii) {
       printLine(Object.assign({ type: "live-finding" }, fired[ii]));
     }
+  }
+  // Direct mode: run the script under the built-in runaway-loop guard
+  // (Iroh.direct, see src/direct.js). Event lines stream as usual,
+  // directive lines print when the guard's directives take effect, then
+  // the result line and one final direct-summary line — the findings,
+  // the full directive audit log and the analysis. A directed stop is
+  // a normal outcome (exit 0), not a failure; a runtime error is an
+  // error line and exit 1, like the other paths. JavaScript scripts
+  // only: Python/C++ traces are buffered after the run, so there is
+  // nothing live to direct, and modules have no direction hook.
+  if (directMode !== null) {
+    if (language !== "javascript") {
+      process.stderr.write("--direct is JavaScript-only: Python/C++ traces are buffered after the run, so there is nothing live to direct\n");
+      printUsage();
+      process.exitCode = 2;
+      return;
+    }
+    if (moduleFlag) {
+      process.stderr.write("--direct cannot run modules (direct() runs scripts synchronously)\n");
+      printUsage();
+      process.exitCode = 2;
+      return;
+    }
+    let guard = Iroh.runawayGuard({ action: directMode });
+    let out;
+    try {
+      out = Iroh.direct(code, guard, {
+        source: code,
+        onEvent: (line) => {
+          collected.push(line);
+          printLine(line);
+        },
+        onDirective: (entry) => {
+          printLine({
+            type: "directive",
+            directive: entry.directive,
+            issuedAtEvent: entry.issuedAtEvent,
+            applied: entry.applied,
+            appliedAtEvent: entry.appliedAtEvent,
+            appliedVia: entry.appliedVia,
+            note: entry.note,
+          });
+        },
+      });
+    } catch (e) {
+      if (e && Array.isArray(e.events)) collected = e.events;
+      printLine(errorLine(e));
+      process.exitCode = 1;
+      return;
+    }
+    if (wantResult) {
+      printLine({ type: "result", value: Iroh.safeValue(out.result, 4, new Set()) });
+    }
+    printLine({
+      type: "direct-summary",
+      stopped: out.stopped,
+      stopReason: out.stopReason,
+      findings: out.findings,
+      directives: out.directives,
+      analysis: out.analysis,
+    });
+    process.exitCode = 0;
+    return;
   }
   if (language === "javascript") {
     // Modules: an explicit --module, or a .mjs file. Scripts (including

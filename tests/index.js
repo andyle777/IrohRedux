@@ -37,6 +37,12 @@
 //                             findings fire as events arrive, live vs
 //                             batch agreement, determinism, and the
 //                             CLI --live flag on JS/Python/C++.
+//   tests/direct.test.js     — the 1.0.0 AI director + live code
+//                             engine: set/skip/stop directives take
+//                             effect mid-run, the runaway-loop guard
+//                             throttles or stops, and the CLI --direct
+//                             flag on JS (Python/C++ and modules are
+//                             rejected).
 //   tests/esm.test.mjs      — ESM import of the package itself, through
 //                             the package.json "exports" map.
 //   python/tests/           — the Python client (unittest), needs python3.
@@ -56,7 +62,7 @@ function has(cmd) {
 }
 
 execSync(
-  "node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js tests/modern.test.js tests/trace.test.js tests/modules.test.js tests/decorators.test.js tests/analyze.test.js tests/translate.test.js tests/native.test.js tests/vectors.test.js tests/scan.test.js tests/live.test.js tests/esm.test.mjs",
+  "node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js tests/modern.test.js tests/trace.test.js tests/modules.test.js tests/decorators.test.js tests/analyze.test.js tests/translate.test.js tests/native.test.js tests/vectors.test.js tests/scan.test.js tests/live.test.js tests/direct.test.js tests/esm.test.mjs",
   { stdio: "inherit" }
 );
 

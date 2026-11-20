@@ -204,6 +204,57 @@ saying so: `ZERO_ITERATION_LOOP` and `ONE_SIDED_BRANCH`. For Python
 and C++ the live lines print after the run, because the native tracers
 buffer their events; for JavaScript they stream as the program runs.
 
+## Direct the run (1.0.0)
+
+Watching is half the story. The director acts on what the live wire
+finds — while the program is still running:
+
+```js
+const Iroh = require("iroh");
+let out = Iroh.direct(
+  "let i = 0; let total = 0; while (i < 10000) { total += i; i++; } total;",
+  Iroh.runawayGuard()
+);
+// out.result === 4950 — the loop ran 100 iterations, then the director cut it.
+// out.findings[0].code === "HOT_LOOP" (evidence.iterations === 100).
+// out.directives[0].directive === { type: "set", name: "i", value: 10000 }.
+```
+
+The loop closes: trace → analyze live → direct → change → trace again.
+Your own director is a callback — it receives the findings that just
+fired plus the current snapshot, and returns a directive (or `null`):
+
+```js
+const out = Iroh.direct(code, (ctx) => {
+  if (ctx.findings.some((f) => f.code === "HOT_LOOP")) {
+    return { type: "stop", reason: "loop is too hot" };
+  }
+  return null;
+});
+```
+
+Three directives: `{ type: "set", name, value }` writes a variable at
+its next assignment (or flips a loop test when the counter advances by
+`++`); `{ type: "skip", name, value }` makes the next call of that
+name evaluate to the value without running; `{ type: "stop", reason }`
+ends the run. Each applies once, at the first matching point, and the
+record says whether and how it applied — a directive that never matches
+stays in the audit log with `applied: false` and a reason, never a
+pretence it took effect. A runtime error throws with the events so far
+and the direction record so far attached; a directed stop returns
+normally with `stopped: true`. From the CLI:
+
+```sh
+node cli/iroh.js program.js --direct
+# {"type":"directive","directive":{"type":"set","name":"i","value":10000},...}
+# {"type":"result","value":4950}
+# {"type":"direct-summary","stopped":false,...,"findings":[...],"directives":[...],"analysis":{...}}
+```
+
+`--direct=stop` makes the guard stop the run instead of throttling it.
+Direct mode is JavaScript scripts only — Python/C++ traces are buffered
+after the run, so there is nothing live to direct.
+
 The rest of this guide uses the classic Stage API, which is still fully
 supported and gives you live listeners that can change values mid-flight.
 

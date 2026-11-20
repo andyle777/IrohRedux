@@ -446,6 +446,111 @@ export interface LiveAnalyzer {
   finish(): LiveSummary;
 }
 
+// --- 1.0.0: AI director + live code engine (src/direct.js) ------------------
+
+/** A directive a director returns: set a variable, skip a call, stop the run. */
+export type Directive =
+  | { type: "set"; name: string; value: unknown }
+  | { type: "skip"; name: string; value: unknown }
+  | { type: "stop"; reason?: string };
+
+/**
+ * A loop's test, resolved from its HOT_LOOP finding: the counter, the
+ * numeric bound, the comparison (normalized to counter-on-the-left),
+ * and `value` — the counter value that makes the test false, or null
+ * when no single value falsifies it (== / ===).
+ */
+export interface LoopInfo {
+  hash: number;
+  kind: string;
+  counter: string;
+  bound: number;
+  operator: string;
+  counterOnLeft: boolean;
+  value: number | null;
+}
+
+/** A live finding as the director sees it: HOT_LOOP carries its loop info. */
+export interface DirectorFinding extends LiveFinding {
+  /** Present on HOT_LOOP when the loop test resolved to a counter comparison. */
+  loop?: LoopInfo;
+}
+
+/** One audit-log entry: the directive, when it was issued, and whether it took effect. */
+export interface DirectiveEntry {
+  directive: Directive;
+  /** 0-based event index at issue (-1 for directives issued before the run). */
+  issuedAtEvent: number;
+  applied: boolean;
+  /** 0-based event index where it applied (null when never applied). */
+  appliedAtEvent: number | null;
+  /**
+   * How it applied: "init" (a declaration's initial value), "assign"
+   * (a plain assignment), "loop-test" (a loop test flipped to false),
+   * "call" (a skipped call), "stop" (the run stopped); null when never
+   * applied.
+   */
+  appliedVia: "init" | "assign" | "loop-test" | "call" | "stop" | null;
+  /** Why it applied this way, or why it never applied. */
+  note: string | null;
+}
+
+/** What a director receives: the findings that just fired, plus the current snapshot. */
+export interface DirectorContext {
+  /** Findings that fired on the just-processed event (or [] at the start call). */
+  findings: DirectorFinding[];
+  /** All findings fired so far, in fire order. */
+  allFindings: LiveFinding[];
+  /** Progress so far (no scores — those are final). */
+  snapshot: LiveSnapshot | LiveSummary;
+  /** The JSON event line that just fired (null at the start call). */
+  event: TraceEvent | null;
+  /** 0-based index of that event (-1 at the start call). */
+  eventIndex: number;
+  /** The directive audit log so far. */
+  directives: DirectiveEntry[];
+}
+
+/** A director: called once before the run, then whenever new findings fire. */
+export type Director = (ctx: DirectorContext) => Directive | Directive[] | null | void;
+
+export interface DirectOptions extends LiveAnalyzerOptions {
+  /** Passed to the Stage (ecmaVersion, allowHashBang). */
+  stageOptions?: StageOptions;
+  /** Called for every JSON event line as it fires. */
+  onEvent?: (line: TraceEvent) => void;
+  /** Called when a directive is applied (or when a stop is issued). */
+  onDirective?: (entry: DirectiveEntry) => void;
+}
+
+/** The directed run's record: the outcome, the findings, and the full audit log. */
+export interface DirectResult {
+  /** The program's completion value (undefined when stopped). */
+  result: unknown;
+  /** True when the director stopped the run. */
+  stopped: boolean;
+  /** The stop reason (null when the run completed). */
+  stopReason: string | null;
+  /** The JSON event lines, in order. */
+  events: TraceEvent[];
+  /** The live findings (batch-equal — the finish() findings). */
+  findings: AnalysisFinding[];
+  /** Every directive issued, with whether and how it applied. */
+  directives: DirectiveEntry[];
+  /** The live finish() summary: findings, scores, summary, neuron, vectors. */
+  analysis: LiveSummary;
+}
+
+export interface RunawayGuardOptions {
+  /**
+   * "throttle" (default): set the runaway loop's counter to the value
+   * that makes its test false, so the loop exits at the next test.
+   * "stop": stop the run with a reason instead. A loop whose counter
+   * cannot be resolved stops either way.
+   */
+  action?: "throttle" | "stop";
+}
+
 // --- 0.8.0: hybrid translation engine (src/translate.js) -----------------
 
 export type TranslateFrom = "javascript" | "python" | "cpp";
@@ -634,6 +739,35 @@ export interface IrohAPI {
    * events give the same findings in the same order, twice.
    */
   liveAnalyzer(options?: LiveAnalyzerOptions): LiveAnalyzer;
+
+  /**
+   * AI director + live code engine (1.0.0): run `code` under trace
+   * with `director` (or null for an undirected run) and change it
+   * mid-flight. The director is called once before the run, then
+   * whenever new live findings fire, and returns a directive, an array
+   * of them, or null: { type: "set", name, value } writes a variable
+   * at its next assignment/initialization (or flips a loop test when
+   * the counter advances by ++), { type: "skip", name, value } makes
+   * the next call of that name evaluate to the value without running,
+   * { type: "stop", reason } ends the run. The record is auditable:
+   * every directive carries whether and how it applied. A runtime
+   * error throws with the events so far as error.events and the record
+   * so far as error.direct; a directed stop returns normally with
+   * stopped: true. Scripts only (synchronous, like trace()) — modules
+   * and top-level await are rejected with the trace() pointers, and
+   * Python/C++ traces cannot be directed. The `events` option is
+   * ignored: the director needs the full stream, so direct() always
+   * traces ALL categories.
+   */
+  direct(code: string, director: Director | null, options?: DirectOptions): DirectResult;
+  /**
+   * The built-in director: a runaway-loop guard. On HOT_LOOP it
+   * throttles (sets the loop's counter past its limit) or, with
+   * { action: "stop" }, stops the run with a reason. A loop whose
+   * counter cannot be resolved stops either way. A factory: it returns
+   * the director function, so one guard instance directs one run.
+   */
+  runawayGuard(options?: RunawayGuardOptions): Director;
 
   /**
    * Hybrid translation engine (0.8.0): JavaScript -> Python / C++

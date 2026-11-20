@@ -170,6 +170,56 @@ the live lines print after the run, because the native tracers buffer
 their events. Options are the `analyze()` thresholds plus `source`
 (for the final scorecard) and `language` (default `\"javascript\"`).
 
+``direct(code, director, options)``: AI director + live code engine
+(1.0.0) — run `code` under trace with `director` (a function, or
+`null` for an undirected run) and change it mid-flight. The director
+is called once before the run (`findings: []`, `event: null`), then
+whenever new live findings fire, with `{ findings, allFindings,
+snapshot, event, eventIndex, directives }`, and returns a directive, an
+array of directives, or `null`. Three directives, each taking effect in
+the running program: `{ type: "set", name, value }` writes a variable
+at its next value-flow point — a declaration's initializer, a plain
+assignment (`x = v`), or the next test of a loop comparing that
+variable with a numeric literal (the test is flipped to `false` only
+when the set value makes the comparison false, for counters advanced
+by `i++`); `{ type: "skip", name, value }` makes the next call of that
+name evaluate to `value` without running — the real function never
+executes, no `FUNCTION_ENTER`, no side effects (a skip issued for the
+very call that tripped the finding applies to that call now);
+`{ type: "stop", reason }` ends the run with a reason. Each directive
+applies once, at the first matching point, then it is consumed; a
+directive that never matches is recorded with `applied: false` and a
+reason. Matching is by name only, not by scope. A stop is delivered by
+throwing a sentinel from the next event — a program inside
+`try`/`catch` may swallow one throw, so the engine re-throws it at
+every following event until it propagates out. Returns
+`{ result, stopped, stopReason, events, findings, directives,
+analysis }` — `analysis` is the live `finish()` summary, so live vs
+batch agreement holds by construction. A runtime error throws with the
+events so far as `error.events` (like `trace()`) and the direction
+record so far as `error.direct`; a directed stop returns normally with
+`stopped: true`. Options are the `liveAnalyzer()` thresholds plus
+`stageOptions`, `onEvent(line)` and `onDirective(entry)`; the `events`
+option is ignored — the director needs the full stream, so `direct()`
+always traces ALL categories. Scripts only (synchronous, like
+`trace()`) — modules and top-level await are rejected with the
+`trace()` pointers, and Python/C++ traces cannot be directed.
+
+``runawayGuard(options)``: The built-in director (1.0.0) — a factory
+returning a director function, so one guard instance directs one run.
+On `HOT_LOOP` it throttles by default: it sets the loop's counter to
+the value that makes its test false (`i < 10000` → set `i` to `10000`;
+`i <= 9999` → `10000`; `i > 0` → `0`), so the loop exits at the next
+test. With `{ action: "stop" }` it stops the run with a reason
+instead. A loop whose counter cannot be resolved — `while (true)`, a
+non-literal bound, a compound test, `==` / `===` — cannot be
+throttled, so the guard stops the run and says so. The CLI `--direct`
+flag runs a script under this guard (throttle by default,
+`--direct=stop` stops instead), streaming
+`{"type":"directive",...}` lines as directives take effect and closing
+with a `{"type":"direct-summary",...}` — findings, the full directive
+audit log and the analysis. A directed stop exits 0.
+
 ``translate(code, options)``: Hybrid translation engine (0.8.0). Returns
 `{ code, report }` where `report` is `{ ok, from, to, staticOnly, clean,
 assumptions, unsupported, notes }`. JavaScript out (`to: "python" |

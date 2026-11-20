@@ -11,6 +11,7 @@ import * as _neurons from "./neurons";
 import * as _vectors from "./vectors";
 import * as _scan from "./scan";
 import * as _live from "./live";
+import * as _direct from "./direct";
 import * as _translate from "./translate";
 
 class Iroh {
@@ -40,6 +41,7 @@ extend(Iroh, _neurons);
 extend(Iroh, _vectors);
 extend(Iroh, _scan);
 extend(Iroh, _live);
+extend(Iroh, _direct);
 extend(Iroh, _translate);
 
 const iroh = new Iroh();

@@ -1,5 +1,171 @@
 # Changelog
 
+## 1.0.0 — AI director and live code engine (20 Nov 2026)
+
+The original vision complete. The engine runs a program under trace
+and changes it mid-flight; the director sits on the live wire, reads
+findings as they fire, and calls the shots. Trace → analyze live →
+direct → change → trace again, and the record makes the run auditable
+instead of a black box. All 275 prior tests still pass; the suite is
+now 295 tests (261 Node + 25 Python + 9 C++).
+
+### The demo — a runaway loop, caught live
+
+```js
+const Iroh = require("iroh");
+let out = Iroh.direct(
+  "let i = 0; let total = 0; while (i < 10000) { total += i; i++; } total;",
+  Iroh.runawayGuard()
+);
+// out.result === 4950 — the loop ran 100 iterations (0..99), then the
+// director cut it. out.stopped === false.
+// out.findings[0] === HOT_LOOP, evidence.iterations === 100.
+// out.directives[0].directive === { type: "set", name: "i", value: 10000 },
+// applied: true, appliedVia: "loop-test".
+```
+
+### Live code engine — `Iroh.direct(code, director, options)` (new `src/direct.js`)
+
+- The director is called once before the run (findings `[]`, event
+  `null`), then whenever new live findings fire, with
+  `{ findings, allFindings, snapshot, event, eventIndex, directives }`.
+  It returns a directive, an array of directives, or `null`. A
+  `null` director (or one that returns `null`) leaves the run
+  untouched — the record then has no directives, and the run is
+  `trace()` with a direction audit.
+- Three directives, each taking effect in the running program — not
+  after it. The mechanism is the tracer's own: DEBUG functions return
+  the event's value after triggering listeners, so a listener that
+  mutates the event changes the program (verified by probes before
+  building, then by tests):
+  - `set` — `{ type: "set", name, value }` writes a variable at its
+    next value-flow point: a declaration's initializer (`VAR_INIT`
+    returns `event.value`), or a plain assignment (`x = v` is patched
+    to `x = DEBUG_ASSIGN(...)`, which returns `event.result`). A loop
+    counter advanced by `i++` has no assignment point, so a set for it
+    applies at the next `LOOP_TEST` for a loop whose test compares
+    that variable with a numeric literal: the comparison is evaluated
+    with the set value, and the test is flipped to `false` only when
+    the set value makes it false.
+  - `skip` — `{ type: "skip", name, value }` replaces the callee with
+    a stub on the next `FUNCTION_CALL` "before" event for that name:
+    the real function never runs (no `FUNCTION_ENTER`, no side
+    effects) and the call expression evaluates to the stub's return.
+    A skip issued in response to the very call that tripped the
+    finding applies to that call now — the call has not run yet.
+  - `stop` — `{ type: "stop", reason }` throws a sentinel from the
+    listener. A program inside `try`/`catch` may swallow one throw,
+    so the engine re-throws the sentinel at every following event
+    until it propagates out or the program ends; a stop is a normal
+    outcome (the run returns with `stopped: true`), not an error.
+- Ordering inside one event: pending directives apply first (so the
+  live analyzer sees the directed value), then the event feeds the
+  live analyzer, then the director is consulted on new findings. A
+  directive issued in response applies at the NEXT matching point —
+  except a skip for the current call. A set issued on a `HOT_LOOP`
+  trip does NOT flip the trip test itself: that iteration's body still
+  runs, so the iterations the analysis counts are exactly the bodies
+  that ran, and the loop exits at the next test. When a directive
+  applies, the JSON line is mutated alongside the raw event, so the
+  recorded trace shows what the program actually ran with — a flipped
+  loop test reads `false` in the events.
+- The record: `{ result, stopped, stopReason, events, findings,
+  directives, analysis }`. Every directive is an audit entry
+  `{ directive, issuedAtEvent, applied, appliedAtEvent, appliedVia,
+  note }` — a directive that never matches stays in the log with
+  `applied: false` and a reason, never a pretence it took effect. The
+  analysis is the live `finish()` summary, so live vs batch agreement
+  holds by construction (the tests assert `direct()` findings
+  deep-equal `analyze(events)` findings). A runtime error throws with
+  the events so far as `error.events` (like `trace()`) and the
+  direction record so far as `error.direct`. `options.onEvent` /
+  `options.onDirective` callbacks fire as the run proceeds.
+
+### AI director — `Iroh.runawayGuard(options)` (same file)
+
+- The built-in director, a factory returning a director function so
+  one guard instance directs one run. On `HOT_LOOP` it throttles by
+  default: it sets the loop's counter to the value that makes its test
+  false (resolved from the loop statement's AST — `i < 10000` → set
+  `i` to `10000`; `i <= 9999` → `10000`; `i > 0` → `0`). With
+  `{ action: "stop" }` it stops the run with a reason instead. A loop
+  whose counter cannot be resolved — `while (true)`, a non-literal
+  bound, a compound test, `==` / `===` — cannot be throttled, so the
+  guard stops the run and says so.
+- Proven: the demo above (throttle, `while`/`for`/counting-down/`<=`
+  loops); stop mode; `while (true)` falling back to stop; a stop
+  inside `try`/`catch` still ending the run; a custom director
+  resetting a counter mid-run through the next assignment (total 20
+  vs 45 undirected); a skipped call whose side effect never ran; a
+  skip landing on the very call that tripped `REPEATED_SEQUENCE`.
+
+### CLI — `--direct[=throttle|stop]`
+
+- `node cli/iroh.js program.js --direct` runs the script under the
+  guard: event lines stream as usual, `{"type":"directive",...}` lines
+  print when directives take effect, then the result line and one
+  final `{"type":"direct-summary",...}` with `stopped`/`stopReason`,
+  the findings, the full directive audit log and the analysis. A
+  directed stop exits 0; a runtime error is an error line and exit 1.
+- JavaScript scripts only: Python/C++ traces are buffered after the
+  run, so there is nothing live to direct, and modules have no
+  direction hook (`--direct` with a `.py`/`.cpp` file or `--module`
+  is a usage error, exit 2). A director supplied as a JS file is NOT
+  in v1 — the CLI runs the built-in guard only.
+
+### Known limitations (1.0.0)
+
+- `direct()` runs scripts synchronously (like `trace()`) — top-level
+  `await` and modules are rejected with the same pointers `trace()`
+  gives. There is no `directAsync()` / `directModule()` in v1.
+- `set` applies at the next plain assignment or declaration of that
+  variable, or at the next test of a loop comparing it with a numeric
+  literal. Member assignments (`obj.prop = v`) are written inside
+  `DEBUG_ASSIGN` before the event fires, and compound assignments
+  (`x += v`) pass only the right-hand value through the event — neither
+  is a set point, and a set never applies there. Matching is by name
+  only, not by scope: a set for `"i"` applies to the first `i`
+  assignment reached, in whichever scope that is.
+- A stop is delivered by throwing a sentinel from the next event. A
+  program that swallows every thrown value defeats it only in the
+  narrow case where no further event fires after the catch — in
+  practice `PROGRAM_LEAVE` always fires and re-throws it, so a stop
+  inside `try`/`catch` still ends the run (proven by a test). A call
+  interrupted by a stop evaluates to `null` if the program catches the
+  sentinel inside `DEBUG_FUNCTION_CALL`'s own handling.
+- A `set` that would keep a loop test true (e.g. setting the counter
+  back to 5 in an `i++` loop) cannot take effect at the loop test and
+  stays pending until an assignment point — if none comes, it is
+  recorded unapplied. The guard always sets the counter past its
+  limit, so this does not affect throttling.
+- Each directive applies once, at the first matching point, then it is
+  consumed. A director that wants a standing rule (e.g. "always skip
+  calls named X") must re-issue it on every finding, or issue it at
+  the start call and accept that it applies to the first matching
+  call only.
+- On a stopped run, the stream-end findings (`ZERO_ITERATION_LOOP`,
+  `ONE_SIDED_BRANCH`) describe the trace as it stands — a loop the run
+  never reached counts as zero-iteration in the recorded trace.
+- No timeout: a program that never terminates and never trips a
+  finding hangs `direct()` and the CLI, exactly as running it
+  directly would — the director only gets a say when a finding fires
+  (or at the start call).
+
+### Tests
+
+- 20 new tests in `tests/direct.test.js`, wired into `tests/index.js`:
+  the runaway demo as a test (throttle and stop mode, `while(true)`,
+  `for`, counting-down and `<=` loops); set via assignment, via
+  declaration, and unapplied; skip (side effect never runs) and skip
+  on the tripping call; stop (custom director, and inside
+  `try`/`catch`); a do-nothing director; a runtime error carrying the
+  direction record; director bugs failing loudly; the callback hooks;
+  module/TLA rejection; the CLI end to end (`--direct`,
+  `--direct=stop`, and the three usage errors). Full suite: 295 tests
+  (261 Node + 25 Python + 9 C++), all passing; types green; browser
+  bundle smoke-tested (VERSION 1.0.0, `direct()` + guard work in a
+  `vm`).
+
 ## 0.9.0 — native Python and C++ tracers, vector refracting, AI-friendly scan mode (20 Nov 2026)
 
 IrohRedux stops being a JavaScript-only tracer. Python and C++ programs

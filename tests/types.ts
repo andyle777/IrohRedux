@@ -19,6 +19,12 @@ import type {
   LiveFinding,
   LiveSnapshot,
   LiveSummary,
+  DirectResult,
+  Directive,
+  DirectiveEntry,
+  Director,
+  DirectorContext,
+  LoopInfo,
   TranslateResult,
 } from "../index";
 
@@ -134,6 +140,46 @@ const liveFinLanguage: "javascript" | "python" | "cpp" = liveFin.summary.languag
 void liveFinLanguage;
 const liveFinVectors: TraceVector = liveFin.vectors;
 void liveFinVectors;
+
+// 1.0.0: AI director + live code engine.
+const guard: Director = Iroh.runawayGuard();
+const stopGuard: Director = Iroh.runawayGuard({ action: "stop" });
+void stopGuard;
+const directed: DirectResult = Iroh.direct(
+  "let i = 0; let total = 0; while (i < 10000) { total += i; i++; } total;",
+  guard,
+  {
+    hotLoopThreshold: 100,
+    onDirective: (entry: DirectiveEntry) => {
+      const via: "init" | "assign" | "loop-test" | "call" | "stop" | null = entry.appliedVia;
+      void via;
+    },
+  }
+);
+const directedResult: unknown = directed.result;
+void directedResult;
+const directedStopped: boolean = directed.stopped;
+void directedStopped;
+const directedReason: string | null = directed.stopReason;
+void directedReason;
+const directedEvents: TraceEvent[] = directed.events;
+void directedEvents;
+const directedDirectives: DirectiveEntry[] = directed.directives;
+void directedDirectives;
+const directedAnalysis: LiveSummary = directed.analysis;
+void directedAnalysis;
+const customDirector: Director = (ctx: DirectorContext): Directive | null => {
+  const hot = ctx.findings.find((f) => f.code === "HOT_LOOP");
+  if (hot !== undefined && hot.loop !== undefined) {
+    const loop: LoopInfo = hot.loop;
+    return { type: "set", name: loop.counter, value: loop.value };
+  }
+  return null;
+};
+const custom: DirectResult = Iroh.direct("let i = 0; while (i < 10) { i++; } i;", customDirector);
+void custom;
+const undirected: DirectResult = Iroh.direct("1 + 2;", null);
+void undirected;
 
 const traced: AnalyzeTraceResult = Iroh.analyzeTrace("let s = 0; s;", {
   analyze: { source: "let s = 0; s;" },
