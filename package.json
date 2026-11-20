@@ -21,6 +21,8 @@
       "import": "./dist/iroh-node.es.mjs",
       "require": "./dist/iroh-node.js"
     },
+    "./personality-matrix.json": "./personality-matrix.json",
+    "./memory/iroh-memory.sqlite3": "./memory/iroh-memory.sqlite3",
     "./cli": "./cli/iroh.js",
     "./package.json": "./package.json"
   },
@@ -54,6 +56,8 @@
     "test": "node tests/index.js",
     "test:python": "python3 -m unittest discover -s python/tests -v",
     "test:cpp": "make -C cpp test",
+    "build:catalog": "python3 scripts/build-memory-catalog.py",
+    "check:catalog": "python3 scripts/build-memory-catalog.py --check",
     "test:types": "tsc --noEmit --strict --module esnext --moduleResolution bundler --target es2022 tests/types.ts",
     "codegen:irohscript": "npm run build && node scripts/compile-irohscript-core.mjs && npm run build",
     "check:matrix": "tools/check-translate-matrix.sh",

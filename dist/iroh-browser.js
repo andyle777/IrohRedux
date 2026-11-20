@@ -14,7 +14,7 @@ var iroh = (function () {
       }
     }}
 
-  var version$1 = "1.1.0";
+  var version$1="1.1.0";
 
   // indent factor
   var INDENT_FACTOR = 1;
@@ -14554,6 +14554,8 @@ var iroh = (function () {
     }
   }
 
+  var model={featureNames:["calls","depth","repeat","imbalance","mix"],weights:[[0.1218,0.1037,0.1217,-0.0253,0.0328]],bias:[-0.1]};var personalityMatrix = {model:model};
+
   // Tiny neuron layer for IrohRedux 0.8.0 — a single perceptron over
   // trace-window features, pure JavaScript, no dependencies.
   //
@@ -14585,17 +14587,18 @@ var iroh = (function () {
   // The default weights were trained offline (see the training script
   // in the 0.8.0 report) on 200 synthetic labeled feature vectors
   // (deterministic LCG, seeds 12345/999): train 200/200, held-out
-  // 100/100. They are frozen constants here — no randomness at runtime.
+  // 100/100. The portable JSON is their source of truth; there is no
+  // randomness at runtime.
   // train() exists so the perceptron can be re-trained or checked in
   // tests; it is deterministic (fixed order, fixed learning rate, no
   // shuffling).
 
-  var FEATURE_NAMES = ["calls", "depth", "repeat", "imbalance", "mix"];
+  var MODEL = personalityMatrix.model;
+  var FEATURE_NAMES = MODEL.featureNames;
 
-  // Frozen weights from the offline training run (200 synthetic samples,
-  // converged at epoch 1, 200/200 train, 100/100 held-out).
-  var DEFAULT_WEIGHTS = [0.1218, 0.1037, 0.1217, -0.0253, 0.0328];
-  var DEFAULT_BIAS = -0.1;
+  // Keep the runtime and the portable JSON model on the same weights.
+  var DEFAULT_WEIGHTS = MODEL.weights[0];
+  var DEFAULT_BIAS = MODEL.bias[0];
 
   // Extract the five features from a trace's events array (the plain
   // objects Iroh.trace() returns). An empty trace is all zeros.

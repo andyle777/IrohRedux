@@ -74,7 +74,7 @@ function has(cmd) {
 }
 
 execSync(
-  "node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js tests/modern.test.js tests/trace.test.js tests/modules.test.js tests/decorators.test.js tests/analyze.test.js tests/translate.test.js tests/translate-irohscript.test.js tests/irohscript-codegen.test.js tests/native.test.js tests/vectors.test.js tests/scan.test.js tests/live.test.js tests/direct.test.js tests/irohscript.test.js tests/synth.test.js tests/determinism.test.js tests/esm.test.mjs",
+  "node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js tests/modern.test.js tests/trace.test.js tests/modules.test.js tests/decorators.test.js tests/analyze.test.js tests/translate.test.js tests/translate-irohscript.test.js tests/irohscript-codegen.test.js tests/native.test.js tests/vectors.test.js tests/scan.test.js tests/live.test.js tests/direct.test.js tests/irohscript.test.js tests/synth.test.js tests/determinism.test.js tests/memory-catalog.test.js tests/esm.test.mjs",
   { stdio: "inherit" }
 );
 

@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-645%20passing-brightgreen.svg?style=flat-square" alt="645 tests passing" />
+  <img src="https://img.shields.io/badge/tests-634%20passing-brightgreen.svg?style=flat-square" alt="634 tests passing" />
 </p>
 
 <p align="center">
@@ -62,7 +62,8 @@ git clone https://github.com/andyle777/IrohRedux.git
 cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
-npm test            # 645 tests: 390 Node + 25 Python + 9 C++ + 221 IrohScript/BASIC
+npm run build:catalog # builds the offline SQLite reference catalog
+npm test            # 634 tests: 377 Node + 25 Python + 9 C++ + 223 IrohScript/BASIC
 ```
 
 The Python client installs with `pip install -e python/`. The C++
@@ -253,15 +254,21 @@ rebuild (same version, this tree). The machine-readable form is
 - [Changelog](CHANGELOG.md) — what changed, per version.
 - [Memory model](docs/memory.md) — the trace memory/state model
   for AI consumers.
+- [Offline memory catalog](docs/offline-memory-catalog.md) — the
+  portable SQLite reference database and its read-only schema.
+- [Personality Matrix](personality-matrix.json) — the inspectable
+  hot/normal perceptron weights, feature order, and decision rule.
 - [Generations registry](generations.json) — the table above, as JSON.
-- [JSON Schemas](schemas/) — CLI event, scan, translation, and error
-  contracts for AI clients.
+- [JSON Schemas](schemas/) — CLI event, scan, translation, error, and
+  personality-matrix contracts for AI clients.
 
 Build the local AI bundle with `npm run build:ai-bundle -- ./ai-bundle`.
-It contains the current release documentation, schemas, engine-generated
-JSON samples, the Python client, and per-file SHA-256 hashes. The CLI
-works offline and does not call an AI model; any client can consume the
-same JSON contracts.
+It contains the current release documentation, schemas, the Personality
+Matrix JSON, the SQLite offline memory catalog, engine-generated JSON
+samples, the Python client, and per-file SHA-256 hashes. The SQLite
+catalog is reference data only: it stores no user traces and does not
+sync over the network. The JSON model and schemas are the portable
+interface for clients without SQLite support; tracing works offline.
 
 ---
 
@@ -276,7 +283,7 @@ fact here disagrees with a prose paragraph above, this section wins
 - Engine: IrohRedux 1.1.0 (patched in place, 20 Nov 2026).
   No 1.1.2. No version bump.
 - `dist/iroh-node.js` SHA-256:
-  `0b13cb174f03025f3657990fd06eb83e2e361e5f57f159df3e215b42e1f5f131`
+  `bbb12a7068d904d88426999bd587e9f76485bbdb7b72a41616fab63ed33455f2`
 - `iroh --version` prints `iroh 1.1.0 (engine dist iroh-node.js
   0b13cb174f03, runtime node v18.5.0)` inside a packaged binary
   (runtime is the embedded Node; on npm it is the local node).
