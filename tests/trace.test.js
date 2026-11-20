@@ -3,6 +3,7 @@
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { skipIfMissing } = require("./capabilities");
 const Iroh = require("../dist/iroh-node.js");
 
 test("trace() returns events and the live result", () => {
@@ -133,7 +134,8 @@ test("trace() rethrows primitive values unchanged", () => {
   assert.throws(() => Iroh.trace("throw null;"), (e) => e === null);
 });
 
-test("trace() passes stageOptions to the Stage", () => {
+test("trace() passes stageOptions to the Stage", (t) => {
+  skipIfMissing(t, "usingDeclarations");
   // `using` needs the latest parser: with ecmaVersion 2022 it is a
   // parse error, with the default it traces.
   let code = "function f() { using x = { [Symbol.dispose]() {} }; return 1; } f();";
