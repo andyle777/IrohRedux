@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/andyle777/IrohRedux/blob/master/schemas/error.schema.json",
+  "title": "IrohRedux CLI error line",
+  "type": "object",
+  "required": ["type", "name", "message"],
+  "properties": {
+    "type": { "const": "error" },
+    "name": { "type": "string" },
+    "message": { "type": "string" },
+    "events": { "type": "array", "items": { "type": "object" } }
+  },
+  "additionalProperties": true
+}

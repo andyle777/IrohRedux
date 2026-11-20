@@ -1,0 +1,115 @@
+{
+  "format": "iroh.generations.v1",
+  "asOf": "2026-11-20",
+  "current": "1.1.1-patched",
+  "generations": [
+    {
+      "id": "1.0.1",
+      "version": "1.0.1",
+      "label": "1.0.1",
+      "tests": 348
+    },
+    {
+      "id": "1.1.0",
+      "version": "1.1.0",
+      "label": "1.1.0",
+      "tests": 649
+    },
+    {
+      "id": "1.1.1",
+      "version": "1.1.1",
+      "label": "1.1.1",
+      "tests": 699
+    },
+    {
+      "id": "1.1.1-patched",
+      "version": "1.1.1",
+      "label": "1.1.1 patched",
+      "tests": 716,
+      "current": true,
+      "note": "Patched in place; no 1.1.2 version or new tag."
+    }
+  ],
+  "defects": [
+    {
+      "id": "apkCannotExecOwnRuntime",
+      "description": "APK cannot execute its own Node runtime (error=13).",
+      "status": {
+        "1.0.1": "present",
+        "1.1.0": "present",
+        "1.1.1": "present",
+        "1.1.1-patched": "fixed (Fix B)"
+      }
+    },
+    {
+      "id": "boolFstringBelow312",
+      "description": "Boolean interpolation emits an unparsable f-string below Python 3.12.",
+      "status": {
+        "1.0.1": "present",
+        "1.1.0": "present",
+        "1.1.1": "fixed",
+        "1.1.1-patched": "fixed"
+      }
+    },
+    {
+      "id": "delimiterQuoteFstring",
+      "description": "Interpolations containing delimiter quotes, backslashes, braces, or colons fail.",
+      "status": {
+        "1.0.1": "present",
+        "1.1.0": "present",
+        "1.1.1": "present",
+        "1.1.1-patched": "fixed (concatenation)"
+      }
+    },
+    {
+      "id": "noVerifyField",
+      "description": "Translation can report success without reporting whether emitted code ran.",
+      "status": {
+        "1.0.1": "present",
+        "1.1.0": "present",
+        "1.1.1": "present",
+        "1.1.1-patched": "fixed"
+      }
+    },
+    {
+      "id": "exeBundlesNode18WhileMetadataSays22",
+      "description": "Desktop executable embeds Node 18.5.0 while npm metadata requires Node >= 22.",
+      "status": {
+        "1.0.1": "unchecked",
+        "1.1.0": "unchecked",
+        "1.1.1": "verified",
+        "1.1.1-patched": "stated honestly by doctor, --version, and README"
+      }
+    },
+    {
+      "id": "aiBundleApiTextLags",
+      "description": "AI-facing API reference omits fields in the current engine.",
+      "status": {
+        "1.0.1": "unchecked",
+        "1.1.0": "unchecked",
+        "1.1.1": "verified",
+        "1.1.1-patched": "fixed (generated from API.md and checked in CI)"
+      }
+    },
+    {
+      "id": "noBundleHashManifest",
+      "description": "AI bundle has no per-file hash manifest.",
+      "status": {
+        "1.0.1": "present",
+        "1.1.0": "present",
+        "1.1.1": "present",
+        "1.1.1-patched": "fixed"
+      }
+    },
+    {
+      "id": "apkArm64OnlyDebugCert",
+      "description": "APK is arm64-only and debug-signed.",
+      "status": {
+        "1.0.1": "present",
+        "1.1.0": "present",
+        "1.1.1": "present",
+        "1.1.1-patched": "present (unchanged)"
+      }
+    }
+  ]
+}

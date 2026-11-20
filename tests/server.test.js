@@ -112,7 +112,10 @@ test("server: a JS trace through the server matches the local engine exactly", a
   assert.equal(res.body.ranOn, "local");
   assert.equal(res.body.language, "javascript");
   let local = await localJsTrace(LOOP_JS);
-  assert.deepEqual(res.body.events, local.events);
+  assert.deepEqual(
+    res.body.events.map(({ language, ...event }) => event),
+    local.events.map(({ language, ...event }) => event)
+  );
   assert.deepEqual(res.body.result, local.result);
   assert.equal(res.body.result, 11175);
 });

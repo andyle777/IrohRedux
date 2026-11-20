@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/andyle777/IrohRedux/blob/master/schemas/event.schema.json",
+  "title": "IrohRedux CLI event line",
+  "description": "One event object in the CLI JSON Lines stream. Library trace events and events embedded in a scan may omit language; CLI event lines always include it.",
+  "type": "object",
+  "required": ["type", "event", "category", "trigger", "language"],
+  "properties": {
+    "type": { "const": "event" },
+    "event": { "type": "string" },
+    "category": { "type": "string" },
+    "trigger": { "type": "string" },
+    "language": {
+      "enum": ["javascript", "python", "cpp", "irohscript", "basic"]
+    },
+    "hash": { "type": "integer" },
+    "indent": { "type": "integer" },
+    "name": { "type": "string" },
+    "arguments": { "type": "array" },
+    "external": { "type": "boolean" },
+    "value": {},
+    "return": {},
+    "error": {},
+    "source": { "type": "string" }
+  },
+  "additionalProperties": true
+}
