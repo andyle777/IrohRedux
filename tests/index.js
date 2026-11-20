@@ -65,6 +65,14 @@
 //                             reporter and the Node 22 TAP reporter,
 //                             the unittest and C++ shapes, and a leg
 //                             that did not run is named, never passed.
+//   tests/server.test.js     — the server/node architecture: the
+//                             phone is the local server, the laptop
+//                             is a local node. A server and a node run
+//                             on loopback; a JS trace through the
+//                             server matches the local engine, a
+//                             Python leg delegated to a node matches
+//                             a local run, and a leg no node can run
+//                             returns an honest 503.
 //   tests/esm.test.mjs      — ESM import of the package itself, through
 //                             the package.json "exports" map.
 //   python/tests/           — the Python client (unittest), needs python3.
@@ -167,6 +175,7 @@ legs.push(
       "tests/dist-drift.test.js",
       "tests/capabilities.test.js",
       "tests/suite-summary.test.js",
+      "tests/server.test.js",
       "tests/esm.test.mjs",
     ],
     { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 },
