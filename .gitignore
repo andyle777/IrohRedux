@@ -98,3 +98,6 @@ __pycache__/
 *.pyc
 # Local standalone Python interpreters for the translate matrix gate
 .pythons/
+
+# Test suite output
+test-results/

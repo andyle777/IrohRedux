@@ -190,6 +190,10 @@ function printLine(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
+function printEventLine(event, language) {
+  printLine(Object.assign({}, event, { language: language }));
+}
+
 function printUsage() {
   process.stderr.write(
     "Usage: iroh <file.js> [--events CALL,IF,VAR] [--no-result] [--analyze] [--scan]\n" +
@@ -668,7 +672,7 @@ async function main() {
         source: code,
         onEvent: (line) => {
           collected.push(line);
-          printLine(line);
+          printEventLine(line, language);
         },
         onDirective: (entry) => {
           printLine({
@@ -853,7 +857,7 @@ async function main() {
             if (liveFlag) {
               printLiveFindings(liveAnalyzer.feed(line));
             } else if (!scanFlag) {
-              printLine(line);
+              printEventLine(line, language);
             }
           },
           filename: file || undefined,
@@ -866,7 +870,7 @@ async function main() {
             if (liveFlag) {
               printLiveFindings(liveAnalyzer.feed(line));
             } else if (!scanFlag) {
-              printLine(line);
+              printEventLine(line, language);
             }
           },
         });

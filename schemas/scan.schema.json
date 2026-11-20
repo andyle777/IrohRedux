@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/andyle777/IrohRedux/blob/1.1.0-patch/schemas/scan.schema.json",
+  "title": "IrohRedux 1.1.0 scan result",
+  "description": "Coverage is fired/total with total 30 in this generation; there is no reachable denominator.",
+  "type": "object",
+  "required": ["vectors", "findings", "scores", "summary"],
+  "properties": {
+    "type": { "const": "scan" },
+    "vectors": { "type": "object" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "severity", "message", "evidence", "neuron"],
+        "properties": {
+          "code": { "type": "string" },
+          "severity": { "type": "string" },
+          "message": { "type": "string" },
+          "evidence": { "type": "object" },
+          "neuron": { "type": "object" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "scores": {
+      "type": "object",
+      "required": ["coverage"],
+      "properties": {
+        "coverage": {
+          "type": "object",
+          "required": ["fired", "total", "value"],
+          "properties": {
+            "fired": { "type": "integer", "minimum": 0 },
+            "reachable": { "type": "integer", "minimum": 0 },
+            "total": { "type": "integer", "minimum": 0 },
+            "value": { "type": "number" },
+            "firedCategories": { "type": "array", "items": { "type": "string" } },
+            "missingCategories": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "summary": {
+      "type": "object",
+      "required": ["events", "findings", "warnings", "infos", "language", "findingsTruncated"],
+      "properties": {
+        "events": { "type": "integer", "minimum": 0 },
+        "findings": { "type": "integer", "minimum": 0 },
+        "warnings": { "type": "integer", "minimum": 0 },
+        "infos": { "type": "integer", "minimum": 0 },
+        "language": { "enum": ["javascript", "python", "cpp", "irohscript", "basic"] },
+        "findingsTruncated": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "events": { "type": "array", "items": { "type": "object" } }
+  },
+  "additionalProperties": true
+}
