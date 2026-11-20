@@ -17,7 +17,7 @@ var extend = function(cls, prot) {
   }
 };
 
-var version = "0.8.0";
+var version = "0.9.0";
 
 // indent factor
 const INDENT_FACTOR = 1;
@@ -6803,6 +6803,301 @@ var _analyze = Object.freeze({
 	analyzeModule: analyzeModule
 });
 
+// Vector refracting for IrohRedux 0.9.0 — a trace bent into a small,
+// deterministic numeric spectrum an AI can compare without reading the
+// raw events. "Refracting" because the trace is split into its
+// component features, like light through a prism.
+//
+// These are FEATURE VECTORS, not LLM embeddings: no model, no vector
+// database, no new dependencies, no randomness. The features are the
+// 0.8.0 neuron layer's definitions (src/neurons.js) plus one honest
+// extension — coverage, the share of event categories that fired.
+// Same events -> same vector, always; identical traces have distance
+// exactly 0 and cosine similarity exactly 1.
+//
+//   Iroh.toVector(events)              -> { features, vector, names }
+//   Iroh.cosineSimilarity(a, b)        -> number in [-1, 1]
+//   Iroh.euclideanDistance(a, b)       -> number >= 0
+//   Iroh.compareVectors(a, b)          -> { cosine, euclidean }
+//
+// `a` and `b` may be plain number arrays or toVector() results.
+// `features` carries the NAMED values (plus the raw event count, a
+// plain count, not part of the normalized vector); `vector` is the
+// ordered array of the six normalized [0, 1] features, in `names`
+// order. The vector never carries the raw event count — an unnormalized
+// count would dominate every distance.
+
+const VECTOR_FEATURE_NAMES = FEATURE_NAMES.concat(["coverage"]);
+
+// Project a trace's events into a feature vector. `events` is the
+// plain array Iroh.trace() returns (or the CLI's event lines, or a
+// Python/C++ tracer's — the projection only reads event/category/
+// trigger/hash/indent/value, so it works the same across languages).
+function toVector(events) {
+  events = Array.isArray(events) ? events : [];
+  let features = extractFeatures(events);
+  let totalCategories = Object.keys(CATEGORY).length;
+  let fired = {};
+  for (let ii = 0; ii < events.length; ++ii) {
+    if (events[ii].category) fired[events[ii].category] = true;
+  }
+  let firedCount = Object.keys(fired).length;
+  let coverage = totalCategories > 0
+    ? Math.round((firedCount / totalCategories) * 10000) / 10000
+    : 0;
+  let named = {
+    calls: features.calls,
+    depth: features.depth,
+    repeat: features.repeat,
+    imbalance: features.imbalance,
+    mix: features.mix,
+    coverage: coverage,
+    events: events.length,
+  };
+  return {
+    features: named,
+    vector: [
+      named.calls,
+      named.depth,
+      named.repeat,
+      named.imbalance,
+      named.mix,
+      named.coverage,
+    ],
+    names: VECTOR_FEATURE_NAMES.slice(),
+  };
+}
+
+function asArray(value) {
+  if (Array.isArray(value)) return value;
+  if (value && Array.isArray(value.vector)) return value.vector;
+  return null;
+}
+
+function round4(n) {
+  return Math.round(n * 10000) / 10000;
+}
+
+// Cosine similarity between two vectors: 1 for identical direction,
+// 0 for orthogonal, -1 for opposite. Two empty (all-zero) vectors
+// count as identical (1); an empty vector against a non-empty one is
+// 0. Rounded to 4 decimals, so identical inputs give exactly 1.
+function cosineSimilarity(a, b) {
+  let x = asArray(a);
+  let y = asArray(b);
+  if (!x || !y || x.length !== y.length) {
+    throw new Error("cosineSimilarity needs two vectors of the same length");
+  }
+  let dot = 0;
+  let nx = 0;
+  let ny = 0;
+  for (let ii = 0; ii < x.length; ++ii) {
+    dot += x[ii] * y[ii];
+    nx += x[ii] * x[ii];
+    ny += y[ii] * y[ii];
+  }
+  if (nx === 0 && ny === 0) return 1;
+  if (nx === 0 || ny === 0) return 0;
+  let sim = dot / (Math.sqrt(nx) * Math.sqrt(ny));
+  if (sim > 1) sim = 1;
+  if (sim < -1) sim = -1;
+  return round4(sim);
+}
+
+// Euclidean distance between two vectors: 0 for identical vectors,
+// growing as they differ. Rounded to 4 decimals, so identical inputs
+// give exactly 0.
+function euclideanDistance(a, b) {
+  let x = asArray(a);
+  let y = asArray(b);
+  if (!x || !y || x.length !== y.length) {
+    throw new Error("euclideanDistance needs two vectors of the same length");
+  }
+  let sum = 0;
+  for (let ii = 0; ii < x.length; ++ii) {
+    let d = x[ii] - y[ii];
+    sum += d * d;
+  }
+  return round4(Math.sqrt(sum));
+}
+
+// Both measures at once, for "find traces like this one".
+function compareVectors(a, b) {
+  return {
+    cosine: cosineSimilarity(a, b),
+    euclidean: euclideanDistance(a, b),
+  };
+}
+
+
+var _vectors = Object.freeze({
+	VECTOR_FEATURE_NAMES: VECTOR_FEATURE_NAMES,
+	toVector: toVector,
+	cosineSimilarity: cosineSimilarity,
+	euclideanDistance: euclideanDistance,
+	compareVectors: compareVectors
+});
+
+// AI-friendly scan mode for IrohRedux 0.9.0 — trace -> analyze ->
+// vector in ONE pass, emitting ONE compact JSON document instead of
+// the raw event flood:
+//
+//   { vectors, findings, scores, summary }
+//
+// - `vectors` is the toVector() projection (src/vectors.js): named
+//   features, the ordered numeric vector, and the feature names.
+// - `findings`, `scores` are exactly what Iroh.analyze() returns —
+//   every finding cites its evidence, every score carries its
+//   denominator.
+// - `summary` is analyze()'s summary plus the scan's own fields:
+//   `language` (javascript/python/cpp), `neuron` (the window
+//   classification), and `findingsTruncated` (0 unless the findings
+//   cap below bit — a large trace must scan to something far smaller
+//   than its raw event stream, so findings are capped; the cap is a
+//   safety bound, and the count of dropped findings is reported,
+//   never hidden).
+//
+// The scan works the same across languages: scan(events) only reads
+// the plain event objects, so a JS, Python or C++ trace scans to the
+// same schema. scanTrace()/scanTraceAsync()/scanModule() are the JS
+// conveniences (trace then scan); Python and C++ traces reach the
+// scan through the CLI --scan flag.
+//
+//   Iroh.scan(events, options)          -> scan document
+//   Iroh.scanTrace(code, options)       -> scan document (JS, sync)
+//   Iroh.scanTraceAsync(code, options)  -> Promise of the same
+//   Iroh.scanModule(code, options)      -> Promise of the same
+//
+// Options: language (default "javascript"), source (for the fidelity
+// score's blind-spot count — defaults to the traced code in the
+// scanTrace family), the analyze() thresholds (hotLoopThreshold,
+// deepRecursionThreshold, repeatSequenceMinOccurrences,
+// oneSidedMinTests, via options.analyze in the scanTrace family),
+// maxFindings (default 200), includeEvents (default false — when
+// true the raw events ride along in the document under `events`, for
+// callers that explicitly want the flood).
+
+const SCAN_DEFAULTS = {
+  maxFindings: 200,
+};
+
+// The scan of a trace's events. Pure function — no tracing, no I/O.
+function scan(events, options) {
+  options = options || {};
+  events = Array.isArray(events) ? events : [];
+  let maxFindings = options.maxFindings === void 0
+    ? SCAN_DEFAULTS.maxFindings : options.maxFindings;
+  // A negative cap is nonsense, not a request for "all but N": slice(0, -5)
+  // would emit all but the last five findings and report a negative
+  // truncation. Clamp to >= 0; a non-number falls back to the default.
+  if (typeof maxFindings !== "number" || !isFinite(maxFindings)) {
+    maxFindings = SCAN_DEFAULTS.maxFindings;
+  }
+  maxFindings = Math.max(0, Math.floor(maxFindings));
+  let analysis = analyze(events, options);
+  let vectors = toVector(events);
+  let allFindings = analysis.findings;
+  let truncated = 0;
+  let findings = allFindings;
+  if (allFindings.length > maxFindings) {
+    truncated = allFindings.length - maxFindings;
+    findings = allFindings.slice(0, maxFindings);
+  }
+  let summary = {
+    events: analysis.summary.events,
+    findings: analysis.summary.findings,
+    warnings: analysis.summary.warnings,
+    infos: analysis.summary.infos,
+    maxCallDepth: analysis.summary.maxCallDepth,
+    distinctRegions: analysis.summary.distinctRegions,
+    language: options.language || "javascript",
+    neuron: {
+      label: analysis.neuron.label,
+      score: analysis.neuron.score,
+    },
+    findingsTruncated: truncated,
+  };
+  let doc = {
+    vectors: vectors,
+    findings: findings,
+    scores: analysis.scores,
+    summary: summary,
+  };
+  if (options.includeEvents) {
+    doc.events = events;
+  }
+  return doc;
+}
+
+// Scan a JS script: trace it, then scan the events. Options are
+// trace()'s, plus `analyze` (thresholds / source override — `source`
+// defaults to the code), `language` (default "javascript"),
+// `maxFindings` and `includeEvents`.
+function scanTrace(code, options) {
+  options = options || {};
+  let out = this.trace(code, options);
+  // Copy: scanOptions defaults (source, language) are written onto this
+  // object, and aliasing the caller's options.analyze would mutate
+  // their object as a side effect of scanning.
+  let scanOptions = Object.assign({}, options.analyze);
+  if (scanOptions.source === void 0) scanOptions.source = code;
+  if (scanOptions.language === void 0) scanOptions.language = "javascript";
+  if (options.maxFindings !== void 0 && scanOptions.maxFindings === void 0) {
+    scanOptions.maxFindings = options.maxFindings;
+  }
+  if (options.includeEvents !== void 0 && scanOptions.includeEvents === void 0) {
+    scanOptions.includeEvents = options.includeEvents;
+  }
+  return scan(out.events, scanOptions);
+}
+
+// Async version of scanTrace(): scripts with top-level await, via
+// traceAsync(). Returns a Promise of the scan document.
+function scanTraceAsync(code, options) {
+  options = options || {};
+  let iroh = this;
+  let scanOptions = Object.assign({}, options.analyze);
+  if (scanOptions.source === void 0) scanOptions.source = code;
+  if (scanOptions.language === void 0) scanOptions.language = "javascript";
+  if (options.maxFindings !== void 0 && scanOptions.maxFindings === void 0) {
+    scanOptions.maxFindings = options.maxFindings;
+  }
+  if (options.includeEvents !== void 0 && scanOptions.includeEvents === void 0) {
+    scanOptions.includeEvents = options.includeEvents;
+  }
+  return iroh.traceAsync(code, options).then(function(out) {
+    return scan(out.events, scanOptions);
+  });
+}
+
+// Module version of scanTrace(), via traceModule(). Node only.
+// Returns a Promise of the scan document.
+function scanModule(code, options) {
+  options = options || {};
+  let iroh = this;
+  let scanOptions = Object.assign({}, options.analyze);
+  if (scanOptions.source === void 0) scanOptions.source = code;
+  if (scanOptions.language === void 0) scanOptions.language = "javascript";
+  if (options.maxFindings !== void 0 && scanOptions.maxFindings === void 0) {
+    scanOptions.maxFindings = options.maxFindings;
+  }
+  if (options.includeEvents !== void 0 && scanOptions.includeEvents === void 0) {
+    scanOptions.includeEvents = options.includeEvents;
+  }
+  return iroh.traceModule(code, options).then(function(out) {
+    return scan(out.events, scanOptions);
+  });
+}
+
+
+var _scan = Object.freeze({
+	SCAN_DEFAULTS: SCAN_DEFAULTS,
+	scan: scan,
+	scanTrace: scanTrace,
+	scanTraceAsync: scanTraceAsync,
+	scanModule: scanModule
+});
+
 // Hybrid translation engine for IrohRedux 0.8.0 — JavaScript ->
 // Python / C++, Python -> JavaScript, C++ -> JavaScript.
 //
@@ -10004,6 +10299,8 @@ extend(Iroh, _utils);
 extend(Iroh, _setup);
 extend(Iroh, _analyze);
 extend(Iroh, _neurons);
+extend(Iroh, _vectors);
+extend(Iroh, _scan);
 extend(Iroh, _translate);
 
 const iroh = new Iroh();

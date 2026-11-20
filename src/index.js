@@ -8,6 +8,8 @@ import * as _utils from "./utils";
 import * as _setup from "./setup";
 import * as _analyze from "./analyze";
 import * as _neurons from "./neurons";
+import * as _vectors from "./vectors";
+import * as _scan from "./scan";
 import * as _translate from "./translate";
 
 class Iroh {
@@ -34,6 +36,8 @@ extend(Iroh, _utils);
 extend(Iroh, _setup);
 extend(Iroh, _analyze);
 extend(Iroh, _neurons);
+extend(Iroh, _vectors);
+extend(Iroh, _scan);
 extend(Iroh, _translate);
 
 const iroh = new Iroh();

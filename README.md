@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-206%20passing-brightgreen.svg?style=flat-square" alt="206 tests passing" />
+  <img src="https://img.shields.io/badge/tests-249%20passing-brightgreen.svg?style=flat-square" alt="249 tests passing" />
 </p>
 
 <p align="center">
@@ -64,7 +64,10 @@ call factorial end -> [6]
 
 The engine is JavaScript, but the `iroh` CLI streams its trace events as
 JSON lines — one event per line — so Python and C++ speak the same protocol
-through thin clients. No rewrites, no bindings to compile, no second engine.
+through thin clients. And since 0.9.0, Python and C++ programs trace
+natively through that same CLI, with the same event shape — so one
+analysis pipeline works on all three languages. No rewrites, no bindings
+to compile, no second engine.
 
 ```mermaid
 flowchart LR
@@ -130,7 +133,13 @@ non-zero exit code, and async programs are awaited before the result line.
 Modules trace too: `.mjs` files are detected automatically, or pass
 `--module` — relative imports resolve against the traced file.
 
-#### Python — `from iroh import run`
+Python and C++ trace natively through the same command (0.9.0):
+`node cli/iroh.js program.py` or `program.cpp` — `--lang python|cpp`
+forces it, the extension infers it. `--analyze` and `--scan` work for all
+three languages; `--module` stays JavaScript-only. See the 0.9.0 section
+below for what each tracer sees and what it honestly cannot.
+
+#### Python — `from iroh import run` — and trace Python itself (0.9.0)
 
 ```python
 from iroh import run
@@ -141,7 +150,21 @@ events, result = run("[1, 2, 3].map(v => v * 2);", events=["VAR"])
 
 Stdlib only, needs Node.js and the CLI — see [`python/`](python/).
 
-#### C++ — one header, no dependencies
+The same client traces Python programs natively now:
+
+```python
+from iroh import trace_python, scan_python
+
+events, _ = trace_python("def f(n):\n    return f(n-1) if n else 1\n\nf(3)\n")
+# events: FUNCTION_CALL / FUNCTION_ENTER / FUNCTION_CALL_END / FUNCTION_LEAVE,
+# with names, arguments, return values, file and line numbers
+scan = scan_python("s = 0\nfor i in range(150):\n    s += i\n")
+# scan["findings"][0]["code"] == "HOT_LOOP"
+```
+
+Or the CLI directly: `node cli/iroh.js program.py --analyze`.
+
+#### C++ — one header, no dependencies — and trace C++ itself (0.9.0)
 
 ```cpp
 #include "iroh.hpp"
@@ -152,6 +175,22 @@ auto trace = client.run("[1, 2, 3].map(v => v * 2);", {"VAR"});
 ```
 
 Header-only C++17, with a minimal JSON parser built in — see [`cpp/`](cpp/).
+
+The same header traces C++ programs natively now, no Node needed:
+
+```cpp
+#include "iroh.hpp"
+
+iroh::native::Tracer tracer;
+auto t = tracer.trace_code("int add(int a, int b) { return a + b; }\nint main() { return add(2, 3); }\n");
+// t.events: FUNCTION_CALL / FUNCTION_ENTER / ... for main and add(int,int)
+// t.exit_code == 5
+```
+
+Or the CLI: `node cli/iroh.js program.cpp --scan`. v1 is
+function-level only — `-finstrument-functions` gives no loop/branch
+events, so a C++ trace has no `LOOP_TEST`/`IF_TEST`; the scorecard scores
+that honestly (coverage 2 of 30 categories).
 
 ### Analyze the trace — and translate the program (0.8.0)
 
@@ -186,8 +225,9 @@ box). The CLI appends the same analysis with `--analyze`. See
 The same trace evidence also drives the hybrid translation engine —
 static AST plus the runtime types, values, and branch outcomes the trace
 saw. JavaScript goes to Python or C++; Python and C++ come back to
-JavaScript (static-only — there is no tracer for those languages, and the
-report says so):
+JavaScript (static-only by design — the reverse legs translate from
+source alone; native Python/C++ tracers exist since 0.9.0, but the
+translation legs do not use them):
 
 ```js
 const { code, report } = Iroh.translate(
@@ -203,7 +243,54 @@ Unsupported constructs are reported in `report.unsupported`, never
 silently mistranslated — the emitted code raises at that point, loudly.
 The CLI translates too: `node cli/iroh.js program.js --translate python`
 (one `{"type":"translation",...}` line, exit 1 when anything was
-unsupported), and `--from` is inferred from `.py` / `.cpp` files.
+unsupported), and `--from` is inferred from `.py` / `.cpp` files. The
+reverse legs stay static-only by design — native Python/C++ tracers
+exist since 0.9.0, but translation does not use them.
+
+### Trace Python and C++ natively, and scan any trace (0.9.0)
+
+Python traces with `sys.settrace` plus AST instrumentation of loops,
+branches, and `except` handlers, so the same findings fire: a Python
+hot loop analyzes to `HOT_LOOP` (150 iterations, 151 tests), a caught
+exception to `THROWING_PATH`, a deep call stack to `DEEP_RECURSION`.
+C++ traces with `-finstrument-functions` — function-level only in v1,
+names resolved by `dladdr` + `__cxa_demangle` with a `.symtab` fallback
+for local symbols (lambdas, `static` and anonymous-namespace
+functions), unresolved names carried as `null` with the raw address,
+never a faked name. Honest limits:
+Python sees no per-assignment events (every assignment is a blind spot),
+only the target file is traced, comprehensions/`async for`/lambdas are
+not loop/branch instrumented; C++ sees no loop/branch/line events at
+all, one `.cpp` file, `-O0` (inlined functions get no hooks). The full
+list is in the CHANGELOG.
+
+And the scan mode, for AI consumers: one command, one compact document,
+no event flood:
+
+```sh
+node cli/iroh.js program.py --scan
+node cli/iroh.js program.cpp --scan
+node cli/iroh.js program.js --scan
+```
+
+```json
+{"type":"scan","vectors":{"features":{"calls":0,"depth":0,"repeat":0.9868421052631579,"imbalance":0,"mix":1,"coverage":0.0333,"events":152},"vector":[0,0,0.9868421052631579,0,1,0.0333],"names":["calls","depth","repeat","imbalance","mix","coverage"]},"findings":[{"code":"HOT_LOOP","severity":"warning","message":"Loop entered 150 times (threshold 100).","evidence":{"hash":400712668,"kind":"For","iterations":150,"tests":151,"threshold":100},"neuron":{"label":"hot","score":0.0529}}],"scores":{...},"summary":{"events":152,"findings":1,"warnings":1,"infos":0,"maxCallDepth":0,"distinctRegions":1,"language":"python","neuron":{"label":"hot","score":0.0529},"findingsTruncated":0}}
+```
+
+The document is `{ vectors, findings, scores, summary }`: the trace
+refracted into a deterministic feature vector (named features, all in
+[0, 1] — the 0.8.0 neuron features plus coverage), the findings with
+evidence, the scorecard with denominators on every number, and a summary
+with the language, the neuron classification, and `findingsTruncated`
+(findings are capped at 200 by default; the count of dropped ones is
+reported, never hidden). The raw events ride along only with
+`--include-events`. A 20,000-iteration loop (100k+ raw events) scans to
+under 2% of the raw JSON bytes; scanning the same program twice gives
+byte-identical output. These are FEATURE VECTORS, not LLM embeddings —
+no model, no vector DB, no new dependencies. `Iroh.scanTrace(code)`,
+`Iroh.toVector(events)`, and `Iroh.cosineSimilarity(a, b)` /
+`Iroh.euclideanDistance(a, b)` are the library forms; identical traces
+have distance exactly 0. Same schema for JS, Python, and C++.
 
 ### What you get
 
@@ -214,16 +301,24 @@ unsupported), and `--from` is inferred from `.py` / `.cpp` files.
 - **Modern JavaScript.** ES2022, arrows, optional chaining, nullish
   coalescing, private fields, async/await — all traced, all tested.
 - **Three languages, one protocol.** JavaScript, Python, and C++ all consume
-  the same JSON event stream.
+  the same JSON event stream — and since 0.9.0, Python and C++ trace
+  natively (Python via `sys.settrace` + AST, C++ via
+  `-finstrument-functions`, function-level in v1), so one analysis
+  pipeline works on all three.
 - **Analysis, not just events.** Deterministic findings (hot loops, deep
   recursion, one-sided branches, throwing paths) plus a toolkit scorecard
   with denominators on every number — and a tiny inspectable perceptron
   that classifies a trace window hot vs normal.
+- **Scan mode for AI.** `--scan` (or `Iroh.scanTrace()`) turns trace →
+  analyze → vector into ONE compact JSON document `{ vectors, findings,
+  scores, summary }` — bounded, deterministic, same schema in all three
+  languages. Vectors are deterministic feature vectors, not LLM
+  embeddings.
 - **Translation, both ways.** JavaScript to Python and C++, Python and C++
   back to JavaScript — hybrid (AST + trace evidence) out of JavaScript,
   static-only coming back, with an honest report of what translated, what
   needed an assumption, and what could not be translated.
-- **No surprises.** 206 tests (194 Node + 7 Python + 5 C++), `npm test` runs
+- **No surprises.** 249 tests (221 Node + 20 Python + 8 C++), `npm test` runs
   them all, plus a TypeScript type test (`npm run test:types`). Zero runtime
   dependencies in the engine beyond Acorn, astring, and acorn-walk.
 
@@ -240,7 +335,7 @@ git clone https://github.com/andyle777/IrohRedux.git
 cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
-npm test            # 206 tests: 194 Node + 7 Python + 5 C++
+npm test            # 249 tests: 221 Node + 20 Python + 8 C++
 ```
 
 The Python client installs with `pip install -e python/`; the C++ client is
@@ -250,7 +345,7 @@ a single header — just `#include "iroh.hpp"`.
 
 - [Getting started](//github.com/andyle777/IrohRedux/blob/master/GETTING_STARTED.md) — worked examples you can run locally.
 - [API](//github.com/andyle777/IrohRedux/blob/master/API.md) — the full listener and event reference, including `Iroh.assert` / `Iroh.log` and the `INSTR` / `CATEGORY` / `OP` label tables.
-- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, 0.7.0, and 0.8.0.
+- [Changelog](//github.com/andyle777/IrohRedux/blob/master/CHANGELOG.md) — what changed in 0.4.0, 0.5.0, 0.5.1, 0.6.0, 0.7.0, 0.8.0, and 0.9.0.
 
 ---
 

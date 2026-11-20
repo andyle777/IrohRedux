@@ -31,8 +31,9 @@ import os
 import subprocess
 from pathlib import Path
 
-__all__ = ["run", "trace_file", "TraceError", "find_cli"]
-__version__ = "0.8.0"
+__all__ = ["run", "trace_file", "trace_python", "trace_python_file",
+           "scan", "scan_python", "scan_python_file", "TraceError", "find_cli"]
+__version__ = "0.9.0"
 
 
 class TraceError(Exception):
@@ -74,8 +75,13 @@ def _node():
     return os.environ.get("IROH_NODE", "node")
 
 
-def _run_cli(args, code):
-    """Run the CLI, feeding it ``code`` on stdin; return (events, result)."""
+def _run_cli(args, code, want_scan=False):
+    """Run the CLI, feeding it ``code`` on stdin.
+
+    Returns ``(events, result)``, or ``(events, result, scan)`` when
+    ``want_scan`` is true (the CLI was run with ``--scan``; ``scan`` is
+    the scan document dict, or None when the CLI emitted none).
+    """
     cli = find_cli()
     cmd = [_node(), cli, *args]
     try:
@@ -93,6 +99,7 @@ def _run_cli(args, code):
         ) from exc
     events = []
     result = None
+    scan = None
     for line in proc.stdout.splitlines():
         if not line.strip():
             continue
@@ -104,6 +111,8 @@ def _run_cli(args, code):
             events.append(item)
         elif item.get("type") == "result":
             result = item.get("value")
+        elif item.get("type") == "scan":
+            scan = {k: v for k, v in item.items() if k != "type"}
         elif item.get("type") == "error":
             raise TraceError(item.get("message", "Unknown error"),
                             name=item.get("name"), events=events)
@@ -113,6 +122,8 @@ def _run_cli(args, code):
             f"{proc.stderr.strip() or 'no details'}",
             events=events,
         )
+    if want_scan:
+        return events, result, scan
     return events, result
 
 
@@ -138,3 +149,64 @@ def trace_file(path, events=None):
     """Trace the JavaScript file at ``path``; same return as :func:`run`."""
     code = Path(path).read_text(encoding="utf-8")
     return run(code, events=events)
+
+
+def trace_python(code, events=None):
+    """Trace Python ``code`` with the native Python tracer (0.9.0) and
+    return ``(events, result)`` — the same event shape as :func:`run`,
+    from ``python/iroh/trace.py`` (``sys.settrace`` + AST
+    instrumentation). ``result`` is always None: a Python program has
+    no completion value. Raises :class:`TraceError` if the program
+    fails; the events that fired before the failure ride on the
+    exception, as with :func:`run`.
+    """
+    args = ["--lang", "python"]
+    if events is not None:
+        args += ["--events", ",".join(events)]
+    return _run_cli(args, code)
+
+
+def trace_python_file(path, events=None):
+    """Trace the Python file at ``path``; same return as
+    :func:`trace_python`. The file is passed to the tracer directly
+    (no temp copy), so tracebacks and ``__file__`` point at it.
+    """
+    args = ["--lang", "python", "--file", str(path)]
+    if events is not None:
+        args += ["--events", ",".join(events)]
+    return _run_cli(args, "")
+
+
+def scan(code, events=None):
+    """Scan JavaScript ``code`` — trace, analyze, refract to a vector
+    in one pass — and return the scan document (``vectors``,
+    ``findings``, ``scores``, ``summary``). No event flood: the raw
+    events are not returned unless you trace it yourself.
+    """
+    args = ["--scan"]
+    if events is not None:
+        args += ["--events", ",".join(events)]
+    _, _, doc = _run_cli(args, code, want_scan=True)
+    return doc
+
+
+def scan_python(code, events=None):
+    """Scan Python ``code`` with the native Python tracer; same return
+    as :func:`scan`, with ``summary["language"] == "python"`.
+    """
+    args = ["--lang", "python", "--scan"]
+    if events is not None:
+        args += ["--events", ",".join(events)]
+    _, _, doc = _run_cli(args, code, want_scan=True)
+    return doc
+
+
+def scan_python_file(path, events=None):
+    """Scan the Python file at ``path``; same return as
+    :func:`scan_python`.
+    """
+    args = ["--lang", "python", "--scan", "--file", str(path)]
+    if events is not None:
+        args += ["--events", ",".join(events)]
+    _, _, doc = _run_cli(args, "", want_scan=True)
+    return doc

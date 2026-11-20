@@ -12,6 +12,9 @@ import type {
   TraceFeatures,
   NeuronClassification,
   Perceptron,
+  TraceVector,
+  VectorComparison,
+  ScanResult,
   TranslateResult,
 } from "../index";
 
@@ -96,6 +99,22 @@ const blindSpots: number | null = analysis.scores.fidelity.blindSpotStatements;
 void blindSpots;
 const overheadDenominator: "statements" | "regions" = analysis.scores.overhead.denominator;
 void overheadDenominator;
+
+// 0.9.0: vector refracting and the AI-friendly scan mode.
+const vector: TraceVector = Iroh.toVector(sync.events);
+const vectorNames: string[] = vector.names;
+void vectorNames;
+const cosine: number = Iroh.cosineSimilarity(vector, vector);
+void cosine;
+const distance: number = Iroh.euclideanDistance(vector, vector);
+void distance;
+const comparison: VectorComparison = Iroh.compareVectors(vector, vector);
+void comparison;
+const scanned: ScanResult = Iroh.scanTrace("let s = 0; s;", { analyze: { language: "python" } });
+const scanLanguage: "javascript" | "python" | "cpp" = scanned.summary.language;
+void scanLanguage;
+const truncated: number = scanned.summary.findingsTruncated;
+void truncated;
 
 const traced: AnalyzeTraceResult = Iroh.analyzeTrace("let s = 0; s;", {
   analyze: { source: "let s = 0; s;" },

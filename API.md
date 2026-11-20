@@ -108,6 +108,36 @@ held-out 100/100) and a deterministic `train(samples, epochs,
 learningRate)` for re-training or checking in tests. The perceptron
 classifies hotness only.
 
+``toVector(events)`` / ``cosineSimilarity(a, b)`` / ``euclideanDistance(a, b)`` /
+``compareVectors(a, b)``: Vector refracting (0.9.0) — deterministic
+feature vectors, not LLM embeddings: no model, no vector DB, no new
+dependencies. `toVector()` returns `{ features, vector, names }` — the
+five neuron features (call count, max call depth, repeat rate, branch
+imbalance, event-type mix) plus `coverage` (categories fired / total),
+all normalized to [0, 1], with named features, the ordered numeric
+vector, and `names`. `features.events` is the raw event count (a plain
+count, not part of the normalized vector). The same events give the same
+vector, always; identical traces have Euclidean distance exactly 0 and
+cosine similarity exactly 1, and a one-empty comparison returns cosine
+0. `compareVectors()` returns both measures at once. Arguments may be
+plain number arrays or `toVector()` results; mismatched lengths throw
+instead of guessing.
+
+``scan(events, options)``: AI-friendly scan mode (0.9.0) — trace →
+analyze → vector in one pass, emitting ONE compact document
+`{ vectors, findings, scores, summary }`: the `toVector()` projection,
+the `analyze()` findings (every finding cites its evidence), the
+scorecard (denominators on every number), and a summary that adds
+`language` (default `\"javascript\"`), the neuron classification, and
+`findingsTruncated`. Findings are capped at `maxFindings` (default 200)
+as a safety bound — findings past the cap are dropped and counted in
+`summary.findingsTruncated`, never hidden. The raw events ride along
+only with `includeEvents: true`. Same schema for JS, Python and C++
+traces. `scanTrace(code, options)` / `scanTraceAsync(code, options)` /
+`scanModule(code, options)` are the trace-then-scan one-shot versions
+(mirroring the analyzeTrace family; `options.analyze.source` defaults to
+the code). The CLI `--scan` flag is how Python and C++ traces reach it.
+
 ``translate(code, options)``: Hybrid translation engine (0.8.0). Returns
 `{ code, report }` where `report` is `{ ok, from, to, staticOnly, clean,
 assumptions, unsupported, notes }`. JavaScript out (`to: "python" |
@@ -115,8 +145,9 @@ assumptions, unsupported, notes }`. JavaScript out (`to: "python" |
 program is run through the tracer first, and the events resolve what
 static analysis cannot: runtime types, values, which branches fired).
 The reverse legs (`from: "python" | "cpp"`, `to: "javascript"`) are
-static-only — there is no tracer for Python or C++, and the report says
-so (`staticOnly: true`). Python is parsed with Python's own `ast`
+static-only by design (`staticOnly: true`) — they translate from source
+alone. Native Python and C++ tracers exist since 0.9.0, but the
+translation legs do not use them. Python is parsed with Python's own `ast`
 module (a small stdlib-only helper run through `python3`, which emits
 the AST as JSON); C++ is parsed by a scoped subset parser in the
 library. v1 scope, both directions: functions, arithmetic, loops,
@@ -153,11 +184,23 @@ themselves (see [Listener Specification](#specification)).
 
 #### Using Iroh from Python and C++:
 
-The engine traces JavaScript only, but the `iroh` CLI (`cli/iroh.js`)
-streams trace events as JSON lines, so other languages can consume Iroh
-without speaking JavaScript. Thin clients live in `python/` (stdlib only:
-`run(code, events=None)` → `(events, result)`) and `cpp/` (header-only
-C++17: `iroh::Client::run(code, events)` → `iroh::Trace`). Both find the
+The `iroh` CLI (`cli/iroh.js`) streams trace events as JSON lines, so
+other languages can consume Iroh without speaking JavaScript — and since
+0.9.0 Python and C++ programs trace NATIVELY through the same CLI, with
+the same event shape and the same `analyze()` findings:
+`node cli/iroh.js program.py` (or `--lang python`) runs the Python tracer
+(`sys.settrace` + AST instrumentation, `python/iroh/trace.py`, stdlib
+only); `node cli/iroh.js program.cpp` (or `--lang cpp`) compiles the
+program with `-finstrument-functions` and runs it against the runtime in
+`cpp/iroh_trace_rt.cpp` (function-level only — see the 0.9.0 CHANGELOG
+entry for the honest limits). `--analyze` and `--scan` work for all three
+languages. Thin clients live in `python/` (stdlib only:
+`run(code, events=None)` → `(events, result)`,
+`trace_python(code)` / `trace_python_file(path)`,
+`scan(code)` / `scan_python(code)` / `scan_python_file(path)`) and
+`cpp/` (header-only C++17: `iroh::Client::run(code, events)` →
+`iroh::Trace`, plus `iroh::native::Tracer::trace_code(code)` /
+`trace_file(path)` for tracing C++ itself, no Node needed). Both find the
 CLI in the checkout or via `IROH_CLI`. See the README and each client's
 own README for the full API.
 

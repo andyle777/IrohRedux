@@ -91,6 +91,7 @@ package-lock.json
 # C++ client build outputs
 cpp/example
 cpp/test_client
+cpp/test_filter
 
 # Python bytecode
 __pycache__/

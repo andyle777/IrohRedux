@@ -1,29 +1,62 @@
 #!/usr/bin/env node
-// IrohRedux CLI — run JavaScript through Iroh and stream trace events as
+// IrohRedux CLI — run a program through Iroh and stream trace events as
 // JSON lines, one event per line, so other languages can consume Iroh
-// without speaking JavaScript.
+// without speaking JavaScript. Since 0.9.0 the CLI also traces Python
+// and C++ natively, and scans any language's trace into one compact
+// JSON document for AI consumers.
 //
 //   node cli/iroh.js program.js [--events CALL,IF,VAR]
 //   node cli/iroh.js program.mjs [--module] [--events CALL,IF,VAR]
 //   cat program.js | node cli/iroh.js [--events CALL]
+//   node cli/iroh.js program.py [--lang python]
+//   node cli/iroh.js program.cpp [--lang cpp]
 //   node cli/iroh.js program.js --analyze
+//   node cli/iroh.js program.py --scan
 //   node cli/iroh.js program.js --translate python
 //   node cli/iroh.js program.py --translate javascript
+//
+// The language is --lang python|cpp|javascript, or inferred from the
+// file extension (.py -> python, .cpp/.cc/.cxx -> cpp, anything else ->
+// javascript); stdin defaults to javascript.
 //
 // Output (stdout, JSONL):
 //   {"type":"event","event":"CALL","category":"CALL","trigger":"before",
 //    "hash":12,"indent":0,"name":"factorial","arguments":[[3]],"external":false}
 //   {"type":"result","value":6}
 //   {"type":"analysis","findings":[...],"scores":{...},"summary":{...},"neuron":{...}}
+//   {"type":"scan","vectors":{...},"findings":[...],"scores":{...},"summary":{...}}
 //   {"type":"translation","from":"javascript","to":"python","code":"...","report":{...}}
 //
 // --analyze appends an analysis line (see src/analyze.js) after the
-// result line. --translate skips tracing and translates the program
-// instead (see src/translate.js); it takes precedence over --events
-// and --module, and exits 1 when the report lists anything
-// unsupported. --from defaults by file extension (.py -> python,
-// .cpp/.cc/.cxx -> cpp, anything else -> javascript); stdin defaults
-// to javascript.
+// result line. --scan appends ONE scan line (see src/scan.js) instead
+// of the raw event flood: the scan runs trace -> analyze -> vector in
+// one pass and emits { vectors, findings, scores, summary } — no event
+// lines are printed in scan mode unless --include-events embeds the
+// raw events in the scan document. --translate skips tracing and
+// translates the program instead (see src/translate.js); it takes
+// precedence over --events and --module, and exits 1 when the report
+// lists anything unsupported. --from defaults by file extension (.py
+// -> python, .cpp/.cc/.cxx -> cpp, anything else -> javascript);
+// stdin defaults to javascript.
+//
+// Language notes (0.9.0 native tracers):
+// - Python runs through python/iroh/trace.py (sys.settrace + AST
+//   instrumentation, stdlib only). The program's own stdout is
+//   redirected to stderr while it runs, so the JSONL stream stays
+//   clean; its prints are still visible, on the other stream.
+// - C++ runs through cpp/iroh_trace_rt.cpp: the program is compiled
+//   with -finstrument-functions -rdynamic -O0 and linked against the
+//   runtime (compiled without instrumentation), then run with its
+//   stderr as the event channel and its stdout forwarded to this
+//   process's stderr. Non-JSON lines on that channel are the
+//   program's own stderr output, forwarded to this process's stderr
+//   instead of dropped. v1 is function-level only. The result line for
+//   C++ is the program's exit code; for Python it is null (a Python
+//   program has no completion value).
+// - Both tracers inherit the CLI's stdin, so a traced program that
+//   reads input (input(), scanf) behaves as if run directly. Neither
+//   tracer imposes a timeout: a program that never terminates hangs
+//   the CLI, exactly as running it directly would.
 //
 // Errors are a final {"type":"error",...} line and a non-zero exit code.
 // Use --no-result to skip the result line. Requires the built dist
@@ -37,13 +70,25 @@
 "use strict";
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 const Iroh = require("../dist/iroh-node.js");
 // The singleton carries the label tables and the event projection (see
 // src/setup.js and src/utils.js). The CLI uses Iroh.eventToJSON so its
 // JSON lines are the same shape as Iroh.trace() events.
 const CATEGORY = Iroh.CATEGORY;
+
+const PYTHON = process.env.IROH_PYTHON || "python3";
+const CXX = process.env.IROH_CXX || "g++";
+// spawnSync's default maxBuffer is 1 MiB — a deep C++ recursion emits
+// ~4 MB of events and would die with ENOBUFS and zero events. 512 MiB
+// is far above any sane trace (and the run would OOM on events long
+// before that, since they are all held in memory anyway).
+const MAX_BUFFER = 512 * 1024 * 1024;
+const TRACE_PY = path.join(__dirname, "..", "python", "iroh", "trace.py");
+const CPP_RT = path.join(__dirname, "..", "cpp", "iroh_trace_rt.cpp");
 
 // Normalize any thrown value into an error line. A program may throw a
 // string, a number, or null — those have no .name/.message, so without
@@ -62,8 +107,10 @@ function printLine(obj) {
 
 function printUsage() {
   process.stderr.write(
-    "Usage: iroh <file.js> [--events CALL,IF,VAR] [--no-result] [--analyze]\n" +
+    "Usage: iroh <file.js> [--events CALL,IF,VAR] [--no-result] [--analyze] [--scan]\n" +
     "       iroh <file.mjs> [--module] [--events CALL,IF,VAR]\n" +
+    "       iroh <file.py> [--lang python] [--scan]\n" +
+    "       iroh <file.cpp> [--lang cpp] [--scan]\n" +
     "       cat file.js | iroh [--events CALL,IF,VAR]\n" +
     "       iroh <file.js> --translate python|cpp [--from javascript]\n" +
     "       iroh <file.py|.cpp> --translate javascript [--from python|cpp]\n" +
@@ -72,9 +119,143 @@ function printUsage() {
     ".mjs files (or --module) run as ES modules through Iroh.traceModule();\n" +
     "everything else runs as a script through Iroh.traceAsync().\n" +
     "--analyze appends an analysis line after the result line.\n" +
+    "--scan appends ONE scan line { vectors, findings, scores, summary }\n" +
+    "instead of the event flood; --include-events embeds the raw events\n" +
+    "in the scan document. --lang python|cpp|javascript selects the\n" +
+    "tracer (default: inferred from the file extension).\n" +
     "--translate prints one translation line instead of tracing; --from\n" +
     "defaults by file extension (.py -> python, .cpp/.cc/.cxx -> cpp).\n"
   );
+}
+
+// Parse JSONL text into objects, skipping blank lines and lines that
+// are not JSON (a traced C++ program writing to stderr shares the
+// event channel — its non-JSON lines are skipped, not fatal). When
+// `onSkipped` is given, each skipped line is passed to it, so the
+// caller can forward program output instead of dropping it silently.
+function parseLines(text, onSkipped) {
+  let out = [];
+  if (!text) return out;
+  let lines = text.split("\n");
+  for (let ii = 0; ii < lines.length; ++ii) {
+    let line = lines[ii].trim();
+    if (!line) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch (e) {
+      // Not JSON — program output sharing the channel; skip it.
+      if (onSkipped) onSkipped(line);
+    }
+  }
+  return out;
+}
+
+function inferLanguage(file) {
+  if (file !== null && file.endsWith(".py")) return "python";
+  if (file !== null && /\.(cpp|cc|cxx)$/.test(file)) return "cpp";
+  return "javascript";
+}
+
+// Run the Python tracer on `file` (a real path). Returns
+// { events, result, error } — error is an error-line object or null.
+// stdin is inherited, so a traced program that reads input (input(),
+// sys.stdin.read()) sees the same stdin the CLI was given instead of
+// an immediate EOF.
+function runPython(file, eventsArg) {
+  let proc = spawnSync(PYTHON, [TRACE_PY, "--events", eventsArg, file], {
+    encoding: "utf8",
+    maxBuffer: MAX_BUFFER,
+    stdio: ["inherit", "pipe", "inherit"],
+  });
+  if (proc.error) {
+    return { events: [], result: null, error: errorLine(proc.error, "Could not run " + PYTHON + ": " + proc.error.message) };
+  }
+  let events = [];
+  let result = null;
+  let error = null;
+  let lines = parseLines(proc.stdout);
+  for (let ii = 0; ii < lines.length; ++ii) {
+    let item = lines[ii];
+    if (item.type === "event") events.push(item);
+    else if (item.type === "result") result = item.value;
+    else if (item.type === "error") error = item;
+  }
+  if (proc.status !== 0 && error === null) {
+    error = errorLine(new Error("python tracer exited with code " + proc.status));
+  }
+  return { events: events, result: result, error: error };
+}
+
+// Compile `file` (a .cpp path) with -finstrument-functions against the
+// runtime, run it, and collect its stderr events. Returns
+// { events, result, error } — result is the program's exit code.
+function runCpp(file, eventsArg) {
+  let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-cpp-"));
+  try {
+    let rtObj = path.join(dir, "rt.o");
+    let bin = path.join(dir, "prog");
+    let rt = spawnSync(CXX, ["-std=c++17", "-O0", "-c", CPP_RT, "-o", rtObj], {
+      encoding: "utf8",
+      maxBuffer: MAX_BUFFER,
+    });
+    if (rt.error) {
+      return { events: [], result: null, error: errorLine(rt.error, "Could not run " + CXX + ": " + rt.error.message) };
+    }
+    if (rt.status !== 0) {
+      return { events: [], result: null, error: errorLine(new Error("Could not compile the tracer runtime"), "Could not compile the tracer runtime: " + (rt.stderr || "").trim()) };
+    }
+    let comp = spawnSync(CXX, ["-std=c++17", "-O0", "-finstrument-functions", "-rdynamic", "-g", file, rtObj, "-o", bin, "-ldl"], {
+      encoding: "utf8",
+      maxBuffer: MAX_BUFFER,
+    });
+    if (comp.error) {
+      return { events: [], result: null, error: errorLine(comp.error, "Could not run " + CXX + ": " + comp.error.message) };
+    }
+    if (comp.status !== 0) {
+      return { events: [], result: null, error: errorLine(new Error("Compilation failed"), "Compilation failed: " + (comp.stderr || "").trim()) };
+    }
+    // The binary's stdout is the program's own output — forward it to
+    // this process's stderr so it stays visible without corrupting
+    // the JSONL stream; its stderr is the event channel. stdin is
+    // inherited, so a traced program that reads input (scanf, getline)
+    // sees the same stdin the CLI was given instead of an immediate
+    // EOF.
+    let run = spawnSync(bin, [], {
+      encoding: "utf8",
+      maxBuffer: MAX_BUFFER,
+      stdio: ["inherit", "pipe", "pipe"],
+    });
+    if (run.stdout) process.stderr.write(run.stdout);
+    if (run.error) {
+      return { events: [], result: null, error: errorLine(run.error) };
+    }
+    // Parse the event channel FIRST — even when the program crashed,
+    // the events it emitted before dying are real evidence, and the
+    // non-JSON lines mixed into the channel are the program's own
+    // stderr output, forwarded to this process's stderr instead of
+    // being dropped silently.
+    let events = [];
+    let lines = parseLines(run.stderr, (line) => { process.stderr.write(line + "\n"); });
+    for (let ii = 0; ii < lines.length; ++ii) {
+      if (lines[ii].type === "event") events.push(lines[ii]);
+    }
+    if (eventsArg.toUpperCase() !== "ALL") {
+      let wanted = {};
+      let names = eventsArg.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+      for (let ii = 0; ii < names.length; ++ii) wanted[names[ii]] = true;
+      events = events.filter((e) => wanted[e.category]);
+    }
+    if (run.signal) {
+      return { events: events, result: null, error: errorLine(new Error("Program killed by signal " + run.signal)) };
+    }
+    return { events: events, result: run.status, error: null };
+  } finally {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (e) {
+      // Best effort.
+    }
+  }
 }
 
 async function main() {
@@ -84,8 +265,11 @@ async function main() {
   let wantResult = true;
   let moduleFlag = false;
   let analyzeFlag = false;
+  let scanFlag = false;
+  let includeEventsFlag = false;
   let translateTo = null;
   let fromArg = null;
+  let langArg = null;
   for (let ii = 0; ii < args.length; ++ii) {
     let arg = args[ii];
     if (arg === "--events") {
@@ -104,6 +288,15 @@ async function main() {
       moduleFlag = true;
     } else if (arg === "--analyze") {
       analyzeFlag = true;
+    } else if (arg === "--scan") {
+      scanFlag = true;
+    } else if (arg === "--include-events") {
+      includeEventsFlag = true;
+    } else if (arg === "--lang") {
+      langArg = args[++ii];
+      if (langArg === void 0) { printUsage(); process.exitCode = 2; return; }
+    } else if (arg.startsWith("--lang=")) {
+      langArg = arg.slice("--lang=".length);
     } else if (arg === "--translate") {
       translateTo = args[++ii];
       if (translateTo === void 0) { printUsage(); process.exitCode = 2; return; }
@@ -130,6 +323,23 @@ async function main() {
       process.exitCode = 2;
       return;
     }
+  }
+
+  // Language: explicit --lang, else inferred from the extension.
+  // Validated before reading any file, so a bad --lang is a usage
+  // error (exit 2) even when the file is missing too.
+  let language = langArg ? langArg.toLowerCase() : inferLanguage(file);
+  if (language !== "javascript" && language !== "python" && language !== "cpp") {
+    process.stderr.write("Unknown language: " + language + " (use javascript, python or cpp)\n");
+    printUsage();
+    process.exitCode = 2;
+    return;
+  }
+  if (moduleFlag && language !== "javascript") {
+    process.stderr.write("--module is JavaScript-only\n");
+    printUsage();
+    process.exitCode = 2;
+    return;
   }
 
   let code;
@@ -172,6 +382,10 @@ async function main() {
     return;
   }
 
+  // Language was determined and validated before the file was read
+  // (a bad --lang is a usage error, exit 2, even when the file is
+  // missing too).
+
   // Resolve the requested categories (before running anything, so an
   // unknown category is a usage error, exit 2, not a trace failure).
   let categories;
@@ -189,39 +403,102 @@ async function main() {
     }
   }
 
-  // Modules: an explicit --module, or a .mjs file. Scripts (including
-  // top-level await) go through traceAsync(); modules through
-  // traceModule(), with the file as the base for relative imports.
-  let isModule = moduleFlag || (file !== null && file.endsWith(".mjs"));
-  let out;
-  try {
-    if (isModule) {
-      out = await Iroh.traceModule(code, {
-        events: eventsArg,
-        onEvent: (line) => printLine(line),
-        filename: file || undefined,
-      });
-    } else {
-      out = await Iroh.traceAsync(code, {
-        events: eventsArg,
-        onEvent: (line) => printLine(line),
-      });
+  // Run the trace in the selected language. JavaScript streams its
+  // events as they fire; Python and C++ collect theirs from the
+  // native tracer's output first.
+  let collected = [];
+  let result = null;
+  let traceError = null;
+  if (language === "javascript") {
+    // Modules: an explicit --module, or a .mjs file. Scripts (including
+    // top-level await) go through traceAsync(); modules through
+    // traceModule(), with the file as the base for relative imports.
+    let isModule = moduleFlag || (file !== null && file.endsWith(".mjs"));
+    let out;
+    try {
+      if (isModule) {
+        out = await Iroh.traceModule(code, {
+          events: eventsArg,
+          onEvent: (line) => {
+            collected.push(line);
+            if (!scanFlag) printLine(line);
+          },
+          filename: file || undefined,
+        });
+      } else {
+        out = await Iroh.traceAsync(code, {
+          events: eventsArg,
+          onEvent: (line) => {
+            collected.push(line);
+            if (!scanFlag) printLine(line);
+          },
+        });
+      }
+      result = Iroh.safeValue(out.result, 4, new Set());
+    } catch (e) {
+      traceError = errorLine(e);
+      // The JS tracers attach prior events to the error; keep them.
+      if (e && Array.isArray(e.events)) collected = e.events;
     }
-  } catch (e) {
-    printLine(errorLine(e));
+  } else {
+    // Native tracers need a real file. From stdin, write the code to
+    // a temp file first (the Python tracer filters frames by filename;
+    // the C++ driver compiles the file).
+    let traceFile = file;
+    let tmpDir = null;
+    if (traceFile === null) {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-stdin-"));
+      traceFile = path.join(tmpDir, language === "python" ? "stdin.py" : "stdin.cpp");
+      fs.writeFileSync(traceFile, code, "utf8");
+    }
+    try {
+      let run = language === "python"
+        ? runPython(traceFile, eventsArg)
+        : runCpp(traceFile, eventsArg);
+      collected = run.events;
+      result = run.result;
+      traceError = run.error;
+    } finally {
+      if (tmpDir !== null) {
+        try {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        } catch (e) {
+          // Best effort.
+        }
+      }
+    }
+    // Python and C++ traces print their events after the run, in
+    // order — unless scan mode suppresses the flood.
+    if (!scanFlag) {
+      for (let ii = 0; ii < collected.length; ++ii) printLine(collected[ii]);
+    }
+  }
+
+  if (traceError !== null) {
+    printLine(traceError);
     process.exitCode = 1;
     return;
   }
   if (wantResult) {
-    printLine({ type: "result", value: Iroh.safeValue(out.result, 4, new Set()) });
+    printLine({ type: "result", value: result });
   }
   if (analyzeFlag) {
     // The analysis runs over the collected events, with the source
     // attached so the fidelity score can count its blind spots.
     // (With an --events filter, coverage scores the filter — the
     // analysis note says so.)
-    let analysis = Iroh.analyze(out.events || [], { source: code });
+    let analysis = Iroh.analyze(collected, { source: code });
     printLine(Object.assign({ type: "analysis" }, analysis));
+  }
+  if (scanFlag) {
+    // One compact document: vectors, findings, scores, summary.
+    // The raw events ride along only with --include-events.
+    let doc = Iroh.scan(collected, {
+      language: language,
+      source: code,
+      includeEvents: includeEventsFlag,
+    });
+    printLine(Object.assign({ type: "scan" }, doc));
   }
 }
 

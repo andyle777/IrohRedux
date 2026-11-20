@@ -35,6 +35,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <utility>
 #include <variant>
@@ -450,5 +451,191 @@ class Client {
     }
   }
 };
+
+// ---------------------------------------------------------------------------
+// Native C++ tracer (0.9.0) — trace C++ itself, not JavaScript.
+//
+// Compiles your program with -finstrument-functions against the
+// runtime in cpp/iroh_trace_rt.cpp (compiled without instrumentation),
+// runs it, and parses the JSON lines the hooks write to stderr:
+//
+//   iroh::native::Tracer tracer;
+//   auto trace = tracer.trace_code(
+//     "int add(int a, int b) { return a + b; }"
+//     "int main() { return add(2, 3); }");
+//   for (const auto& e : trace.events)
+//     if (e["event"].as_string() == "FUNCTION_CALL")
+//       std::cout << e["name"].as_string() << "\n";  // add(int, int)
+//
+// v1 is function-level only (see iroh_trace_rt.cpp): no loop/branch/
+// line events, names resolved with dladdr (+ demangling), std::
+// internals filtered out. The program's stdout is discarded — the
+// CLI (`cli/iroh.js --lang cpp`) forwards it to stderr instead if
+// you need it. `exit_code` is the program's exit code; a program
+// killed by a signal raises TraceError.
+//
+// Environment:
+//   IROH_TRACE_RT — path to iroh_trace_rt.cpp (default: found relative
+//                   to the working directory: ./cpp/..., ../cpp/...).
+//   IROH_CXX      — C++ compiler (default: "g++").
+// ---------------------------------------------------------------------------
+namespace native {
+
+struct NativeTrace {
+  std::vector<Json> events;
+  int exit_code = 0;
+  bool has_exit_code = false;
+};
+
+class Tracer {
+ public:
+  Tracer() : rt_(find_runtime()), cxx_(env_or("IROH_CXX", "g++")) {}
+
+  explicit Tracer(std::string runtime_path, std::string cxx = "g++")
+      : rt_(std::move(runtime_path)), cxx_(std::move(cxx)) {}
+
+  const std::string& runtime_path() const { return rt_; }
+
+  NativeTrace trace_code(const std::string& code) {
+    std::string dir = make_temp_dir();
+    try {
+      std::string src = dir + "/prog.cpp";
+      {
+        std::ofstream out(src, std::ios::binary);
+        out << code;
+        if (!out) throw std::runtime_error("could not write temporary file");
+      }
+      NativeTrace trace = compile_and_run(dir, src);
+      remove_dir(dir);
+      return trace;
+    } catch (...) {
+      remove_dir(dir);
+      throw;
+    }
+  }
+
+  NativeTrace trace_file(const std::string& path) {
+    std::string dir = make_temp_dir();
+    try {
+      NativeTrace trace = compile_and_run(dir, path);
+      remove_dir(dir);
+      return trace;
+    } catch (...) {
+      remove_dir(dir);
+      throw;
+    }
+  }
+
+ private:
+  std::string rt_;
+  std::string cxx_;
+
+  static std::string env_or(const char* name, const std::string& fallback) {
+    const char* v = std::getenv(name);
+    return (v && *v) ? v : fallback;
+  }
+
+  static std::string find_runtime() {
+    const char* env = std::getenv("IROH_TRACE_RT");
+    if (env && *env) return env;
+    for (const char* candidate : {"./cpp/iroh_trace_rt.cpp", "../cpp/iroh_trace_rt.cpp",
+                                  "../../cpp/iroh_trace_rt.cpp"}) {
+      if (detail::file_exists(candidate)) return candidate;
+    }
+    throw TraceError(
+        "Could not find the C++ tracer runtime (cpp/iroh_trace_rt.cpp). "
+        "Set IROH_TRACE_RT to its path.",
+        "RuntimeNotFound", {});
+  }
+
+  static std::string make_temp_dir() {
+    std::string pattern = "/tmp/iroh-native-XXXXXX";
+    std::vector<char> buf(pattern.begin(), pattern.end());
+    buf.push_back('\0');
+    char* made = mkdtemp(buf.data());
+    if (!made) throw std::runtime_error("could not create temporary directory");
+    return std::string(made);
+  }
+
+  static void remove_dir(const std::string& dir) {
+    std::string cmd = "rm -rf " + detail::shell_quote(dir) + " 2>/dev/null";
+    int rc = std::system(cmd.c_str());
+    (void)rc;
+  }
+
+  static std::string read_file(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return "";
+    return std::string(std::istreambuf_iterator<char>(in),
+                       std::istreambuf_iterator<char>());
+  }
+
+  // Run a shell command; returns the exit code, or -1 when the command
+  // could not start or died on a signal (signal number in `signal`).
+  static int run_command(const std::string& cmd, int* signal) {
+    int status = std::system(cmd.c_str());
+    if (status == -1) return -1;
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) {
+      if (signal) *signal = WTERMSIG(status);
+      return -1;
+    }
+    return -1;
+  }
+
+  NativeTrace compile_and_run(const std::string& dir, const std::string& source) {
+    std::string rt_obj = dir + "/rt.o";
+    std::string bin = dir + "/prog";
+    std::string log = dir + "/build.log";
+    std::string events_file = dir + "/events.jsonl";
+    int signal = 0;
+
+    std::string rt_cmd = detail::shell_quote(cxx_) + " -std=c++17 -O0 -c " +
+                         detail::shell_quote(rt_) + " -o " + detail::shell_quote(rt_obj) +
+                         " >" + detail::shell_quote(log) + " 2>&1";
+    if (run_command(rt_cmd, &signal) != 0) {
+      throw TraceError("Could not compile the tracer runtime: " + read_file(log),
+                       "CompileFailed", {});
+    }
+    std::string comp_cmd = detail::shell_quote(cxx_) +
+                           " -std=c++17 -O0 -finstrument-functions -rdynamic -g " +
+                           detail::shell_quote(source) + " " + detail::shell_quote(rt_obj) +
+                           " -o " + detail::shell_quote(bin) + " -ldl" +
+                           " >" + detail::shell_quote(log) + " 2>&1";
+    if (run_command(comp_cmd, &signal) != 0) {
+      throw TraceError("Compilation failed: " + read_file(log),
+                       "CompileFailed", {});
+    }
+    // The program's stdout is discarded here (the CLI forwards it to
+    // stderr instead); its stderr is the event channel.
+    std::string run_cmd = detail::shell_quote(bin) + " 2>" +
+                          detail::shell_quote(events_file) + " >/dev/null";
+    int code = run_command(run_cmd, &signal);
+    if (code == -1) {
+      throw TraceError("Program killed by signal " + std::to_string(signal),
+                       "Signalled", {});
+    }
+    NativeTrace trace;
+    trace.exit_code = code;
+    trace.has_exit_code = true;
+    std::ifstream in(events_file);
+    std::string line;
+    while (std::getline(in, line)) {
+      if (line.find_first_not_of(" \t\r\n") == std::string::npos) continue;
+      try {
+        Json item = detail::JsonParser(line).parse();
+        if (item["type"].is_string() && item["type"].as_string() == "event") {
+          trace.events.push_back(std::move(item));
+        }
+      } catch (const std::exception&) {
+        // A traced program writing to stderr shares the channel;
+        // non-JSON lines are skipped, not fatal.
+      }
+    }
+    return trace;
+  }
+};
+
+}  // namespace native
 
 }  // namespace iroh

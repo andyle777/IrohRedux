@@ -79,7 +79,9 @@ const py = Iroh.translate(
 // py.code === "def add(a, b):\n    return a + b\n\nprint(add(2, 3))\n"
 // py.report.ok === true, py.report.staticOnly === false
 
-// Python -> JavaScript (static-only — no tracer for Python)
+// Python -> JavaScript (static-only by design — the reverse legs
+// translate from source alone; native tracers exist since 0.9.0,
+// but translation does not use them)
 const js = Iroh.translate("def add(a, b):\n    return a + b\n\nprint(add(2, 3))\n", {
   from: "python",
   to: "javascript",
@@ -96,6 +98,85 @@ never called in the trace has no parameter types: pass them in
 too: `node cli/iroh.js program.js --translate python` (exit 1 when
 anything was unsupported), and `--from` is inferred from `.py` / `.cpp`
 files.
+
+## Trace Python and C++ natively (0.9.0)
+
+```sh
+node cli/iroh.js program.py --analyze
+node cli/iroh.js program.cpp --analyze
+```
+
+`--lang python|cpp|javascript` forces the language; the extension
+infers it (`.py` → python, `.cpp/.cc/.cxx` → cpp). The events are the
+same JSONL shape as JavaScript traces, so `Iroh.analyze()` works on them
+unchanged — a Python hot loop analyzes to `HOT_LOOP` (150 iterations,
+151 tests), a C++ deep recursion to `DEEP_RECURSION` (maxDepth 31,
+threshold 20).
+
+Python (stdlib only, `python/iroh/trace.py`): `sys.settrace` for calls
+and returns, plus AST instrumentation of `while`/`for` tests
+(`LOOP_TEST`/`LOOP_ENTER`), `if` tests (`IF_TEST`), and `except` handlers
+(`CATCH_ENTER`), with file and line numbers as evidence. Generators
+trace as one call pair (yields don't re-emit calls), and a program
+importing a sibling module works — the tracer puts the script's
+directory at `sys.path[0]`, as `python3 prog.py` does. The program's
+stdout is redirected to stderr while it runs, so the JSONL stream stays
+clean; the result line is `{"type":"result","value":null}`. Honest
+limits: no per-assignment events, only the target file is traced,
+comprehensions/`async for`/lambdas are not loop/branch instrumented,
+single-threaded.
+
+C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
+`-finstrument-functions -rdynamic -O0` and linked against the runtime
+(compiled without instrumentation — the hooks must live in a separate
+file). Function-level only in v1: no loop/branch/line events, so coverage
+is honestly low (2 of 30 categories) and `HOT_LOOP`/`ONE_SIDED_BRANCH`
+cannot fire on a C++ trace. Names resolve via `dladdr` +
+`__cxa_demangle`, falling back to the executable's `.symtab` for local
+symbols (lambdas, `static` and anonymous-namespace functions);
+unresolved names carry `"name": null` and the raw
+`"address"`, never a faked name. `std::` internals are filtered by the
+mangled name's outermost qualifier, so a user function that takes or
+returns a std type is kept. The result line is the program's exit
+code. From Python and C++ directly:
+
+```python
+from iroh import trace_python, scan_python
+events, _ = trace_python("def f(n):\n    return f(n-1) if n else 1\n\nf(3)\n")
+```
+
+```cpp
+#include "iroh.hpp"
+iroh::native::Tracer tracer;
+auto t = tracer.trace_code("int main() { return 42; }\n");
+// t.events, t.exit_code == 42
+```
+
+## Scan the trace (0.9.0)
+
+For AI consumers, `--scan` runs trace → analyze → vector in one pass and
+prints ONE compact document instead of the event flood:
+
+```sh
+node cli/iroh.js program.py --scan
+# {"type":"scan","vectors":{...},"findings":[...],"scores":{...},"summary":{...}}
+```
+
+The document is `{ vectors, findings, scores, summary }`: the trace
+refracted into a deterministic feature vector (named features, all in
+[0, 1] — the 0.8.0 neuron features plus coverage), the findings with
+evidence, the scorecard with denominators on every number, and a summary
+with `language`, the neuron classification, and `findingsTruncated`
+(findings capped at 200 by default; the count of dropped ones is
+reported, never hidden). Raw events ride along only with
+`--include-events`. A 20,000-iteration loop (100k+ raw events) scans to
+under 2% of the raw JSON bytes; scanning the same program twice gives
+byte-identical output. Same schema for JS, Python, and C++ traces.
+Library forms: `Iroh.scanTrace(code)`, `Iroh.scan(events)`,
+`Iroh.toVector(events)`, `Iroh.cosineSimilarity(a, b)` /
+`Iroh.euclideanDistance(a, b)` — identical traces have distance exactly
+0. These are FEATURE VECTORS, not LLM embeddings: no model, no vector
+DB, no new dependencies.
 
 The rest of this guide uses the classic Stage API, which is still fully
 supported and gives you live listeners that can change values mid-flight.

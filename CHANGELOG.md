@@ -1,5 +1,227 @@
 # Changelog
 
+## 0.9.0 — native Python and C++ tracers, vector refracting, AI-friendly scan mode (20 Nov 2026)
+
+IrohRedux stops being a JavaScript-only tracer. Python and C++ programs
+now trace natively, through the same JSON event shape, so
+`Iroh.analyze()` works unchanged across all three languages. And the
+trace itself refracts into a deterministic feature vector, with a scan
+mode that turns trace → analyze → vector into ONE compact JSON document
+for AI consumers — no raw event flood unless asked for. All 206 prior
+tests still pass; the suite is now 265 tests (231 Node + 25 Python + 9 C++),
+after the hardening pass below.
+
+### Native Python tracer — `python/iroh/trace.py` (stdlib only)
+
+- `sys.settrace` for calls and returns: every call of a function
+  defined in the target file emits `FUNCTION_CALL` (trigger "before",
+  with the call arguments) and `FUNCTION_ENTER` (trigger "enter", with
+  the call depth as `indent`); every return emits `FUNCTION_CALL_END`
+  (trigger "after", with the return value) and `FUNCTION_LEAVE`.
+  Frames from other files (imports, the standard library) are not
+  traced.
+- AST instrumentation of the target file before it runs, so the
+  analyzer's loop/branch/catch findings work: `while` and `for` tests
+  are wrapped in a hook emitting `LOOP_TEST` (value true/false) and
+  `LOOP_ENTER` on the first true test; `if` tests emit `IF_TEST`; the
+  first statement of every `except` handler emits `CATCH_ENTER`.
+  Hashes are CRC32 of kind:file:line — deterministic across runs.
+- Proven end to end: a Python hot loop (150 iterations) traced then
+  analyzed yields `HOT_LOOP` with `iterations: 150, tests: 151`; a
+  caught exception yields `THROWING_PATH`; factorial(3) traces calls
+  `[3], [2], [1], [0]` with returns `[1, 1, 2, 6]` and depth 0–3.
+- The traced program's stdout is redirected to stderr while it runs,
+  so the JSONL stream on stdout stays clean (its prints are still
+  visible, on the other stream). Uncaught exceptions end with a final
+  `{"type":"error",...}` line and exit 1; the result line is
+  `{"type":"result","value":null}` — a Python program has no
+  completion value.
+- Python client: `trace_python(code)` / `trace_python_file(path)` and
+  `scan_python(code)` / `scan_python_file(path)` (via the CLI).
+- Honest limits: NO per-assignment events — assignments are not
+  instrumented, so no `ASSIGN` events fire (every assignment is a
+  blind spot here). Comprehensions, `async for` and lambdas' bodies
+  are not loop/branch instrumented. Only the target file is traced;
+  functions imported from other modules run untraced. Single-threaded
+  (`threading.settrace` is not installed). A program that replaces
+  `sys.settrace` itself will break the trace.
+
+### Native C++ tracer — `cpp/iroh_trace_rt.cpp` (function-level only)
+
+- The program is compiled with `-finstrument-functions -rdynamic -O0`
+  and linked against the runtime, which is compiled WITHOUT
+  instrumentation (the hooks must live in a separate uninstrumented
+  file — defining them in the instrumented file fails, and
+  `no_instrument_function` alone does not fix it). The hooks emit one
+  JSON line per function entry/exit on stderr, in the CLI's event
+  shape, with names resolved by `dladdr` + `__cxa_demangle`.
+- Proven end to end: factorial(3) traces `main` + 4× `factorial(int)`
+  at depths 0–4; `countdown(30)` analyzes to `DEEP_RECURSION`
+  (`maxDepth: 31`, threshold 20). The result line is the program's
+  exit code.
+- v1 is FUNCTION-LEVEL ONLY: `-finstrument-functions` gives no
+  line/loop/branch events, so a C++ trace has no `LOOP_TEST`, `IF_TEST`
+  or `CATCH_ENTER` — coverage is honestly low (2 of 30 categories) and
+  `HOT_LOOP`/`ONE_SIDED_BRANCH`/`THROWING_PATH` cannot fire on a C++
+  trace. `std::` internals instantiated in the user's translation unit
+  are filtered out by parsing the MANGLED name's outermost qualifier
+  (see the hardening pass below), and unresolved names fall back to
+  the executable's `.symtab` before giving up as null.
+  When a name cannot be resolved the event carries `"name": null` and
+  the raw `"address"` — never a faked name. Only one translation unit
+  (a single .cpp file) is supported in v1; `-O0` is used on purpose,
+  since inlined functions get no hooks at all. A traced program that
+  writes to stderr shares the event channel (the CLI driver skips
+  non-JSON lines, forwarding the program's own stderr output to its
+  own stderr); its stdout is forwarded to the CLI's stderr by the
+  CLI, and discarded by the C++ native client.
+- C++ client: `iroh::native::Tracer::trace_code()` /
+  `trace_file()` — compile, run, parse the stderr JSONL, no Node
+  needed. `exit_code` is the program's exit code; a program killed by
+  a signal raises `TraceError`.
+
+### CLI — `--lang` and `--scan`
+
+- `node cli/iroh.js program.py` / `program.cpp` traces natively now —
+  `--lang python|cpp|javascript`, or inferred from the extension
+  (`.py` → python, `.cpp/.cc/.cxx` → cpp). `--analyze` and `--events`
+  work for all three languages. `--module` stays JavaScript-only.
+- `--scan` runs trace → analyze → vector in one pass and prints ONE
+  `{"type":"scan",...}` line instead of the event flood. See below.
+
+### Vector refracting + AI-friendly scan mode — `src/vectors.js`, `src/scan.js`
+
+- `Iroh.toVector(events)` refracts a trace into a deterministic
+  numeric feature vector: the 0.8.0 neuron features (call count, max
+  call depth, repeat rate, branch imbalance, event-type mix) plus
+  coverage (categories fired / total), all normalized to [0, 1], with
+  NAMED features, the ordered numeric `vector`, and `names`. These are
+  FEATURE VECTORS, not LLM embeddings: no model, no vector DB, no new
+  dependencies, no randomness. Same events → same vector, always.
+- `Iroh.cosineSimilarity(a, b)` / `Iroh.euclideanDistance(a, b)` /
+  `Iroh.compareVectors(a, b)` — identical traces have distance
+  exactly 0 and cosine exactly 1; mismatched lengths throw instead of
+  guessing.
+- `Iroh.scan(events, options)` / `scanTrace(code, options)` /
+  `scanTraceAsync()` / `scanModule()` emit ONE compact document
+  `{ vectors, findings, scores, summary }`: the vector projection, the
+  analyze() findings (every finding cites its evidence), the scorecard
+  (denominators on every number), and a summary that adds `language`,
+  the neuron classification, and `findingsTruncated`. Findings are
+  capped at `maxFindings` (default 200) as a safety bound — the count
+  of dropped findings is reported, never hidden. The raw events ride
+  along only with `includeEvents: true`. Same schema for JS, Python
+  and C++ traces.
+- Bounded, tested: a 20,000-iteration loop traces to 100k+ raw events
+  and scans to under 2% of the raw JSON bytes (and under the 64 KiB
+  sanity bound). Scanning the same program twice gives byte-identical
+  output.
+- Cross-language, honestly: the same loop in JS and Python agrees on
+  the language-independent features (calls, depth, imbalance) and
+  analyzes to the same `HOT_LOOP` with 150 iterations — but the vectors
+  are NOT identical, because repeat/mix/coverage measure
+  instrumentation granularity, and the JS engine instruments far more
+  (literals, assignments, binary ops) than the Python tracer's
+  call/loop/branch events. The test asserts exactly that, with the
+  reason in the comment.
+- The 0.8.0 translation legs stay static-only by design (the reverse
+  legs translate from source alone). Native Python/C++ tracers exist
+  now, but translation does not use them — the docs that said "there
+  is no tracer for those languages" now say so correctly.
+
+### Hardening pass (0.9.0, same release — audit-and-patch on the 0.9.0 additions only)
+
+- Python tracer: a generator yielding N values traced as N+1 calls —
+  `sys.settrace` fires a "return" event per yield and a "call" per
+  resume. The tracer now tells a yield from a real return by the
+  opcode at `f_lasti` (`YIELD_VALUE`/`SEND` = suspend, `RETURN_*` =
+  return; a frame whose last event was an exception is really exiting,
+  which covers `raise` and `close()`), so a generator is ONE call pair
+  and a suspended generator leaves the call stack (its depth no longer
+  inflates other calls' indents). `def f(a, b=2, *args, c, **kw)` raised
+  `TypeError: 'int' object is not iterable` — `co_varnames` is
+  positional, kwonly, `*args`, `**kwargs`, and the code read `*args` at
+  the kwonly slot; fixed, and kwonly args are now reported in
+  `arguments` (merged with `**kwargs`). Return events carried the
+  running depth, one more than their call's indent; they now carry the
+  frame's own indent, like the JS engine's `FUNCTION_LEAVE`. A program
+  importing a sibling module failed under the tracer only
+  (`ModuleNotFoundError`): the tracer now puts the script's directory
+  at `sys.path[0]`, as `python3 prog.py` does, and restores it after.
+- C++ tracer: the emitted-stack was a fixed 4096 entries — past it,
+  exits popped the wrong frame's flag and pairing shifted (a 5000-deep
+  recursion with mixed filtered/unfiltered frames came out with
+  61,750 CALL_ENDs for 45,022 CALLs and a simulated depth of −16,728).
+  The stack now grows by doubling. The `std::` noise filter tested
+  "demangled name contains `std::` anywhere", which dropped every user
+  function taking or returning a std type — `std::string greet(...)`
+  vanished — and the first fix attempt (token before the first `(`)
+  leaked std internals whose names carry template arguments
+  (`std::__str_concat`, `std::operator+`, `std::distance`). The filter
+  now parses the MANGLED name's outermost qualifier (Itanium prefix:
+  `St` / `N...St` / `__`-leading source name / thunk and local-name
+  forms), with a unit test (`cpp/test_filter.cpp`, 19 cases). Local
+  symbols (lambdas, `static` and anonymous-namespace functions)
+  resolved to `null` because `dladdr` only sees dynamic symbols; the
+  runtime now falls back to the executable's `.symtab`, parsed lazily
+  from `/proc/self/exe` (ELF64, STT_FUNC symbols, binary search by
+  address, ET_DYN load bias) — `helper`, `(anonymous namespace)::
+  anon_helper` and `main::{lambda...}::operator()` all resolve now.
+- CLI: a program killed by a signal (e.g. `abort()`) returned only the
+  error line — the events it emitted before dying were parsed after the
+  signal check and dropped. The event channel is now parsed before the
+  signal check, so a crash keeps its events. `spawnSync`'s default
+  1 MiB `maxBuffer` killed a 5000-deep C++ recursion with ENOBUFS and
+  zero events (~4 MB of events); all CLI `spawnSync` calls now pass
+  512 MiB. Traced programs got EOF on stdin (`input()` raised EOFError,
+  `scanf` read nothing); both tracers now inherit the CLI's stdin. A
+  traced C++ program's own stderr lines were silently dropped from the
+  event channel; non-JSON lines are now forwarded to the CLI's stderr.
+- Scan: `maxFindings: -5` emitted all but the last five findings and
+  reported a truncation of 305 (`slice(0, -5)`); the cap is now clamped
+  to >= 0, with a non-number falling back to the default 200.
+  `scanTrace`/`scanTraceAsync`/`scanModule` wrote their `source`/
+  `language` defaults onto the caller's `options.analyze` object; they
+  now copy it first.
+- Docs: the README's scan example showed numbers from no real run
+  (303 events, `mix` 0.2, `coverage` 0.23, `hash` 1, kind
+  `ForStatement` for a Python trace); it now shows the actual output
+  of `node cli/iroh.js program.py --scan` on that program (152 events,
+  `mix` 1, `coverage` 0.0333). The README footer changelog line now
+  mentions 0.9.0.
+
+### Known limitations (0.9.0)
+
+- Python: no per-assignment events; comprehensions, `async for` and
+  lambdas not loop/branch instrumented; target file only; single
+  thread; a program that replaces `sys.settrace` breaks the trace. A
+  generator closed with `.close()` (or abandoned while suspended)
+  leaves its CALL unclosed in the stream: `sys.settrace` fires no
+  event at all for a close with no `finally` block, so the tracer
+  cannot observe it — the depth is still correct, because the yield
+  already dropped it.
+- C++: function-level only; single .cpp file; `-O0` only (inlined
+  functions invisible); `std::`/`__` names filtered (by the mangled
+  name's outermost qualifier); unresolved names are null with an
+  address (only on a stripped binary now — `.symtab` covers the rest);
+  the program's stderr shares the event channel; the C++ native client
+  discards program stdout. `Tc` (covariant-return) thunks are not
+  parsed by the filter and are kept — a kept std thunk is noise, a
+  dropped user function would be a bug, and the safe direction wins.
+- Scan: findings capped at 200 by default (count reported); the scan
+  of a Python/C++ trace cannot count blind spots from source (the
+  fidelity score's source parser is Acorn — Python/C++ sources parse
+  to null, so `blindSpotStatements` is null, uncounted, not zero).
+- No timeout anywhere: a program that never terminates hangs the
+  tracer and the CLI indefinitely, exactly as running it directly
+  would. No timeout is imposed — adding one silently would change
+  behaviour; a caller that needs one should wrap the CLI run.
+- The 0.8.0 subset parser was NOT reused to add loop/branch
+  instrumentation to C++: it translates C++ to JS, it does not rewrite
+  C++ source with hooks, and bending it into a rewriter would have
+  been a new engine, not a stretch goal. C++ stays function-level in
+  0.9.0.
+
 ## 0.8.0 — AI analysis layer and hybrid translation engine (20 Nov 2026)
 
 The machine-learning / neuron / AI-input work, plus the translation

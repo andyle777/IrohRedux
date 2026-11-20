@@ -40,3 +40,24 @@ Run from the repo root so `./cli/iroh.js` is found, or set `IROH_CLI`.
   (e.g. `"SyntaxError"`) and `.events` (the events that fired first).
 - `iroh::Json` — the parsed JSON value: `.as_string()`, `.as_number()`,
   `.as_bool()`, `.as_array()`, `.as_object()`, `["key"]`, `.has(key)`.
+
+## Trace C++ natively (0.9.0)
+
+- `iroh::native::Tracer()` — finds the runtime `cpp/iroh_trace_rt.cpp`
+  via `IROH_TRACE_RT`, else `./cpp/`, `../cpp/`, `../../cpp/`. Compiler
+  via `IROH_CXX` (default `g++`).
+- `trace_code(code)` / `trace_file(path)` — compile the program with
+  `-finstrument-functions -rdynamic -O0`, link it against the runtime,
+  run it, and return an `iroh::NativeTrace` with `.events` (the parsed
+  stderr JSONL) and `.exit_code` (the program's exit code; `has_exit_code`
+  false when the program was killed by a signal). Throws `TraceError` on
+  a compile failure or a signal death.
+- `trace_code` / `trace_file` with a `std::set<std::string>` of event
+  names filter the events the same way `run()` does.
+
+Function-level only in v1: `-finstrument-functions` gives no
+loop/branch/line events, so coverage is honestly low (2 of 30
+categories). Names resolve via `dladdr` + `__cxa_demangle`; unresolved
+names are `null` with the raw `address`, never a faked name. Single
+`.cpp` file, `-O0` only (inlined functions get no hooks). See the 0.9.0
+CHANGELOG entry.

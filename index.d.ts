@@ -1,4 +1,4 @@
-// TypeScript definitions for IrohRedux 0.8.0.
+// TypeScript definitions for IrohRedux 0.9.0.
 //
 //   import Iroh from "iroh";
 //   const { events, result } = Iroh.trace("factorial(3);", { events: ["CALL"] });
@@ -312,6 +312,86 @@ export interface AnalyzeModuleResult extends TraceModuleResult {
   analysis: AnalysisResult;
 }
 
+// --- 0.9.0: vector refracting + AI-friendly scan mode --------------------
+// (src/vectors.js, src/scan.js)
+
+/** The six vector features, in VECTOR_FEATURE_NAMES order. */
+export type VectorFeatureName =
+  | "calls"
+  | "depth"
+  | "repeat"
+  | "imbalance"
+  | "mix"
+  | "coverage";
+
+/** A trace refracted into a deterministic numeric feature vector. */
+export interface TraceVector {
+  /**
+   * The named features, all normalized to [0, 1] — the five neuron
+   * features plus coverage (categories fired / total categories) —
+   * plus `events`, the raw event count (a plain count, not part of
+   * the normalized vector).
+   */
+  features: TraceFeatures & { coverage: number; events: number };
+  /** The six normalized features, in `names` order. */
+  vector: number[];
+  /** The feature names, in `vector` order. */
+  names: VectorFeatureName[];
+}
+
+/** Both similarity measures between two vectors at once. */
+export interface VectorComparison {
+  /** Cosine similarity: 1 identical, 0 orthogonal, -1 opposite. */
+  cosine: number;
+  /** Euclidean distance: 0 identical, growing as they differ. */
+  euclidean: number;
+}
+
+export interface ScanOptions extends AnalyzeOptions {
+  /** Which language the trace came from (default "javascript"). */
+  language?: "javascript" | "python" | "cpp";
+  /**
+   * Safety bound on the findings in the document (default 200).
+   * Findings past the cap are dropped and counted in
+   * summary.findingsTruncated — never hidden.
+   */
+  maxFindings?: number;
+  /**
+   * When true, the raw events ride along in the document under
+   * `events` (default false — the scan replaces the flood).
+   */
+  includeEvents?: boolean;
+}
+
+/** The scan document: one compact JSON object per trace. */
+export interface ScanResult {
+  /** The trace refracted into a feature vector (see TraceVector). */
+  vectors: TraceVector;
+  /** The analyze() findings, capped at maxFindings. */
+  findings: AnalysisFinding[];
+  /** The analyze() scorecard, denominators on every number. */
+  scores: AnalysisScores;
+  summary: AnalysisSummary & {
+    /** Which language the trace came from. */
+    language: "javascript" | "python" | "cpp";
+    /** The whole-trace window classification. */
+    neuron: { label: "hot" | "normal"; score: number };
+    /** Findings dropped by the maxFindings cap (0 when none). */
+    findingsTruncated: number;
+  };
+  /** Present only with includeEvents: the raw events. */
+  events?: TraceEvent[];
+}
+
+export interface ScanTraceOptions extends TraceOptions {
+  /** Thresholds / source / language / cap — `source` defaults to the code. */
+  analyze?: ScanOptions;
+  /** Shorthand for analyze.maxFindings. */
+  maxFindings?: number;
+  /** Shorthand for analyze.includeEvents. */
+  includeEvents?: boolean;
+}
+
 // --- 0.8.0: hybrid translation engine (src/translate.js) -----------------
 
 export type TranslateFrom = "javascript" | "python" | "cpp";
@@ -392,7 +472,7 @@ export interface IrohAPI {
   readonly CLASS: number;
   readonly AWAIT: number;
 
-  /** The library version, e.g. "0.8.0". */
+  /** The library version, e.g. "0.9.0". */
   readonly VERSION: string;
 
   /** Instruction numbers, keyed by name (e.g. INSTR.FUNCTION_CALL). */
@@ -460,11 +540,39 @@ export interface IrohAPI {
   createPerceptron(weights?: number[], bias?: number): Perceptron;
 
   /**
+   * Vector refracting (0.9.0): deterministic feature vectors, not LLM
+   * embeddings — no model, no vector DB, no new dependencies. Same
+   * events give the same vector, always; identical traces have
+   * distance 0 and cosine 1. `a` and `b` may be plain number arrays
+   * or toVector() results.
+   */
+  toVector(events: TraceEvent[]): TraceVector;
+  cosineSimilarity(a: number[] | TraceVector, b: number[] | TraceVector): number;
+  euclideanDistance(a: number[] | TraceVector, b: number[] | TraceVector): number;
+  compareVectors(a: number[] | TraceVector, b: number[] | TraceVector): VectorComparison;
+
+  /**
+   * AI-friendly scan mode (0.9.0): trace -> analyze -> vector in one
+   * pass, emitting one compact document { vectors, findings, scores,
+   * summary } — no raw event flood unless includeEvents is set. Works
+   * the same on JS, Python and C++ traces (same schema); the CLI
+   * --scan flag is how Python/C++ traces reach it.
+   */
+  scan(events: TraceEvent[], options?: ScanOptions): ScanResult;
+  /** Scan a JS script: trace it, then scan the events. */
+  scanTrace(code: string, options?: ScanTraceOptions): ScanResult;
+  /** Async version of scanTrace(), via traceAsync() (top-level await works). */
+  scanTraceAsync(code: string, options?: ScanTraceOptions): Promise<ScanResult>;
+  /** Module version of scanTrace(), via traceModule(). Node only. */
+  scanModule(code: string, options?: ScanTraceOptions): Promise<ScanResult>;
+
+  /**
    * Hybrid translation engine (0.8.0): JavaScript -> Python / C++
    * (static AST + trace evidence), Python -> JavaScript and C++ ->
-   * JavaScript (static-only — there is no tracer for those languages,
-   * and the report says so). Returns { code, report }; unsupported
-   * constructs are reported in the report, never silently
+   * JavaScript (static-only — the reverse legs translate from source
+   * alone; native Python/C++ tracers exist since 0.9.0, but the
+   * translation legs stay static by design). Returns { code, report };
+   * unsupported constructs are reported in the report, never silently
    * mistranslated. The JS-out leg runs the program through the
    * tracer for evidence — its console.log output is silenced while
    * it runs, so translate() has no visible side effects.
