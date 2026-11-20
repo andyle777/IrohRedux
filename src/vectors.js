@@ -22,7 +22,7 @@
 // order. The vector never carries the raw event count — an unnormalized
 // count would dominate every distance.
 
-import { CATEGORY } from "./labels";
+import { reachableCategories } from "./labels";
 import { extractFeatures, FEATURE_NAMES } from "./neurons";
 
 export const VECTOR_FEATURE_NAMES = FEATURE_NAMES.concat(["coverage"]);
@@ -31,17 +31,22 @@ export const VECTOR_FEATURE_NAMES = FEATURE_NAMES.concat(["coverage"]);
 // plain array Iroh.trace() returns (or the CLI's event lines, or a
 // Python/C++ tracer's — the projection only reads event/category/
 // trigger/hash/indent/value, so it works the same across languages).
-export function toVector(events) {
+// `options.language` (default "javascript") picks the reachable
+// set for the coverage feature (1.1.1, F4): the coverage feature is
+// fired / reachable, not fired / total, so a function-level C++
+// trace is not penalised for the categories its tracer cannot emit.
+export function toVector(events, options) {
+  options = options || {};
   events = Array.isArray(events) ? events : [];
   let features = extractFeatures(events);
-  let totalCategories = Object.keys(CATEGORY).length;
+  let reachableList = reachableCategories(options.language || "javascript");
   let fired = {};
   for (let ii = 0; ii < events.length; ++ii) {
     if (events[ii].category) fired[events[ii].category] = true;
   }
   let firedCount = Object.keys(fired).length;
-  let coverage = totalCategories > 0
-    ? Math.round((firedCount / totalCategories) * 10000) / 10000
+  let coverage = reachableList.length > 0
+    ? Math.round((firedCount / reachableList.length) * 10000) / 10000
     : 0;
   let named = {
     calls: features.calls,
