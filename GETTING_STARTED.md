@@ -1,10 +1,49 @@
-### Getting started
+# FOR HUMANS
 
-The idea behind Iroh is simple. You attach listeners to your code and as soon as the specified code part is reached, it will fire. You can listen for calls, returns, loops or any other supported code type.
+Start here. This file walks through the tool the way you use it:
+install, trace, analyze, translate, direct. The machine-readable
+facts (every CLI flag, the JSON shapes, the coverage denominators)
+are in the [FOR AI](#for-ai) section at the end — the same file,
+machine-readable at the bottom instead of in a second document.
 
-Iroh's listeners are named in regard to [EStree](//github.com/estree/estree/blob/master/es5.md) which is an AST specification format for JavaScript. There is also a list [here](//github.com/andyle777/IrohRedux/blob/master/API.md#specification) which gives an simple overview of all code types you can listen for.
+Works offline — no network required. Nothing phones home, checks
+for updates, or downloads at first run.
 
-## The quick way (0.6.0)
+## Install
+
+From source (needs Node >= 18):
+
+```sh
+git clone https://github.com/andyle777/IrohRedux.git
+cd IrohRedux
+npm install
+npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
+npm test            # 349 tests: 315 Node + 25 Python + 9 C++
+```
+
+Or download a binary from the
+[Releases page](https://github.com/andyle777/IrohRedux/releases):
+the EXE for your desktop (embeds Node 18.5.0), the APK for your
+phone (JavaScript legs only — no python3 on Android).
+
+Check what you are running:
+
+```sh
+node cli/iroh.js --version   # iroh 1.0.1 (engine dist iroh-node.js 1a4ea7c00553, runtime node v24.22.1)
+```
+
+The Python client installs with `pip install -e python/`; the C++
+client is a single header — just `#include "iroh.hpp"`.
+
+## The idea
+
+Attach listeners to your code and as soon as the specified code part
+is reached, it fires. Listen for calls, returns, loops or any other
+supported code type. Listeners are named after
+[EStree](//github.com/estree/estree/blob/master/es5.md); the full list
+is in [API.md](API.md#specification).
+
+## The quick way
 
 If you just want the trace, skip the Stage ceremony — one call does it:
 
@@ -30,15 +69,22 @@ Pass `onEvent` to see each event as it fires. A runtime error throws
 with the events that fired before it on `error.events`. TypeScript types
 ship in `index.d.ts` — no `@types` package needed.
 
-Modules trace with `await Iroh.traceModule(code, { filename })` (0.7.0,
-Node only) — `import`/`export`, import attributes, `import.meta`, and
+Modules trace with `await Iroh.traceModule(code, { filename })`
+(Node only) — `import`/`export`, import attributes, `import.meta`, and
 dynamic `import()` all work, and `result` is the live module namespace
 object. `filename` is the base relative imports resolve against.
-Decorators trace too (0.7.0): `@dec` on classes, methods, getters,
+Decorators trace too: `@dec` on classes, methods, getters,
 setters, and fields parses and runs, and the decorator calls fire
 `CALL` events. `accessor` fields are not supported.
 
-## Analyze the trace (0.8.0)
+From the CLI, the same thing streams as JSON lines:
+
+```sh
+node cli/iroh.js program.js --events CALL,IF
+cat program.js | node cli/iroh.js            # stdin works too
+```
+
+## Analyze the trace
 
 ```js
 import Iroh from "iroh";
@@ -66,7 +112,11 @@ async and module versions. The CLI appends the same analysis with
 `Iroh.classifyWindow(events)` returns its label, score, and the five
 feature values, so the classification can be checked by hand.
 
-## Translate the program (0.8.0)
+Finding codes: `HOT_LOOP`, `ZERO_ITERATION_LOOP`, `DEEP_RECURSION`,
+`REPEATED_SEQUENCE`, `ONE_SIDED_BRANCH`, `THROWING_PATH` — every finding
+cites its evidence (counts, names, hashes).
+
+## Translate the program
 
 ```js
 import Iroh from "iroh";
@@ -99,7 +149,16 @@ too: `node cli/iroh.js program.js --translate python` (exit 1 when
 anything was unsupported), and `--from` is inferred from `.py` / `.cpp`
 files.
 
-## Trace Python and C++ natively (0.9.0)
+Template literals to Python emit concatenation, not f-strings
+(1.0.1 patch, Fix Spec 3.5 Option 1), so a bool, a string literal,
+or a ternary of strings parses on Python 3.9–3.12. Every translate
+result carries a `verify` block: the emitted Python is executed
+under python3 and the result recorded — `ran: null` means not
+attempted, never success, and `stderr` is verbatim when it does
+not run. The report's `ok` still means "text was produced"; the
+`verify` block is what says whether it runs.
+
+## Trace Python and C++ natively
 
 ```sh
 node cli/iroh.js program.py --analyze
@@ -155,7 +214,7 @@ auto t = tracer.trace_code("int main() { return 42; }\n");
 // t.events, t.exit_code == 42
 ```
 
-## Scan the trace (0.9.0)
+## Scan the trace
 
 For AI consumers, `--scan` runs trace → analyze → vector in one pass and
 prints ONE compact document instead of the event flood:
@@ -181,7 +240,7 @@ Library forms: `Iroh.scanTrace(code)`, `Iroh.scan(events)`,
 0. These are FEATURE VECTORS, not LLM embeddings: no model, no vector
 DB, no new dependencies.
 
-## Watch it live (0.9.0)
+## Watch it live
 
 Scan is analyze-after-the-fact. The live wire analyzes WHILE the
 program runs — findings stream the moment they trip:
@@ -207,7 +266,7 @@ saying so: `ZERO_ITERATION_LOOP` and `ONE_SIDED_BRANCH`. For Python
 and C++ the live lines print after the run, because the native tracers
 buffer their events; for JavaScript they stream as the program runs.
 
-## Direct the run (1.0.0)
+## Direct the run
 
 Watching is half the story. The director acts on what the live wire
 finds — while the program is still running:
@@ -267,18 +326,12 @@ top-level await directs it (via `directModule()` / `directAsync()`).
 `--direct` combines with `--analyze`, `--scan`, and `--live`; the
 analysis and scan lines follow the direct-summary.
 
+## The classic Stage API
+
 The rest of this guide uses the classic Stage API, which is still fully
 supported and gives you live listeners that can change values mid-flight.
 
-## Examples
-
-- [Intro](#intro)
-- [Manipulate functions](#manipulate-functions)
-- [Visualize code](#visualize-code)
-
 ### Intro
-
-This is a short intro about how to use Iroh.
 
 The pipeline of Iroh is simple:
 
@@ -287,8 +340,6 @@ The pipeline of Iroh is simple:
  * Run the stage
 
 ##### 1. Create a stage
-
-The code of this example is also available on [jsfiddle](//jsfiddle.net/58y7p92v/).
 
 At first we need to create a ``stage``. The stage object is the root connection between us and the running code.
 
@@ -318,6 +369,7 @@ listener.on("after", (e) => {
 ````
 
 ##### 3. Run the stage
+
 Our stage is now ready to be executed. Since Iroh patches the code we want to analyze, we need to manually run the patched code afterwards.
 
 ````js
@@ -327,8 +379,6 @@ eval(stage.script);
 ````
 
 Our console should now show up ``"foo => 42"``.
-
-All right, you did your first magic with Iroh!
 
 ### Manipulate functions
 
@@ -342,8 +392,6 @@ function add(a, b) {
 ````
 
 Our goal is to make the function ``add`` always return ``42`` instead of ``a + b``.
-
-The code of this example is also available on [jsfiddle](//jsfiddle.net/8ycm17uu/1/).
 
 ##### Adding the listener
 ````js
@@ -372,9 +420,7 @@ Iroh keeps track of the control-flow of your program, means it generates a numer
 
 This makes it possible to create any kind of model from the running code in realtime. **All** listeners provide an ``RuntimeEvent.indent``!
 
-The code of this example is also available on [jsfiddle](//jsfiddle.net/wwn90rp3/8/).
-
-Input: 
+Input:
 ````js
 if (true) {
   for (let ii = 0; ii < 3; ++ii) {
@@ -422,3 +468,66 @@ After the program finished, your console should come up with something like this
 With each branch deepness level we move in by 1 blank sign.
 
 You may noticed the first blank sign which is caused by ``Iroh.PROGRAM`` - when entering a program, the branch level increments by one and after the program is finished it decrements.
+
+---
+
+# FOR AI
+
+Machine-readable facts. Load this section without guessing. If a
+fact here disagrees with a prose paragraph above, this section wins
+— and the disagreement is a bug; file it.
+
+- Engine: IrohRedux 1.0.1 (patched in place, 20 Nov 2026). No
+  1.1.2. No version bump. The engine is unchanged by the patch.
+  `dist/iroh-node.js` SHA-256:
+  `1a4ea7c00553c262350997eb6f93c7861f0a415d0e170b3ba68bd47280862602`.
+- Three traced languages: JavaScript, Python, C++. No IrohScript,
+  no BASIC, no input synthesiser, no `capabilities`, no `doctor`,
+  no `serve`, no `node`, no `--max-events`.
+- Ask for JSON. Never parse console prose; it is for humans and
+  will change. Event streams are JSON lines, one object per line,
+  with the `language` field always set.
+- Every flag in `iroh --help`: `--events`, `--no-result`,
+  `--file`, `--module`, `--analyze`, `--scan`, `--include-events`,
+  `--live`, `--direct[=throttle|stop]`, `--lang`,
+  `--translate`, `--from`, `--version`, `-h` / `--help`. All of
+  them are documented in `API.md`; CI fails if any flag here is
+  missing from `API.txt` (the generated text form of `API.md`).
+- `--scan` result: `{vectors, findings, scores, summary}`.
+  `vectors` carries `features {calls, depth, repeat, imbalance,
+  mix, coverage, events}`, `vector[6]`, `names[6]`. `findings` is
+  a list of `{code, severity, message, evidence, neuron}`.
+  `summary` carries `{events, findings, warnings, language,
+  infos, neuron {label, score}, maxCallDepth, distinctRegions,
+  findingsTruncated}`. There is NO `unclosedFrames` field in
+  1.0.1 — do not look for it.
+- `--translate` result (one line):
+  `{type:"translation", from, to, code, report}`. `report`
+  carries `{ok, from, to, staticOnly, clean, assumptions,
+  unsupported, notes, verify}`. Template literals to Python emit
+  concatenation, not f-strings; `verify` records the execution
+  check (`ran: null` is not `ran: true`).
+- `--live` lines: `live-finding` (with `firedAt`) as findings
+  trip, then `live-summary` (batch-equal findings, scores,
+  vectors). `--direct` lines: `directive` as the guard acts, then
+  `direct-summary` (findings, directive audit log, analysis).
+- Coverage is fired / 30 for every language in 1.0.1 — the
+  JavaScript category model, applied to all tracers. There is no
+  `reachable` field. A C++ trace at 2 of 30 is complete at
+  function level, not 28 short; a Python trace fires ASSIGN,
+  CATCH, CALL, FUNCTION, IF, LOOP.
+- Findings cap: findings are capped at 200.
+  `summary.findingsTruncated` is the dropped count. If
+  `findingsTruncated > 0`, the finding list is a prefix, not the
+  whole set — say so when you report it. Any score derived from
+  the list is a score over a prefix.
+- Memory model: a finished trace does NOT release its Stage in
+  1.0.1 — the Stage stays registered in `Iroh.stages` and its
+  listeners keep the trace alive. There is no `Stage.release`
+  and no `releaseTraceRun` in this generation. Full model:
+  `docs/memory.md` in the repo, `txt/memory.md` in the AI bundle.
+- Works offline — no network required. No artifact phones home,
+  checks for updates, or downloads at first run.
+- Full machine-readable reference: `API.md` (FOR AI section) and
+  `README.md` (FOR AI section). The AI bundle regenerates its
+  text files from the same markdown sources, so they cannot drift.
