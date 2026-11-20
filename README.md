@@ -35,62 +35,46 @@ network, no model — deterministic rules over a trace.
 ### Releases
 
 Three releases, all on the
-[Releases page](https://github.com/andyle777/IrohRedux/releases):
+[Releases page](https://github.com/andyle777/IrohRedux/releases).
+**1.1.1 is the current release** — take it unless you have a reason not to.
 
-- **1.0.1 — the solid base.** The all-generations audit-and-patch pass
-  over 0.4.0–1.0.0: every known limitation re-read and re-probed, the
-  real bugs fixed (translator `%` and number formatting, director
-  member and scoped sets, `directAsync`/`directModule`, decorated
-  computed keys, Python per-assignment events). 348 tests (314 Node +
-  25 Python + 9 C++).
-- **1.1.1 — the patch.** The trace memory release: a finished trace
-  now releases its Stage instead of keeping it registered forever
-  (137 bytes/event retained, unbounded — now a 472,976-byte residual
-  heap on a 500,013-event trace). Plus: an opt-in event cap
-  (`--max-events`), generator tolerance in the analysis, a static-only
-  translate option, BASIC `WHILE`/`WEND`, and a `--verify`
-  determinism check. Then Aether's fix ledger, verified against the
-  shipped 1.1.0: D1 (a template literal holding a boolean no longer
-  emits a Python f-string that is a SyntaxError below 3.12 — the
-  bool now routes through a `__iroh_jsbool` helper), D2 (GCC's
-  `_GLOBAL__` static initialisers no longer appear as a real call at
-  the top of a C++ trace), F1 (tests that need Node 24 skip with a
-  reason naming the feature, `engines.node` is now `>= 22`,
-  `iroh capabilities` reports what this box can run), F2 (`npm test`
-  prints one machine-readable summary line per leg and `iroh doctor`
-  shows it with the toolchains and the dist hash), F3 (a dist drift
-  gate — the checked-in bundles must match a fresh rebuild), F4
-  (coverage is now fired / reachable per tracer, so a C++ trace
-  reads "2 of 2 reachable" instead of "2 of 30"), plus property
-  tests, a fuzz harness, and CI. 699 tests (435 Node + 25 Python +
-  9 C++ + 230 IrohScript/BASIC). No new languages, no event-shape
-  change, no breaking changes.
-
-  1.1.1 assets (SHA-256):
-  `iroh-1.1.1-linux` — 48,973,231 bytes,
-  `38c8be955eb363136ab38350961da4047cfd6e2eaf0deddfe29d95bdb0be8845`;
-  `iroh-1.1.1-macos` — 53,960,151 bytes,
-  `7a3de711ab24089762a31327aa6092f7619a35e46fdad0c75ef87db888f65e85`;
-  `iroh-1.1.1-macos-arm64` — 48,089,876 bytes,
-  `9e1bb1715037b23d189bbfbab37dd92862fff7e824e21f0baadabc4b64bbe429`;
-  `iroh-1.1.1-win.exe` — 40,343,739 bytes,
-  `83573c1def2798fe91b919f98720bb013efbd40f5320bdfb7562922e27d4a19e`;
-  `iroh-1.1.1.apk` — 64,858,403 bytes,
-  `414252412b9f32ac59c5118324ad66e6a6368849fb154faf98109256234a6df7`;
-  `iroh-1.1.1-ai-bundle.zip` — 138,517 bytes,
-  `55d384550480c550b5e418f62ad5457afe5cd08d5cb40bb8d47d966baad705bc`.
+- **1.1.1 — the patch.** The trace memory release, plus Aether's fix ledger.
+  - A finished trace releases its Stage instead of keeping it registered
+    forever: a 500,013-event trace now leaves a 472,976-byte residual
+    heap, down from 137 bytes retained per event, unbounded.
+  - An opt-in event cap (`--max-events`), generator tolerance in the
+    analysis, a static-only translate option, BASIC `WHILE`/`WEND`,
+    and a `--verify` determinism check.
+  - D1: a template literal holding a boolean no longer emits a Python
+    f-string that is a SyntaxError below 3.12 — the bool now routes
+    through a `__iroh_jsbool` helper.
+  - D2: GCC's `_GLOBAL__` static initialisers no longer appear as a
+    real call at the top of a C++ trace.
+  - F1: tests that need Node 24 skip with a reason naming the feature;
+    `engines.node` is now `>= 22`; `iroh capabilities` reports what
+    this box can run.
+  - F2: `npm test` prints one machine-readable summary line per leg;
+    `iroh doctor` shows it with the toolchains and the dist hash.
+  - F3: a dist drift gate — the checked-in bundles must match a fresh
+    rebuild.
+  - F4: coverage is now fired / reachable per tracer, so a C++ trace
+    reads "2 of 2 reachable" instead of "2 of 30".
+  - Plus property tests, a fuzz harness, and CI.
+  - 699 tests (435 Node + 25 Python + 9 C++ + 230 IrohScript/BASIC).
+    No new languages, no event-shape change, no breaking changes.
 - **1.1.0 — the new release.** The IrohScript foundation rework
   (IrohScript and BASIC trace first-class, the five-language
   translator, the IrohScript compiler with the perceptron core in
   IrohScript), the input synthesiser on the live wire, and the redo
   audit pass over the rework (five fresh bugs fixed, ES2026 probe fix
   folded in). 649 tests (392 Node + 25 Python + 9 C++ + 223
-  IrohScript/BASIC Python).
-
-1.1.0 contains everything in 1.0.1. Take 1.0.1 if you want the audited
-base; take 1.1.0 if you want the five languages and the synthesiser.
-Take 1.1.1 for the Aether fixes on top of 1.1.0 — it is the current
-release.
+  IrohScript/BASIC).
+- **1.0.1 — the solid base.** The all-generations audit-and-patch pass
+  over 0.4.0–1.0.0: every known limitation re-read and re-probed, the
+  real bugs fixed (translator `%` and number formatting, director
+  member and scoped sets, `directAsync`/`directModule`, decorated
+  computed keys, Python per-assignment events). 348 tests (314 Node +
+  25 Python + 9 C++).
 
 ### Install — humans
 
@@ -666,20 +650,5 @@ entry functions; shipped in 1.1.0.
 ---
 
 *IrohRedux is a fork of Felix Maier's [Iroh](https://github.com/maierfelix/Iroh)
-0.3.0 (2018), fixed and extended. The core idea is his; the 0.4.0 fixes, the
-0.5.0 CLI and polyglot clients, the 0.5.1 polish, the 0.6.0 syntax and
-modern SDK, and the 0.7.0 modules, top-level await, and decorators, and
-the 0.8.0 analysis layer and translation engine, the 0.9.0 native
-Python/C++ tracers, vector refracting, scan mode, and live wire, the
-1.0.0 AI director and live code engine, the 1.0.1 all-generations
-audit-and-patch pass (translator number formatting, director member and
-scoped sets, directAsync/directModule, decorated computed keys and
-accessor fields, Python per-assignment events), the 1.1.0 IrohScript
-foundation rework (IrohScript and BASIC as first-class traced
-languages, the five-language translator, the IrohScript compiler
-with the perceptron core in IrohScript), and the 1.1.0 input
-synthesiser on the live wire, and the 1.1.1 patch (the trace memory
-release, the `--max-events` cap, generator tolerance, static-only
-translate, BASIC `WHILE`/`WEND`, the `--verify` check, and Aether's
-fix ledger: the D1/D2 defects, the F1/F2/F3/F4 reporting fixes, and
-the property tests, fuzzer, and CI) are the fork's.*
+0.3.0 (2018), fixed and extended. The core idea is his; everything from
+0.4.0 on is the fork's.*
