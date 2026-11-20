@@ -24,12 +24,14 @@
 // tests; it is deterministic (fixed order, fixed learning rate, no
 // shuffling).
 
-export const FEATURE_NAMES = ["calls", "depth", "repeat", "imbalance", "mix"];
+import personalityMatrix from "../personality-matrix.json";
 
-// Frozen weights from the offline training run (200 synthetic samples,
-// converged at epoch 1, 200/200 train, 100/100 held-out).
-export const DEFAULT_WEIGHTS = [0.1218, 0.1037, 0.1217, -0.0253, 0.0328];
-export const DEFAULT_BIAS = -0.1;
+const MODEL = personalityMatrix.model;
+export const FEATURE_NAMES = MODEL.featureNames;
+
+// Keep the runtime and the portable JSON model on the same weights.
+export const DEFAULT_WEIGHTS = MODEL.weights[0];
+export const DEFAULT_BIAS = MODEL.bias[0];
 
 // Extract the five features from a trace's events array (the plain
 // objects Iroh.trace() returns). An empty trace is all zeros.

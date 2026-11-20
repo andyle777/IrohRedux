@@ -29,7 +29,7 @@ phone (JavaScript legs only — no python3 on Android).
 Check what you are running:
 
 ```sh
-node cli/iroh.js --version   # iroh 1.0.1 (engine dist iroh-node.js 4e2d2c2a5815, runtime node v24.22.1)
+node cli/iroh.js --version   # iroh 1.0.1 (engine dist iroh-node.js 6d880ecac56b, runtime node v24.22.1)
 ```
 
 The Python client installs with `pip install -e python/`; the C++
@@ -480,7 +480,7 @@ fact here disagrees with a prose paragraph above, this section wins
 - Engine: IrohRedux 1.0.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. The engine is unchanged by the patch.
   `dist/iroh-node.js` SHA-256:
-  `4e2d2c2a5815dae5be79bade6aed3b3d5f8e65e93d4be26295793c579c52ef61`.
+  `6d880ecac56bd2fa06ab7891453118274703ba2c517255eb394f840b14d302f0`.
 - Three traced languages: JavaScript, Python, C++. No IrohScript,
   no BASIC, no input synthesiser, no `capabilities`, no `doctor`,
   no `serve`, no `node`, no `--max-events`.

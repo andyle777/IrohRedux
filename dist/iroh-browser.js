@@ -14,7 +14,7 @@ var iroh = (function () {
       }
     }}
 
-  var version$1 = "1.0.1";
+  var version$1="1.0.1";
 
   // indent factor
   var INDENT_FACTOR = 1;
@@ -14483,6 +14483,8 @@ var iroh = (function () {
     traceModule: traceModule
   });
 
+  var model={featureNames:["calls","depth","repeat","imbalance","mix"],weights:[[0.1218,0.1037,0.1217,-0.0253,0.0328]],bias:[-0.1]};var personalityMatrix = {model:model};
+
   // Tiny neuron layer for IrohRedux 0.8.0 — a single perceptron over
   // trace-window features, pure JavaScript, no dependencies.
   //
@@ -14509,12 +14511,13 @@ var iroh = (function () {
   // tests; it is deterministic (fixed order, fixed learning rate, no
   // shuffling).
 
-  var FEATURE_NAMES = ["calls", "depth", "repeat", "imbalance", "mix"];
 
-  // Frozen weights from the offline training run (200 synthetic samples,
-  // converged at epoch 1, 200/200 train, 100/100 held-out).
-  var DEFAULT_WEIGHTS = [0.1218, 0.1037, 0.1217, -0.0253, 0.0328];
-  var DEFAULT_BIAS = -0.1;
+  var MODEL = personalityMatrix.model;
+  var FEATURE_NAMES = MODEL.featureNames;
+
+  // Keep the runtime and the portable JSON model on the same weights.
+  var DEFAULT_WEIGHTS = MODEL.weights[0];
+  var DEFAULT_BIAS = MODEL.bias[0];
 
   // Extract the five features from a trace's events array (the plain
   // objects Iroh.trace() returns). An empty trace is all zeros.

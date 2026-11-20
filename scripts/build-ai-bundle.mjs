@@ -156,12 +156,22 @@ function main() {
     ["CHANGELOG.md", "CHANGELOG.txt"],
     ["README.md", "README.txt"],
     [path.join("docs", "memory.md"), "memory.md"],
+    [path.join("docs", "offline-memory-catalog.md"), "offline-memory-catalog.md"],
   ];
   for (const [src, dest] of txt) copyFile(path.join(root, src), path.join(out, "txt", dest));
 
+  run("python3", [
+    path.join(root, "scripts", "build-memory-catalog.py"),
+    "--check",
+  ], { cwd: root });
   // json/package.json: a copy of this tree's package.json.
   copyFile(path.join(root, "package.json"), path.join(out, "json", "package.json"));
   copyFile(path.join(root, "generations.json"), path.join(out, "json", "generations.json"));
+  copyFile(path.join(root, "personality-matrix.json"), path.join(out, "json", "personality-matrix.json"));
+  copyFile(
+    path.join(root, "memory", "iroh-memory.sqlite3"),
+    path.join(out, "sqlite", "iroh-memory.sqlite3")
+  );
   copyDir(path.join(root, "schemas"), path.join(out, "json", "schemas"), (n) => n.endsWith(".json"));
 
   // json/sample-scan.json: regenerated from the 1.0.1 engine.
