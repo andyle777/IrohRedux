@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-716%20passing-brightgreen.svg?style=flat-square" alt="716 tests passing" />
+  <img src="https://img.shields.io/badge/tests-718%20passing-brightgreen.svg?style=flat-square" alt="718 tests passing" />
 </p>
 
 <p align="center">
@@ -63,7 +63,8 @@ git clone https://github.com/andyle777/IrohRedux.git
 cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
-npm test            # 716 tests: 452 Node + 25 Python + 9 C++ + 230 IrohScript/BASIC
+npm run build:catalog # builds the offline SQLite reference catalog
+npm test            # 718 tests: 454 Node + 25 Python + 9 C++ + 230 IrohScript/BASIC
 ```
 
 The Python client installs with `pip install -e python/`. The C++
@@ -228,7 +229,7 @@ Newest first. Hashes live on the release page, not in this file.
   version, the dist hash, and the runtime actually embedded. The
   phone is now a local server (`iroh serve`, port 8471) and a
   laptop joins it as a node (`iroh node`) to run the legs the
-  phone cannot — see `SERVER.md`. 716 tests (452 Node + 25 Python
+  phone cannot — see `SERVER.md`. 718 tests (454 Node + 25 Python
   + 9 C++ + 230 IrohScript/BASIC).
 - **1.1.1 (20 Nov 2026) — the patch.** The trace memory release:
   a finished trace releases its Stage (a 500,013-event trace now
@@ -275,15 +276,23 @@ rebuild (same version, this tree). The machine-readable form is
 - [Changelog](CHANGELOG.md) — what changed, per version.
 - [Memory model](docs/memory.md) — the trace memory/state model
   for AI consumers.
+- [Offline memory catalog](docs/offline-memory-catalog.md) — the
+  portable SQLite reference database and its read-only schema.
+- [Personality Matrix](personality-matrix.json) — the inspectable
+  hot/normal perceptron weights, feature order, and decision rule.
 - [Generations registry](generations.json) — the table above, as JSON.
-- [JSON Schemas](schemas/) — CLI event, scan, translation, and error
-  contracts, with extension fields allowed for forward compatibility.
+- [JSON Schemas](schemas/) — CLI event, scan, translation, error, and
+  personality-matrix contracts, with extension fields allowed for
+  forward compatibility.
 
 Build a model-agnostic AI bundle locally with
 `npm run build:ai-bundle -- ./ai-bundle`. It includes these docs,
-JSON Schemas, live engine-generated samples, the Python client, and a
-SHA-256 manifest. The CLI works offline and does not call an AI model;
-any AI client can consume the same documented JSON contracts.
+JSON Schemas, the Personality Matrix JSON, the SQLite offline memory
+catalog, live engine-generated samples, the Python client, and a SHA-256
+manifest. The SQLite catalog is reference data only: it stores no user
+traces and does not sync over the network. The JSON model and schemas are
+the portable interface for clients without SQLite support; tracing remains
+available offline across the supported language legs.
 
 ## Credits
 
@@ -305,7 +314,7 @@ fact here disagrees with a prose paragraph above, this section wins
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026).
   No 1.1.2. No version bump.
 - `dist/iroh-node.js` SHA-256:
-  `6ceaeceb3013eefa8182757389370877266f50b2a3bd4bddf3cec20c0b9784a9`
+  `d7e463beb794c0638a395d0470f696093d4be834fbfe72535cfb48d48463766d`
 - `iroh --version` prints `iroh 1.1.1 (engine dist iroh-node.js
   6ceaeceb3013e, runtime node v18.5.0)` inside a packaged binary
   (runtime is the embedded Node; on npm it is the local node).

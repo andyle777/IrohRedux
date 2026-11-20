@@ -1,0 +1,42 @@
+{
+  "format": "iroh.personality-matrix.v1",
+  "model": {
+    "id": "trace-hotness-perceptron",
+    "version": "0.8.0",
+    "description": "A deterministic hot-versus-normal classifier for trace windows; a heuristic, not a correctness verdict.",
+    "featureNames": [
+      "calls",
+      "depth",
+      "repeat",
+      "imbalance",
+      "mix"
+    ],
+    "featureRanges": [
+      [0, 1],
+      [0, 1],
+      [0, 1],
+      [0, 1],
+      [0, 1]
+    ],
+    "weights": [
+      [0.1218, 0.1037, 0.1217, -0.0253, 0.0328]
+    ],
+    "bias": [-0.1],
+    "labels": {
+      "negative": "normal",
+      "positive": "hot"
+    },
+    "decision": {
+      "threshold": 0,
+      "roundingDigits": 4,
+      "rounding": "Math.round(score * 10000) / 10000"
+    },
+    "training": {
+      "method": "deterministic perceptron training on synthetic feature vectors",
+      "trainingSamples": 200,
+      "trainingCorrect": 200,
+      "validationSamples": 100,
+      "validationCorrect": 100
+    }
+  }
+}

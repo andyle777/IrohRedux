@@ -170,6 +170,7 @@ legs.push(
       "tests/synth.test.js",
       "tests/determinism.test.js",
       "tests/memory.test.js",
+      "tests/memory-catalog.test.js",
       "tests/properties.test.js",
       "tests/fuzz.test.js",
       "tests/dist-drift.test.js",
