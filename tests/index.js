@@ -52,6 +52,19 @@
 //                             that drive a program down each branch, on
 //                             the live wire, and the CLI --synthesize
 //                             flag (with --live streaming).
+//   tests/dist-drift.test.js  — the 1.1.1 dist drift gate (F3): rebuilds
+//                             dist/ into a temp dir and byte-compares
+//                             it against the checked-in dist/.
+//   tests/capabilities.test.js — the 1.1.1 capability probes (F1): the
+//                             probes agree with the runtime, the skip
+//                             reason names the feature and the Node
+//                             version, and `iroh capabilities --json`
+//                             prints one row per leg and per feature.
+//   tests/suite-summary.test.js — the 1.1.1 suite summary (F2): the
+//                             parsers read both the Node 24 spec
+//                             reporter and the Node 22 TAP reporter,
+//                             the unittest and C++ shapes, and a leg
+//                             that did not run is named, never passed.
 //   tests/esm.test.mjs      — ESM import of the package itself, through
 //                             the package.json "exports" map.
 //   python/tests/           — the Python client (unittest), needs python3.
@@ -62,7 +75,25 @@
 //   npm test
 // The TypeScript type test (tests/types.ts) is separate: `npm run test:types`.
 // (The old file was a stub that threw "Not implemented yet".)
-const { execSync } = require("node:child_process");
+//
+// 1.1.1 (F2): every leg is run with its output captured, then the
+// captured output is printed (so a human sees exactly what they
+// used to see) and parsed into one machine-readable summary line,
+// {"type":"suite-summary","legs":[...]}, printed last and written
+// to test-results/suite-summary.json. A leg whose toolchain is
+// absent is reported as did-not-run, never as a pass: its skips
+// array names the reason. The process exits non-zero when any leg
+// failed, exactly as before.
+const { spawnSync, execSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+const {
+  parseNodeOutput,
+  parseUnittestOutput,
+  parseCppOutput,
+  skippedLeg,
+  summary,
+} = require("./suite-summary");
 
 function has(cmd) {
   try {
@@ -73,23 +104,130 @@ function has(cmd) {
   }
 }
 
-execSync(
-  "node --test tests/iroh.test.js tests/fixtures.test.js tests/cli.test.js tests/modern.test.js tests/trace.test.js tests/modules.test.js tests/decorators.test.js tests/analyze.test.js tests/translate.test.js tests/translate-irohscript.test.js tests/irohscript-codegen.test.js tests/native.test.js tests/vectors.test.js tests/scan.test.js tests/live.test.js tests/direct.test.js tests/irohscript.test.js tests/synth.test.js tests/determinism.test.js tests/memory.test.js tests/esm.test.mjs",
-  { stdio: "inherit" }
+// Run one leg, print its output, and return its summary row. A
+// non-zero exit does not throw here: the failure is recorded in the
+// row, and the process exits non-zero at the end, after every leg
+// has run and the summary is printed.
+function runLeg(label, command, args, options, parse) {
+  let result = spawnSync(command, args, options);
+  let text = (result.stdout || "") + (result.stderr || "");
+  process.stdout.write(text);
+  if (!text.endsWith("\n")) process.stdout.write("\n");
+  if (result.error) {
+    return {
+      leg: label,
+      ran: 0,
+      failed: 1,
+      skipped: 0,
+      skips: ["could not run: " + result.error.message],
+    };
+  }
+  let row = parse(text);
+  // A leg that exits non-zero but whose parser found no failure
+  // (e.g. an unfamiliar output shape) still fails: the exit code
+  // is the arbiter, and a green row on a failed run would be the
+  // exact bug F2 exists to prevent.
+  if (result.status !== 0 && row.failed === 0) {
+    row.failed = 1;
+    row.skips.push("exit code " + result.status + " with no failure in the parsed output");
+  }
+  return row;
+}
+
+let legs = [];
+
+legs.push(
+  runLeg(
+    "node",
+    "node",
+    [
+      "--test",
+      "tests/iroh.test.js",
+      "tests/fixtures.test.js",
+      "tests/cli.test.js",
+      "tests/modern.test.js",
+      "tests/trace.test.js",
+      "tests/modules.test.js",
+      "tests/decorators.test.js",
+      "tests/analyze.test.js",
+      "tests/translate.test.js",
+      "tests/translate-irohscript.test.js",
+      "tests/irohscript-codegen.test.js",
+      "tests/native.test.js",
+      "tests/vectors.test.js",
+      "tests/scan.test.js",
+      "tests/live.test.js",
+      "tests/direct.test.js",
+      "tests/irohscript.test.js",
+      "tests/synth.test.js",
+      "tests/determinism.test.js",
+      "tests/memory.test.js",
+      "tests/properties.test.js",
+      "tests/fuzz.test.js",
+      "tests/dist-drift.test.js",
+      "tests/capabilities.test.js",
+      "tests/suite-summary.test.js",
+      "tests/esm.test.mjs",
+    ],
+    { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 },
+    parseNodeOutput
+  )
 );
 
 if (has("python3")) {
-  execSync("python3 -m unittest discover -s python/tests -v", { stdio: "inherit" });
+  legs.push(
+    runLeg(
+      "python",
+      "python3",
+      ["-m", "unittest", "discover", "-s", "python/tests", "-v"],
+      { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 },
+      (text) => parseUnittestOutput(text, "python")
+    )
+  );
   // The IrohScript bootstrap and its tracers run from irohscript/
   // (their tests import the `src` package, like the standalone
   // language home does).
-  execSync("python3 -m unittest discover -s tests -v", { stdio: "inherit", cwd: "irohscript" });
+  legs.push(
+    runLeg(
+      "irohscript",
+      "python3",
+      ["-m", "unittest", "discover", "-s", "tests", "-v"],
+      { encoding: "utf8", cwd: "irohscript", maxBuffer: 512 * 1024 * 1024 },
+      (text) => parseUnittestOutput(text, "irohscript")
+    )
+  );
 } else {
   console.log("Skipping Python tests: python3 not found.");
+  legs.push(skippedLeg("python", "python3 not found"));
+  legs.push(skippedLeg("irohscript", "python3 not found"));
 }
 
 if (has("g++")) {
-  execSync("make -C cpp test", { stdio: "inherit" });
+  legs.push(
+    runLeg(
+      "cpp",
+      "make",
+      ["-C", "cpp", "test"],
+      { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 },
+      parseCppOutput
+    )
+  );
 } else {
   console.log("Skipping C++ tests: g++ not found.");
+  legs.push(skippedLeg("cpp", "g++ not found"));
+}
+
+let report = summary(legs);
+report.ranAt = new Date().toISOString();
+report.node = process.version;
+let line = JSON.stringify(report);
+console.log(line);
+let dir = path.join(__dirname, "..", "test-results");
+fs.mkdirSync(dir, { recursive: true });
+fs.writeFileSync(path.join(dir, "suite-summary.json"), line + "\n");
+
+let failed = 0;
+for (let leg of legs) failed += leg.failed;
+if (failed > 0) {
+  process.exit(1);
 }

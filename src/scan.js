@@ -58,7 +58,7 @@ export function scan(events, options) {
   }
   maxFindings = Math.max(0, Math.floor(maxFindings));
   let analysis = analyze(events, options);
-  let vectors = toVector(events);
+  let vectors = toVector(events, { language: options.language || "javascript" });
   let allFindings = analysis.findings;
   let truncated = 0;
   let findings = allFindings;

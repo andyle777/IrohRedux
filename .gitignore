@@ -95,4 +95,4 @@ cpp/test_filter
 
 # Python bytecode
 __pycache__/
-*.pyc
+*.pyctest-results/

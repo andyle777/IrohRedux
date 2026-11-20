@@ -42,6 +42,12 @@ int main() {
   check("_ZSt4cout", 1);
   check("__cxa_demangle", 1);
   check("_ZThn8_NSt6vectorIiSaIiEED0Ev", 1);  // thunk to a std method
+  // GCC translation-unit static initialisers — filtered (1). These
+  // are compiler-generated, not user calls (D2: the top frame of
+  // every GCC trace was _GLOBAL__sub_I_main before this rule).
+  check("_GLOBAL__sub_I__Z9factoriali", 1);  // static init, one object
+  check("_GLOBAL__sub_D__Z9factoriali", 1);  // static destroy
+  check("_GLOBAL__I_65535_0_main.cpp", 1);   // TU init guard symbol
   std::printf("test_filter: all classify_mangled checks passed\n");
   return 0;
 }

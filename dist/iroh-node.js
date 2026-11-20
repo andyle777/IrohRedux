@@ -162,7 +162,7 @@ let CATEGORY = {};
 })();
 
 (() => {
-  let ii = 0;  
+  let ii = 0;
   OP["="] = ii++;
   OP["+"] = ii++;
   OP["-"] = ii++;
@@ -198,6 +198,38 @@ let CATEGORY = {};
   OP["--"] = ii++;
 
 })();
+
+// Reachable categories per tracer (1.1.1, F4): the categories each
+// tracer CAN emit, read from the tracer's own emit sites — not from
+// one program's run, which might not exercise them all. A C++ trace
+// firing 2 categories is complete for its tracer (2 of 2 reachable),
+// not 28 short (2 of 30). The sets are:
+//   javascript: the Stage emits all 30 (the full engine).
+//   python: python/iroh/trace.py _emit sites — ASSIGN, CATCH, CALL,
+//     FUNCTION, IF, LOOP.
+//   cpp: cpp/iroh_trace_rt.cpp emit sites — CALL, FUNCTION only
+//     (function-level by design; no loop/branch instrumentation).
+//   irohscript: irohscript/src/tracer.py sink.emit sites — ASSIGN,
+//     CALL, FUNCTION, IF.
+//   basic: irohscript/src/basic_trace.py sink.emit sites — ASSIGN,
+//     CALL, FUNCTION, IF, LOOP.
+// A language not listed here (or an unknown one) falls back to all
+// 30, which is the JavaScript default — and that fallback is the
+// reason a consumer must never treat a missing `reachable` field as
+// `total`: it would read a non-JS trace as if it were JS.
+const REACHABLE_CATEGORIES = {
+  javascript: null, // null = all categories (the full engine)
+  python: ["ASSIGN", "CATCH", "CALL", "FUNCTION", "IF", "LOOP"],
+  cpp: ["CALL", "FUNCTION"],
+  irohscript: ["ASSIGN", "CALL", "FUNCTION", "IF"],
+  basic: ["ASSIGN", "CALL", "FUNCTION", "IF", "LOOP"],
+};
+
+function reachableCategories(language) {
+  let list = REACHABLE_CATEGORIES[language];
+  if (list === void 0 || list === null) return Object.keys(CATEGORY);
+  return list.slice();
+}
 
 // Acorn plugin for the TC39 decorators proposal (stage 3).
 //
@@ -7536,7 +7568,18 @@ function analyze(events, options) {
     : null;
 
   // --- Scorecard -------------------------------------------------------
-  // Coverage: categories fired vs total categories.
+  // Coverage: categories fired vs the categories this tracer can
+  // reach (1.1.1, F4). The denominator is the reachable set for the
+  // trace's language, not the whole model: a C++ trace firing CALL
+  // and FUNCTION is 2 of 2 reachable, not 2 of 30. `missingCategories`
+  // lists the reachable categories that did NOT fire — the ones a
+  // reader could have seen but did not. A consumer must never treat
+  // a missing `reachable` field as `total`: that would read a
+  // non-JS trace as if it were JavaScript.
+  let language = options.language || "javascript";
+  let reachableList = reachableCategories(language);
+  let reachableSet = {};
+  for (let ii = 0; ii < reachableList.length; ++ii) reachableSet[reachableList[ii]] = true;
   let totalCategories = Object.keys(CATEGORY).length;
   let firedSet = {};
   for (let ii = 0; ii < events.length; ++ii) {
@@ -7544,19 +7587,20 @@ function analyze(events, options) {
   }
   let firedCategories = Object.keys(firedSet).sort();
   let missingCategories = [];
-  let allCategories = Object.keys(CATEGORY);
-  for (let ii = 0; ii < allCategories.length; ++ii) {
-    if (!firedSet[allCategories[ii]]) missingCategories.push(allCategories[ii]);
+  for (let ii = 0; ii < reachableList.length; ++ii) {
+    if (!firedSet[reachableList[ii]]) missingCategories.push(reachableList[ii]);
   }
   let coverage = {
     fired: firedCategories.length,
+    reachable: reachableList.length,
     total: totalCategories,
-    value: totalCategories > 0
-      ? Math.round((firedCategories.length / totalCategories) * 10000) / 10000
+    value: reachableList.length > 0
+      ? Math.round((firedCategories.length / reachableList.length) * 10000) / 10000
       : 0,
     firedCategories: firedCategories,
     missingCategories: missingCategories,
-    note: "Assumes an unfiltered trace (events: ALL). A trace collected with an events filter scores the filter, not the toolkit.",
+    note: firedCategories.length + " of " + reachableList.length + " reachable for a " + language +
+      " trace (" + totalCategories + " exist in the model). Assumes an unfiltered trace (events: ALL). A trace collected with an events filter scores the filter, not the toolkit.",
   };
 
   // Fidelity: observed regions vs all regions. Observed = distinct
@@ -7718,17 +7762,22 @@ const VECTOR_FEATURE_NAMES = FEATURE_NAMES.concat(["coverage"]);
 // plain array Iroh.trace() returns (or the CLI's event lines, or a
 // Python/C++ tracer's — the projection only reads event/category/
 // trigger/hash/indent/value, so it works the same across languages).
-function toVector(events) {
+// `options.language` (default "javascript") picks the reachable
+// set for the coverage feature (1.1.1, F4): the coverage feature is
+// fired / reachable, not fired / total, so a function-level C++
+// trace is not penalised for the categories its tracer cannot emit.
+function toVector(events, options) {
+  options = options || {};
   events = Array.isArray(events) ? events : [];
   let features = extractFeatures(events);
-  let totalCategories = Object.keys(CATEGORY).length;
+  let reachableList = reachableCategories(options.language || "javascript");
   let fired = {};
   for (let ii = 0; ii < events.length; ++ii) {
     if (events[ii].category) fired[events[ii].category] = true;
   }
   let firedCount = Object.keys(fired).length;
-  let coverage = totalCategories > 0
-    ? Math.round((firedCount / totalCategories) * 10000) / 10000
+  let coverage = reachableList.length > 0
+    ? Math.round((firedCount / reachableList.length) * 10000) / 10000
     : 0;
   let named = {
     calls: features.calls,
@@ -7880,7 +7929,7 @@ function scan(events, options) {
   }
   maxFindings = Math.max(0, Math.floor(maxFindings));
   let analysis = analyze(events, options);
-  let vectors = toVector(events);
+  let vectors = toVector(events, { language: options.language || "javascript" });
   let allFindings = analysis.findings;
   let truncated = 0;
   let findings = allFindings;
@@ -10733,7 +10782,7 @@ function makeJSEmitter(target, report, env, hints) {
   let isPy = target === "python";
   let lines = [];
   let indentLevel = 0;
-  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, cstdlib: false, sysexit: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false };
+  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, cstdlib: false, sysexit: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false, jsbool: false };
   let noted = {};
   function noteOnce(key, text) {
     if (!noted[key]) {
@@ -10958,7 +11007,13 @@ function makeJSEmitter(target, report, env, hints) {
           if (t === "std::string" || t === "int") {
             parts.push("{" + expr(e, 16) + "}");
           } else if (t === "bool") {
-            parts.push("{(\"true\" if " + expr(e, 16) + " else \"false\")}");
+            // A bool interpolates as "true"/"false". The inline ternary
+            // ("true" if v else "false") nests double quotes inside an
+            // f-string replacement field — legal only on Python 3.12+
+            // (PEP 701) — so route it through a helper, same pattern
+            // as __iroh_jsnum for doubles.
+            needs.jsbool = true;
+            parts.push("{__iroh_jsbool(" + expr(e, 16) + ")}");
           } else if (t === "double") {
             needs.jsnum = true;
             parts.push("{__iroh_jsnum(" + expr(e, 16) + ")}");
@@ -12034,6 +12089,14 @@ function makeJSEmitter(target, report, env, hints) {
         // and floats float, matching JS output exactly.
         header.push("def __iroh_jsmod(a, b):");
         header.push("    return a - int(a / b) * b");
+        header.push("");
+      }
+      if (needs.jsbool) {
+        // JS bool -> string: "true"/"false". A helper, not an inline
+        // ternary, so the double quotes never sit inside an f-string
+        // replacement field (SyntaxError on Python < 3.12, PEP 701).
+        header.push("def __iroh_jsbool(v):");
+        header.push("    return \"true\" if v else \"false\"");
         header.push("");
       }
       if (needs.jsnum) {

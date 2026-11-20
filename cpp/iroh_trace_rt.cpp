@@ -416,6 +416,15 @@ int classify_name_body(const char* p) {
 
 int classify_mangled(const char* mangled) {
   if (!mangled || !*mangled) return 0;
+  // GCC's translation-unit static initialisers (_GLOBAL__sub_I_*,
+  // _GLOBAL__sub_D_*, _GLOBAL__I_*) are compiler-generated, not user
+  // calls — but they begin with a single "_GLOBAL__", so neither the
+  // Itanium _Z rule nor the plain "__" rule catches them, and the top
+  // frame of every GCC trace was static init instead of user code.
+  // Filter them explicitly. This cannot catch a user function in an
+  // anonymous namespace: that symbol is _ZN12_GLOBAL__N_1..., which
+  // starts with _Z, not _GLOBAL__.
+  if (strncmp(mangled, "_GLOBAL__", 9) == 0) return 1;
   if (mangled[0] == '_' && mangled[1] == 'Z') {
     return classify_name_body(mangled + 2);  // Itanium mangled name
   }

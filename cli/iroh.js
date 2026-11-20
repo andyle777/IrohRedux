@@ -162,6 +162,7 @@ const Iroh = require("../dist/iroh-node.js");
 // src/setup.js and src/utils.js). The CLI uses Iroh.eventToJSON so its
 // JSON lines are the same shape as Iroh.trace() events.
 const CATEGORY = Iroh.CATEGORY;
+const { capabilities } = require("../lib/capabilities");
 
 const PYTHON = process.env.IROH_PYTHON || "python3";
 const CXX = process.env.IROH_CXX || "g++";
@@ -203,6 +204,14 @@ function printUsage() {
     "       iroh <file.py|.cpp|.iroh|.bas> --translate javascript|python|cpp|irohscript|basic [--from python|cpp|irohscript|basic]\n" +
     "       iroh <file.js> --direct[=throttle|stop]\n" +
     "       iroh <file.js> --synthesize --entry <fn> [--seeds '[[5]]'] [--max-runs 50]\n" +
+    "       iroh capabilities [--json]\n" +
+    "       iroh doctor\n" +
+    "capabilities prints one row per language leg and per syntax feature:\n" +
+    "available, or unavailable and why. --json prints the same as JSON.\n" +
+    "doctor prints the recorded suite summary (from the last npm test\n" +
+    "run), the live toolchain versions, the dist hash, and the\n" +
+    "capabilities, so a reader can tell whether the box can run the\n" +
+    "package and whether the last run actually ran every leg.\n" +
     "Events are streamed as JSON lines on stdout, then a result line.\n" +
     "Use --events ALL (default) or a comma list of categories, e.g. CALL.\n" +
     ".mjs files (or --module) run as ES modules through Iroh.traceModule();\n" +
@@ -402,6 +411,91 @@ function runCpp(file, eventsArg) {
 
 async function main() {
   let args = process.argv.slice(2);
+  // 1.1.1 (F1): `iroh capabilities [--json]` — one row per language
+  // leg and per syntax feature, available or unavailable and why.
+  // It is a subcommand, not a file to trace, so it is dispatched
+  // before the file parsing below.
+  if (args[0] === "capabilities") {
+    let wantJson = args.indexOf("--json") !== -1;
+    let report = capabilities();
+    if (wantJson) {
+      printLine({ type: "capabilities", node: report.node, legs: report.legs, features: report.features });
+    } else {
+      process.stdout.write("Node " + report.node + "\n");
+      process.stdout.write("Language legs:\n");
+      for (let ii = 0; ii < report.legs.length; ++ii) {
+        let leg = report.legs[ii];
+        process.stdout.write(
+          "  " + leg.leg + ": " + (leg.available ? "available" : "unavailable") + " (" + leg.why + ")\n"
+        );
+      }
+      process.stdout.write("Syntax features:\n");
+      for (let ii = 0; ii < report.features.length; ++ii) {
+        let feat = report.features[ii];
+        process.stdout.write(
+          "  " + feat.what + ": " +
+          (feat.available ? "available" : "unavailable (needs Node " + feat.node + ")") + "\n"
+        );
+      }
+    }
+    return;
+  }
+  // 1.1.1 (F2): `iroh doctor` — the recorded suite summary (from
+  // the last `npm test` run) plus the live toolchain versions, the
+  // dist hash, and the capabilities. It does not run the suite
+  // itself (that is `npm test`'s job, and it takes ~a minute); it
+  // reports what the last run actually did, and whether this box
+  // can run the package now.
+  if (args[0] === "doctor") {
+    let crypto = require("node:crypto");
+    let summaryFile = path.join(__dirname, "..", "test-results", "suite-summary.json");
+    let recorded = null;
+    try {
+      recorded = JSON.parse(fs.readFileSync(summaryFile, "utf8"));
+    } catch (e) {
+      // No recorded run yet.
+    }
+    if (recorded) {
+      process.stdout.write("Last test run: " + (recorded.ranAt || "unknown") + " on Node " + (recorded.node || "unknown") + "\n");
+      for (let ii = 0; ii < recorded.legs.length; ++ii) {
+        let leg = recorded.legs[ii];
+        process.stdout.write(
+          "  " + leg.leg + ": ran " + leg.ran + ", failed " + leg.failed + ", skipped " + leg.skipped + "\n"
+        );
+        for (let jj = 0; jj < leg.skips.length; ++jj) {
+          process.stdout.write("    skip: " + leg.skips[jj] + "\n");
+        }
+      }
+    } else {
+      process.stdout.write("No test run recorded (run `npm test` first).\n");
+    }
+    let versions = [];
+    versions.push("node " + process.version);
+    let py = spawnSync(PYTHON, ["--version"], { encoding: "utf8" });
+    versions.push("python3 " + (py.status === 0 ? (py.stdout || py.stderr || "").trim().replace(/^Python /, "") : "not found"));
+    let cxx = spawnSync(CXX, ["--version"], { encoding: "utf8" });
+    versions.push("g++ " + (cxx.status === 0 ? (cxx.stdout || "").split("\n")[0].trim() : "not found"));
+    process.stdout.write("Toolchains: " + versions.join(", ") + "\n");
+    let distDir = path.join(__dirname, "..", "dist");
+    let distFiles = ["iroh-node.js", "iroh-node.es.mjs", "iroh-browser.js"];
+    let hashes = [];
+    for (let ii = 0; ii < distFiles.length; ++ii) {
+      try {
+        let bytes = fs.readFileSync(path.join(distDir, distFiles[ii]));
+        let hash = crypto.createHash("sha256").update(bytes).digest("hex").slice(0, 12);
+        hashes.push(distFiles[ii] + " " + hash);
+      } catch (e) {
+        hashes.push(distFiles[ii] + " missing");
+      }
+    }
+    process.stdout.write("dist: " + hashes.join(", ") + "\n");
+    let report = capabilities();
+    for (let ii = 0; ii < report.legs.length; ++ii) {
+      let leg = report.legs[ii];
+      process.stdout.write("  leg " + leg.leg + ": " + (leg.available ? "available" : "unavailable") + " (" + leg.why + ")\n");
+    }
+    return;
+  }
   let file = null;
   let eventsArg = "ALL";
   let wantResult = true;
@@ -745,7 +839,7 @@ async function main() {
       analysis: out.analysis,
     });
     if (analyzeFlag) {
-      let analysis = Iroh.analyze(out.events, { source: code });
+      let analysis = Iroh.analyze(out.events, { source: code, language: language });
       printLine(Object.assign({ type: "analysis" }, analysis));
     }
     if (scanFlag) {
@@ -1036,8 +1130,9 @@ async function main() {
     // The analysis runs over the collected events, with the source
     // attached so the fidelity score can count its blind spots.
     // (With an --events filter, coverage scores the filter — the
-    // analysis note says so.)
-    let analysis = Iroh.analyze(collected, { source: code });
+    // analysis note says so.) The language picks the reachable set
+    // for the coverage denominator (1.1.1, F4).
+    let analysis = Iroh.analyze(collected, { source: code, language: language });
     printLine(Object.assign({ type: "analysis" }, analysis));
   }
   if (scanFlag) {

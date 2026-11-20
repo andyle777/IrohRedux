@@ -45,7 +45,7 @@
     "url": "https://github.com/andyle777/IrohRedux/issues"
   },
   "engines": {
-    "node": ">= 18"
+    "node": ">= 22"
   },
   "scripts": {
     "dist": "npm run build && npm run browser",
@@ -55,9 +55,11 @@
     "test:python": "python3 -m unittest discover -s python/tests -v",
     "test:cpp": "make -C cpp test",
     "test:types": "tsc --noEmit --strict --module esnext --moduleResolution bundler --target es2022 tests/types.ts",
-    "codegen:irohscript": "npm run build && node scripts/compile-irohscript-core.mjs && npm run build"
+    "codegen:irohscript": "npm run build && node scripts/compile-irohscript-core.mjs && npm run build",
+ "check:dist": "node scripts/check-dist-drift.mjs"
   },
   "devDependencies": {
+    "fast-check": "^4.10.3",
     "rollup": "^0.47.2",
     "rollup-plugin-buble": "^0.15.0",
     "rollup-plugin-commonjs": "^8.1.0",

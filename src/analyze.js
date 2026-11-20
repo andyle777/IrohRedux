@@ -36,7 +36,7 @@
 //     events per region (always). `value` is the per-statement ratio
 //     when available, else per-region, and `denominator` says which.
 
-import { CATEGORY } from "./labels";
+import { CATEGORY, reachableCategories } from "./labels";
 import { parse } from "./utils";
 import { classifyWindow } from "./neurons";
 
@@ -409,7 +409,18 @@ export function analyze(events, options) {
     : null;
 
   // --- Scorecard -------------------------------------------------------
-  // Coverage: categories fired vs total categories.
+  // Coverage: categories fired vs the categories this tracer can
+  // reach (1.1.1, F4). The denominator is the reachable set for the
+  // trace's language, not the whole model: a C++ trace firing CALL
+  // and FUNCTION is 2 of 2 reachable, not 2 of 30. `missingCategories`
+  // lists the reachable categories that did NOT fire — the ones a
+  // reader could have seen but did not. A consumer must never treat
+  // a missing `reachable` field as `total`: that would read a
+  // non-JS trace as if it were JavaScript.
+  let language = options.language || "javascript";
+  let reachableList = reachableCategories(language);
+  let reachableSet = {};
+  for (let ii = 0; ii < reachableList.length; ++ii) reachableSet[reachableList[ii]] = true;
   let totalCategories = Object.keys(CATEGORY).length;
   let firedSet = {};
   for (let ii = 0; ii < events.length; ++ii) {
@@ -417,19 +428,20 @@ export function analyze(events, options) {
   }
   let firedCategories = Object.keys(firedSet).sort();
   let missingCategories = [];
-  let allCategories = Object.keys(CATEGORY);
-  for (let ii = 0; ii < allCategories.length; ++ii) {
-    if (!firedSet[allCategories[ii]]) missingCategories.push(allCategories[ii]);
+  for (let ii = 0; ii < reachableList.length; ++ii) {
+    if (!firedSet[reachableList[ii]]) missingCategories.push(reachableList[ii]);
   }
   let coverage = {
     fired: firedCategories.length,
+    reachable: reachableList.length,
     total: totalCategories,
-    value: totalCategories > 0
-      ? Math.round((firedCategories.length / totalCategories) * 10000) / 10000
+    value: reachableList.length > 0
+      ? Math.round((firedCategories.length / reachableList.length) * 10000) / 10000
       : 0,
     firedCategories: firedCategories,
     missingCategories: missingCategories,
-    note: "Assumes an unfiltered trace (events: ALL). A trace collected with an events filter scores the filter, not the toolkit.",
+    note: firedCategories.length + " of " + reachableList.length + " reachable for a " + language +
+      " trace (" + totalCategories + " exist in the model). Assumes an unfiltered trace (events: ALL). A trace collected with an events filter scores the filter, not the toolkit.",
   };
 
   // Fidelity: observed regions vs all regions. Observed = distinct
