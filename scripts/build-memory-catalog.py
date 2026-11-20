@@ -16,14 +16,13 @@ DOCUMENT_PATHS = (
     "README.md",
     "API.md",
     "GETTING_STARTED.md",
-    "SERVER.md",
     "CHANGELOG.md",
     "docs/memory.md",
     "docs/offline-memory-catalog.md",
     "cpp/README.md",
     "python/README.md",
-    "irohscript/README.md",
 )
+OPTIONAL_DOCUMENT_PATHS = ("SERVER.md", "irohscript/README.md")
 
 
 def sha256(data):
@@ -40,7 +39,13 @@ def read_source(path):
 
 def source_rows():
     documents = []
-    for path in DOCUMENT_PATHS:
+    document_paths = list(DOCUMENT_PATHS)
+    document_paths.extend(
+        path
+        for path in OPTIONAL_DOCUMENT_PATHS
+        if (ROOT / path).exists() or (ROOT / path).is_symlink()
+    )
+    for path in document_paths:
         content, digest = read_source(path)
         documents.append((path, "text/markdown", content, digest))
 
