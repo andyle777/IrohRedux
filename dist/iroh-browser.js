@@ -201,7 +201,8 @@ var iroh = (function () {
   //   cpp: cpp/iroh_trace_rt.cpp emit sites — CALL, FUNCTION only
   //     (function-level by design; no loop/branch instrumentation).
   //   irohscript: irohscript/src/tracer.py sink.emit sites — ASSIGN,
-  //     CALL, FUNCTION, IF.
+  //     CALL, FUNCTION, IF, LOOP (LOOP since Amendment A1, the
+  //     conditional LOOP <Bool-expr> form).
   //   basic: irohscript/src/basic_trace.py sink.emit sites — ASSIGN,
   //     CALL, FUNCTION, IF, LOOP.
   // A language not listed here (or an unknown one) falls back to all
@@ -212,7 +213,7 @@ var iroh = (function () {
     javascript: null, // null = all categories (the full engine)
     python: ["ASSIGN", "CATCH", "CALL", "FUNCTION", "IF", "LOOP"],
     cpp: ["CALL", "FUNCTION"],
-    irohscript: ["ASSIGN", "CALL", "FUNCTION", "IF"],
+    irohscript: ["ASSIGN", "CALL", "FUNCTION", "IF", "LOOP"],
     basic: ["ASSIGN", "CALL", "FUNCTION", "IF", "LOOP"],
   };
 
@@ -21946,7 +21947,7 @@ var iroh = (function () {
         return;
       }
       if (node.node === "Loop") {
-        stubStmt("IrohScript LOOP has no defined exit condition in IrohScript 3.0 (spec section 6 shows the form but not the termination rule)", "Loop");
+        stubStmt("the legacy unconditional IrohScript LOOP still cannot execute or translate (Amendment A1 decided the conditional LOOP <Bool> form; lowering it is not in the translator yet)", "Loop");
         return;
       }
       if (node.node === "FunctionDef") {
@@ -22805,7 +22806,7 @@ var iroh = (function () {
       }
       if (node.type === "ForStatement") {
         if (isIroh) {
-          stubStmt("a for-loop has no equivalent in IrohScript v1 (LOOP has no defined exit rule)", "ForStatement");
+          stubStmt("a for-loop has no equivalent in IrohScript v1 (the conditional LOOP decided in Amendment A1 is not lowered by the translator yet)", "ForStatement");
           return;
         }
         var pat = forLoopPattern(node);
