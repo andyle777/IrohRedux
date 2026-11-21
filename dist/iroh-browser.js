@@ -22476,6 +22476,38 @@ var iroh = (function () {
     if (hints && hints.variables) {
       for (var k$1 in hints.variables) { ctx.vars[k$1] = hints.variables[k$1]; }
     }
+    // Amendment A5 (2026-11-22): the do-while flag lowering mints one
+    // fresh Bool variable per do-while loop (neither target has a
+    // post-test loop, so the loop guard is rewritten from the real
+    // test at the end of every body pass). The name is minted against
+    // the program's own identifier set, which run() collects first,
+    // so it can never collide with a user name, and it stays
+    // deterministic for the same program.
+    var doWhileFlagCounter = 0;
+    var programNames = {};
+    function collectNames(node) {
+      if (!node || typeof node !== "object") { return; }
+      if (Array.isArray(node)) {
+        for (var ii = 0; ii < node.length; ++ii) { collectNames(node[ii]); }
+        return;
+      }
+      if (node.type === "Identifier") { programNames[node.name] = true; }
+      var keys = Object.keys(node);
+      for (var ii$1 = 0; ii$1 < keys.length; ++ii$1) {
+        var v = node[keys[ii$1]];
+        if (v && typeof v === "object") { collectNames(v); }
+      }
+    }
+    function mintDoWhileFlag() {
+      while (true) {
+        doWhileFlagCounter += 1;
+        var name = "__do_while_flag_" + doWhileFlagCounter;
+        if (!programNames[name]) {
+          programNames[name] = true;
+          return name;
+        }
+      }
+    }
     function indentStr() { return "  ".repeat(indentLevel); }
     function emitLine(text) { lines.push(indentStr() + text); }
     function noteOnce(key, text) {
@@ -22939,7 +22971,36 @@ var iroh = (function () {
         return;
       }
       if (node.type === "DoWhileStatement") {
-        stubStmt("a do-while loop cannot be test-first (it runs its body before the first test), and " + target + " has no post-test loop", "DoWhileStatement");
+        // Amendment A5 (2026-11-22): a do-while lowers through a
+        // minted Bool flag. Neither target has a post-test loop, but
+        // the body runs once before the first test either way when the
+        // pre-tested loop is guarded by a flag that starts TRUE, and
+        // the real test rewrites the flag at the end of every body
+        // pass. The test is evaluated exactly once per pass, after the
+        // body, so runs match the JavaScript one for one. The minted
+        // name comes from the program's identifier set, so it cannot
+        // collide with a user name.
+        var flag = mintDoWhileFlag();
+        var body = node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] };
+        if (isIroh) {
+          counts.loops += 1;
+          emitLine("LET " + flag + " : Bool = TRUE");
+          emitLine("LOOP " + flag);
+          emitBody(body);
+          emitLine(flag + " = " + expr(node.test, 0));
+          emitLine("END LOOP");
+          return;
+        }
+        if (hasPlainCall(node.test)) {
+          stubStmt("a call inside a do-while condition is not in the v1 scope: the flag is re-tested every pass through the WHILE, so the call cannot be hoisted to a GOSUB — move it into the body", "DoWhileStatement");
+          return;
+        }
+        counts.loops += 1;
+        emitLine("LET " + flag + " = -1");
+        emitLine("WHILE " + flag);
+        emitBody(body);
+        emitLine("LET " + flag + " = " + expr(node.test, 0));
+        emitLine("WEND");
         return;
       }
       if (node.type === "ClassDeclaration" || node.type === "LabeledStatement") {
@@ -23114,6 +23175,11 @@ var iroh = (function () {
       return parts.join(" : ");
     }
     function run(ast) {
+      // Amendment A5 (2026-11-22): collect the program's identifier
+      // set before any statement is emitted, so every minted do-while
+      // flag is checked against the complete name set, not just the
+      // names seen so far.
+      collectNames(ast);
       var fns = [];
       var rest = [];
       for (var ii = 0; ii < ast.body.length; ++ii) {
