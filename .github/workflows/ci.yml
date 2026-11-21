@@ -38,7 +38,7 @@ jobs:
   # 3.12: a single-version CI run cannot see the f-string class
   # (3.12 parses what 3.9 rejects).
   translate-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -58,4 +58,4 @@ jobs:
           python-version: "3.12"
       - run: npm ci
       - run: npm run dist
-      - run: bash tools/check-translate-matrix.sh
+      - run: tools/check-translate-matrix.sh
