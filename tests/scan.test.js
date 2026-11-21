@@ -10,9 +10,15 @@ const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { hasCommand } = require("../lib/capabilities");
 const Iroh = require("../dist/iroh-node.js");
 
 const CLI = path.join(__dirname, "..", "cli", "iroh.js");
+
+// g++-dependent tests skip (with a reason naming g++) on boxes
+// without g++ — skipped, not failed, the same honest rule the
+// leg runner applies to the python and cpp legs themselves.
+const cppOnBox = hasCommand("g++");
 
 function runCli(code, args) {
   let proc = spawnSync(process.execPath, [CLI, ...(args || [])], {
@@ -186,7 +192,7 @@ test("CLI --scan works on a Python trace, same schema", () => {
   }
 });
 
-test("CLI --scan works on a C++ trace, same schema", () => {
+test("CLI --scan works on a C++ trace, same schema", { skip: !cppOnBox && "g++ not found on this box" }, () => {
   let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-scan-"));
   try {
     let file = path.join(dir, "deep.cpp");

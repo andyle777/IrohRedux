@@ -11,8 +11,14 @@ const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { hasCommand } = require("../lib/capabilities");
 
 const CLI = path.join(__dirname, "..", "cli", "iroh.js");
+
+// g++-dependent tests skip (with a reason naming g++) on boxes
+// without g++ — skipped, not failed, the same honest rule the
+// leg runner applies to the python and cpp legs themselves.
+const cppOnBox = hasCommand("g++");
 
 function runCliFile(file, args, input) {
   let proc = spawnSync(process.execPath, [CLI, file, ...(args || [])], {
@@ -141,7 +147,7 @@ test("Python uncaught exception is an error line, exit 1", () => {
   }
 });
 
-test("CLI --lang cpp traces factorial with resolved names", () => {
+test("CLI --lang cpp traces factorial with resolved names", { skip: !cppOnBox && "g++ not found on this box" }, () => {
   let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-native-"));
   try {
     let file = writeTemp(dir, "fact.cpp", CPP_FACTORIAL);
@@ -174,7 +180,7 @@ const CPP_STATIC_INIT =
   "static Greeter g;\n" +
   "int main() { return 0; }\n";
 
-test("D2: C++ trace with a static initialiser has no _GLOBAL__ frame", () => {
+test("D2: C++ trace with a static initialiser has no _GLOBAL__ frame", { skip: !cppOnBox && "g++ not found on this box" }, () => {
   let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-native-"));
   try {
     let file = writeTemp(dir, "static.cpp", CPP_STATIC_INIT);
@@ -195,7 +201,7 @@ test("D2: C++ trace with a static initialiser has no _GLOBAL__ frame", () => {
   }
 });
 
-test("CLI infers cpp from a .cpp file without --lang", () => {
+test("CLI infers cpp from a .cpp file without --lang", { skip: !cppOnBox && "g++ not found on this box" }, () => {
   let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-native-"));
   try {
     let file = writeTemp(dir, "fact.cpp", CPP_FACTORIAL);
@@ -208,7 +214,7 @@ test("CLI infers cpp from a .cpp file without --lang", () => {
   }
 });
 
-test("C++ deep recursion analyzes to DEEP_RECURSION through --analyze", () => {
+test("C++ deep recursion analyzes to DEEP_RECURSION through --analyze", { skip: !cppOnBox && "g++ not found on this box" }, () => {
   let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-native-"));
   try {
     let file = writeTemp(dir, "deep.cpp", CPP_DEEP);
@@ -233,7 +239,7 @@ test("C++ deep recursion analyzes to DEEP_RECURSION through --analyze", () => {
   }
 });
 
-test("C++ compile error is an error line, exit 1", () => {
+test("C++ compile error is an error line, exit 1", { skip: !cppOnBox && "g++ not found on this box" }, () => {
   let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-native-"));
   try {
     let file = writeTemp(dir, "bad.cpp", "int main() { return ; }\n");
@@ -247,7 +253,7 @@ test("C++ compile error is an error line, exit 1", () => {
   }
 });
 
-test("C++ program that crashes keeps the events it emitted", () => {
+test("C++ program that crashes keeps the events it emitted", { skip: !cppOnBox && "g++ not found on this box" }, () => {
   let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-native-"));
   try {
     let file = writeTemp(dir, "crash.cpp",
@@ -267,7 +273,7 @@ test("C++ program that crashes keeps the events it emitted", () => {
   }
 });
 
-test("C++ 5000-deep recursion stays paired past the old 4096 cap", () => {
+test("C++ 5000-deep recursion stays paired past the old 4096 cap", { skip: !cppOnBox && "g++ not found on this box" }, () => {
   // The runtime's emitted-stack used to be a fixed 4096 entries: past
   // it, exits popped the wrong frame's flag and pairing shifted. The
   // CLI's spawnSync maxBuffer (1 MiB) also killed the run with ENOBUFS
@@ -304,7 +310,7 @@ test("C++ 5000-deep recursion stays paired past the old 4096 cap", () => {
   }
 });
 
-test("C++ function taking std::string is traced, std internals are not", () => {
+test("C++ function taking std::string is traced, std internals are not", { skip: !cppOnBox && "g++ not found on this box" }, () => {
   // The old filter dropped any name CONTAINING "std::" — every user
   // function taking or returning a std type vanished. The filter now
   // parses the mangled name's outermost qualifier.
@@ -336,7 +342,7 @@ test("C++ function taking std::string is traced, std internals are not", () => {
   }
 });
 
-test("C++ static, anonymous-namespace and lambda functions resolve by name", () => {
+test("C++ static, anonymous-namespace and lambda functions resolve by name", { skip: !cppOnBox && "g++ not found on this box" }, () => {
   // dladdr only sees dynamic symbols, so local symbols resolved to
   // null; the runtime now falls back to the .symtab.
   let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-native-"));
@@ -362,7 +368,7 @@ test("C++ static, anonymous-namespace and lambda functions resolve by name", () 
   }
 });
 
-test("C++ program reading stdin gets it, and its stderr is forwarded", () => {
+test("C++ program reading stdin gets it, and its stderr is forwarded", { skip: !cppOnBox && "g++ not found on this box" }, () => {
   let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-native-"));
   try {
     let file = writeTemp(dir, "scanin.cpp",
