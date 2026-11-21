@@ -4092,6 +4092,41 @@ function makeBasicJSEmitter(report) {
         ii += 1;
         continue;
       }
+      if (kind === "while") {
+        // Amendment A4 (2026-11-21): WHILE/WEND lowers to a
+        // JavaScript while, mirroring the FOR/NEXT pairing — the
+        // depth-matching walk finds the WEND, the body emits
+        // between the slots, and a WEND with no WHILE is a loud
+        // stub one case down. Both are test-first, so the
+        // semantics carry over unchanged.
+        counts.loops += 1;
+        let depth = 1;
+        let wendIdx = -1;
+        for (let jj = ii + 1; jj < to; ++jj) {
+          if (items[jj].stmt[0] === "while") depth += 1;
+          if (items[jj].stmt[0] === "wend") {
+            depth -= 1;
+            if (depth === 0) { wendIdx = jj; break; }
+          }
+        }
+        if (wendIdx === -1) {
+          stubStmt("WHILE has no matching WEND in the v1 scope", "WhileStatement");
+          ii += 1;
+          continue;
+        }
+        emitLine("while (" + expr(s[1], 0) + ") {");
+        indentLevel += 1;
+        emitSeq(items, ii + 1, wendIdx, subRanges, inSub, isFlat);
+        indentLevel -= 1;
+        emitLine("}");
+        ii = wendIdx + 1;
+        continue;
+      }
+      if (kind === "wend") {
+        stubStmt("WEND without a matching WHILE", "WhileStatement");
+        ii += 1;
+        continue;
+      }
       if (kind === "gosub") {
         if (!(s[1] in subRanges)) {
           stubStmt("GOSUB target line " + s[1] + " does not exist", "GOSUB");
@@ -4716,15 +4751,29 @@ function makeIrohJSEmitter(target, report, env, hints) {
     if (node.type === "WhileStatement") {
       // Amendment A2 (2026-11-21): a JavaScript while lowers into
       // the conditional IrohScript LOOP (Amendment A1) — the same
-      // test-first semantics. BASIC stays a loud stub.
-      if (!isIroh) {
-        stubStmt("a while loop has no equivalent in " + target + " v1", "WhileStatement");
+      // test-first semantics.
+      // Amendment A4 (2026-11-21): the BASIC leg lowers it too, as
+      // WHILE/WEND — the bootstrap interpreter's own test-first
+      // construct (1.1.1 M5), so the semantics match by
+      // definition. One honest gap stays a loud stub: a call in
+      // the condition. Unlike FOR bounds it cannot be hoisted to a
+      // GOSUB before the loop, because the WHILE line is re-tested
+      // every pass and a GOSUB cannot live inside it.
+      if (isIroh) {
+        counts.loops += 1;
+        emitLine("LOOP " + expr(node.test, 0));
+        emitBody(node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] });
+        emitLine("END LOOP");
+        return;
+      }
+      if (hasPlainCall(node.test)) {
+        stubStmt("a call inside a while condition is not in the v1 scope: the WHILE line is re-tested every pass, so the call cannot be hoisted to a GOSUB before the loop — move it into the body", "WhileStatement");
         return;
       }
       counts.loops += 1;
-      emitLine("LOOP " + expr(node.test, 0));
+      emitLine("WHILE " + expr(node.test, 0));
       emitBody(node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] });
-      emitLine("END LOOP");
+      emitLine("WEND");
       return;
     }
     if (node.type === "DoWhileStatement") {

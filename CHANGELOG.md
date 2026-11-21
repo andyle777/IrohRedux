@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Amendment A4 (2026-11-21, the WHILE/WEND patch): the while lowers
+  between JavaScript and BASIC, both directions, and the classic
+  column lights up end to end. A JavaScript `while` becomes
+  `WHILE <cond> / ... / WEND` — the bootstrap interpreter's own
+  test-first construct (1.1.1 M5) — so the semantics match by
+  definition; BASIC `WHILE ... WEND` becomes a JavaScript `while`
+  through the FOR/NEXT-style depth-matching pairing. A BASIC WHILE
+  program now rides both translate hops (to Python `while`, and to
+  the IrohScript `LOOP` via Amendment A2). One new loud stub, on
+  purpose: a call inside a JavaScript while condition cannot be
+  hoisted to a GOSUB before the loop (unlike FOR bounds), because
+  the WHILE line is re-tested every pass. +5 Node tests net (the
+  old JS->BASIC stub test rewritten as a round trip, zero-iteration
+  BASIC while, the condition-call stub, BASIC->JS round trip,
+  WEND-without-WHILE stub, both two-hop WHILE round trips; suite
+  466 -> 471). API.md, README.md (counts 744 -> 749, BASIC
+  bullet), GETTING_STARTED.md updated.
 - Amendment A3 (2026-11-21, the for-desugar patch): a JavaScript
   for-loop desugars into IrohScript instead of stubbing — the init
   statement (LET with its inferred type, or an assignment),

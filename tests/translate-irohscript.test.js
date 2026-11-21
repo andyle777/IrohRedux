@@ -247,11 +247,32 @@ test("JS -> BASIC: a recursive function is honestly unsupported", () => {
   assert.match(out.report.unsupported[0].message, /recursive/);
 });
 
-test("JS -> BASIC: a while loop is honestly unsupported", () => {
+test("JS -> BASIC: a while loop lowers to WHILE/WEND and round-trips (Amendment A4)", { skip: !HAS_PYTHON }, () => {
   let src = "let i = 0;\nwhile (i < 3) { i += 1; }\nconsole.log(i);";
+  let out = Iroh.translate(src, { to: "basic" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /WHILE i < 3/);
+  assert.match(out.code, /WEND/);
+  let run = runBasic(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "3\n");
+});
+
+test("JS -> BASIC: a while loop that never enters runs zero iterations (test-first carries over)", { skip: !HAS_PYTHON }, () => {
+  let src = 'let i = 5;\nwhile (i < 3) { i += 1; }\nconsole.log("done");';
+  let out = Iroh.translate(src, { to: "basic" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runBasic(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "done\n");
+});
+
+test("JS -> BASIC: a call inside a while condition is honestly unsupported (it re-tests every pass)", () => {
+  let src = "function f() { return 1; }\nlet i = 0;\nwhile (f() < 0) { i += 1; }\nconsole.log(i);";
   let out = Iroh.translate(src, { to: "basic" });
   assert.equal(out.report.ok, false);
   assert.equal(out.report.unsupported[0].construct, "WhileStatement");
+  assert.match(out.report.unsupported[0].message, /call inside a while condition/);
 });
 
 // ------------------------------------------------------------------
@@ -327,6 +348,24 @@ test("BASIC -> JS: the shipped examples round-trip (add, hot loop, gosub)", { sk
   let outGosub = Iroh.translate(gosub, { from: "basic", to: "javascript" });
   assert.equal(outGosub.report.ok, true, JSON.stringify(outGosub.report.unsupported));
   assert.equal(runNode(outGosub.code).stdout, "in the subroutine\nback\n");
+});
+
+test("BASIC -> JS: WHILE/WEND lowers to a while loop and round-trips (Amendment A4)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 LET I = 0\n20 WHILE I < 3\n30 PRINT I\n40 LET I = I + 1\n50 WEND";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /while \(I < 3\) \{/);
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "0\n1\n2\n");
+});
+
+test("BASIC -> JS: a WEND without a matching WHILE is honestly unsupported", () => {
+  let src = "10 LET X = 1\n20 WEND";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, false);
+  assert.equal(out.report.unsupported[0].construct, "WhileStatement");
+  assert.match(out.report.unsupported[0].message, /WEND without a matching WHILE/);
 });
 
 test("BASIC -> JS: INPUT reads stdin and prints the prompt", { skip: !HAS_PYTHON }, () => {
@@ -446,4 +485,21 @@ test("BASIC with END translates cleanly to Python and C++ (no host kill, no .exi
   let iroh = Iroh.translate(bas, { from: "basic", to: "irohscript", irohscriptHome: IROHSCRIPT_DIR });
   assert.equal(iroh.report.ok, false);
   assert.ok(iroh.report.unsupported.some((u) => u.message.includes("process.exit")));
+});
+
+test("BASIC -> Python and -> IrohScript: a WHILE program rides both hops and round-trips (Amendment A4)", { skip: !HAS_PYTHON }, () => {
+  // The while now lowers at every hop: BASIC WHILE/WEND -> JavaScript
+  // while (Amendment A4), then JavaScript while -> Python while /
+  // IrohScript LOOP (Amendment A2). The classic column lights up
+  // end to end.
+  let bas = "10 LET I = 0\n20 WHILE I < 3\n30 PRINT I\n40 LET I = I + 1\n50 WEND";
+  let py = Iroh.translate(bas, { from: "basic", to: "python", irohscriptHome: IROHSCRIPT_DIR });
+  assert.equal(py.report.ok, true, JSON.stringify(py.report.unsupported));
+  assert.equal(runPython(py.code).stdout, "0\n1\n2\n");
+  let iroh = Iroh.translate(bas, { from: "basic", to: "irohscript", irohscriptHome: IROHSCRIPT_DIR });
+  assert.equal(iroh.report.ok, true, JSON.stringify(iroh.report.unsupported));
+  assert.match(iroh.code, /LOOP I < 3/);
+  let run = runIrohscript(iroh.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "0\n1\n2\n");
 });

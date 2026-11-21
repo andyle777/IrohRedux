@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-744%20passing-brightgreen.svg?style=flat-square" alt="744 tests passing" />
+  <img src="https://img.shields.io/badge/tests-749%20passing-brightgreen.svg?style=flat-square" alt="749 tests passing" />
 </p>
 
 <p align="center">
@@ -67,7 +67,7 @@ cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
 npm run build:catalog # builds the offline SQLite reference catalog
-npm test            # 744 tests: 466 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
+npm test            # 749 tests: 471 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
 ```
 
 The Python client installs with `pip install -e python/`. The C++
@@ -215,7 +215,14 @@ Honest limits, in one place.
   do-while stays a loud stub (IrohScript has no post-test loop).
 - **BASIC:** GOTO has no event category, so GOTO loops are invisible
   in the trace (FOR/NEXT is the observable loop). DIM and array
-  reads have no events either.
+  reads have no events either. The WHILE/WEND patch (Amendment A4,
+  same day as A3) opens the classic column: a JavaScript `while`
+  lowers to `WHILE ... WEND` and back, round-trip tested through
+  the interpreter, and a BASIC WHILE program rides both translate
+  hops (to Python `while` and to the IrohScript `LOOP`). The one
+  loud stub: a call inside a while condition — the WHILE line is
+  re-tested every pass and cannot carry the GOSUB a hoisted call
+  needs.
 - **Translate:** `translate()` runs the program for type evidence
   by default (pass `options.evidence: "none"` to skip it). The
   report carries a `verify` block saying whether the emitted
@@ -245,7 +252,7 @@ Newest first. Hashes live on the release page, not in this file.
   laptop joins it as a node (`iroh node`) to run the legs the
   phone cannot — see `SERVER.md`. The perceptron weights are now
   defined by `personality-matrix.json`, and the AI bundle includes a
-  read-only SQLite memory catalog. 744 tests (466 Node + 25 Python
+  read-only SQLite memory catalog. 749 tests (471 Node + 25 Python
   + 9 C++ + 244 IrohScript/BASIC).
 - **1.1.1 (20 Nov 2026) — the patch.** The trace memory release:
   a finished trace releases its Stage (a 500,013-event trace now
