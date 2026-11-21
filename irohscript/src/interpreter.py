@@ -7,7 +7,8 @@ checker; the interpreter enforces the runtime half of the rules:
   - PRINT writes the value to output (Bool prints as TRUE/FALSE).
   - ACTION records the evaluated action and prints it.
   - SET declares or assigns; CONST declares an immutable binding.
-  - IF branches on a Bool; LOOP has no defined exit condition in the
+  - IF branches on a Bool; LOOP is decided conditional (Amendment
+    A1, test-first) and must branch on a Bool like IF; the legacy bare
     spec, so executing one raises a clear error naming it as an open
     design question (it is not silently executed, and not silently
     skipped).
@@ -230,10 +231,24 @@ class Interpreter:
         self._exec_block(branch, env)
 
     def _do_LOOP(self, instr, env):
-        raise IrohRuntimeError(
-            "Legacy LOOP has no defined exit condition in IrohScript 3.0 "
-            "(spec section 6 shows the form but not the termination rule); "
-            "executing it is an open design question for the Chaos Architect")
+        # Amendment A1 (2026-11-21): the exit rule is decided for the
+        # CONDITIONAL form, LOOP <Bool-expr> ... END, test-first like
+        # IF. The legacy bare form still has no rule and still errors.
+        cond_ir = instr.get("cond")
+        if cond_ir is None:
+            raise IrohRuntimeError(
+                "Legacy LOOP has no defined exit condition in IrohScript "
+                "3.0 (spec section 6 shows the form but not the "
+                "termination rule); executing it is an open design "
+                "question for the Chaos Architect (the Amendment A1 "
+                "conditional form LOOP <Bool> has one)")
+        while True:
+            cond = self._eval(cond_ir, env)
+            if not isinstance(cond, bool):
+                raise IrohRuntimeError("LOOP condition is not a Bool")
+            if not cond:
+                break
+            self._exec_block(instr["body"], env)
 
     def _do_FUNCDEF(self, instr, env):
         func = FunctionValue(instr["name"], instr["params"],

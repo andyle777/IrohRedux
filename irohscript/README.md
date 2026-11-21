@@ -23,7 +23,9 @@ nothing more. It is the Level 0 Python bootstrap (spec section 21).
   graph.
 - **BASIC-first parser** (`src/lexer.py`, `src/parser.py`) — LET, CONST,
   FUNCTION, IF/ELSE, RETURN, PRINT, ACTION, STRUCT, ENUM, IMPORT,
-  INTENT, LOOP, plus the legacy Iroh translator (`enemy -> defend`).
+  INTENT, LOOP (the legacy bare form, plus the conditional
+  `LOOP <Bool-expr>` decided by Amendment A1, 2026-11-21), plus
+  the legacy Iroh translator (`enemy -> defend`).
 - **Type system** (`src/typesys.py`, `src/checker.py`) — Int, String,
   Float, Bool, STRUCT/ENUM types, CONST mutation rejection.
 - **AST → IR → IRX** (`src/ast_nodes.py`, `src/ir.py`, `src/irx.py`) —
@@ -89,9 +91,11 @@ python3 -m src.basic_trace examples/hotloop.bas   # BASIC tracer
   Hashes are CRC32 of kind:file:instruction-path (IRX carries no
   source positions; the path is deterministic because compilation
   is). A function body traces under its definition path, never the
-  call site. Blind spots: LOOP raises (no exit rule in the spec), so
-  no LOOP events exist for IrohScript; INTENT has no event category;
-  a call that raises has no CALL_END / LEAVE.
+  call site. Blind spots: the legacy bare LOOP raises (no exit rule in the
+  spec), but since Amendment A1 (2026-11-21) the conditional
+  `LOOP <Bool-expr>` traces LOOP_TEST / LOOP_ENTER exactly like the
+  python leg's while loop; INTENT has no event category; a call
+  that raises has no CALL_END / LEAVE.
 - **BASIC** (`src/basic.py`, `src/basic_trace.py`): a small dedicated
   interpreter — GOTO/FOR need a program counter, which the IrohScript
   tree-walk cannot express. v1 covers line numbers (optional), `:`
@@ -142,27 +146,28 @@ resource ownership (OPEN/USE/RELEASE), capability authorization,
 accepted and recorded, but any use of it is a clear compile error
 naming the extension. Legacy `LOOP` parses to an AST node but executing
 it raises a clear error: the spec shows the form, not the termination
-rule.
+rule. The conditional `LOOP <Bool-expr>` form (Amendment A1,
+2026-11-21) does execute, test-first, and traces.
 
 ## Tests
 
-221 tests, all passing (run: `python3 -m unittest discover -s tests`):
+239 tests, all passing (run: `python3 -m unittest discover -s tests`):
 
 | Layer | Tests |
 |---|---|
 | Lexer | 21 |
-| Parser | 33 |
+| Parser | 37 |
 | AST / canonicalization / IrohCore | 14 |
 | Type checker / semantics | 31 |
 | IR lowering | 10 |
 | IRX / determinism | 7 |
 | Optimizer | 13 |
-| Interpreter | 21 |
+| Interpreter | 26 |
 | Python bridge | 7 |
 | Golden (source → AST → IR → IRX) | 2 test methods over 10 fixtures |
-| IrohScript tracer | 14 |
-| BASIC interpreter | 35 |
-| BASIC tracer | 13 |
+| IrohScript tracer | 16 |
+| BASIC interpreter | 41 |
+| BASIC tracer | 14 |
 
 Golden fixtures live in `tests/golden/*.json` and were hand-checked
 after generation. If a golden test fails, fix the compiler (or get the

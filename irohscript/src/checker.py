@@ -205,6 +205,12 @@ class Checker:
         self.check_expr(stmt.action)
 
     def _check_Loop(self, stmt):
+        # Amendment A1: the conditional LOOP tests a Bool, like IF.
+        if stmt.cond is not None:
+            cond_type = self.check_expr(stmt.cond)
+            if not compatible(BOOL, cond_type):
+                raise TypeCheckError(
+                    "LOOP condition must be Bool, got %s" % cond_type.name)
         for s in stmt.body:
             self.check_stmt(s)
 

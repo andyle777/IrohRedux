@@ -163,6 +163,10 @@ class Conditional:
 @dataclass
 class Loop:
     body: list = field(default_factory=list)
+    # Amendment A1 (2026-11-21): LOOP <Bool-expr> is the decided
+    # conditional form; the legacy bare LOOP keeps cond None. Not
+    # serialized in to_dict (golden AST files stay byte-stable).
+    cond: object = None
 
     def to_dict(self):
         return {"node": "Loop", "body": [_d(s) for s in self.body]}

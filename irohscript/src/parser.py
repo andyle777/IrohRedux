@@ -166,9 +166,16 @@ class Parser:
             return A.Intent(self.parse_expr())
         if kind == "LOOP":
             self.advance()
+            # Amendment A1 (2026-11-21): LOOP followed by a Bool
+            # expression is the decided conditional loop (test-first,
+            # like IF). The bare legacy form (spec section 6) still
+            # parses, with cond None, and still errors at run time.
+            cond = None
+            if not self.at("NEWLINE"):
+                cond = self.parse_expr()
             body = self.parse_block()
             self.expect_end("LOOP")
-            return A.Loop(body)
+            return A.Loop(body, cond)
         if kind == "IDENT":
             return self.parse_ident_statement()
         raise ParseError("Unexpected %r" % (tok.value,), line=tok.line)

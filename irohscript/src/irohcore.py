@@ -52,7 +52,9 @@ class IrohCore:
             return A.FunctionDef(stmt.name, stmt.params,
                                  self._canon_block(stmt.body))
         if isinstance(stmt, A.Loop):
-            return A.Loop(self._canon_block(stmt.body))
+            # Amendment A1: keep the conditional's cond through
+            # canonicalization (bare LOOP stays cond None).
+            return A.Loop(self._canon_block(stmt.body), stmt.cond)
         return stmt
 
     # ------------------------------------------------------------- intents

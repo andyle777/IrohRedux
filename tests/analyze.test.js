@@ -381,10 +381,11 @@ test("coverage denominators are per-tracer reachable sets", () => {
   assert.equal(py.scores.coverage.total, 30);
   assert.equal(py.scores.coverage.value, Math.round((2 / 6) * 10000) / 10000);
   assert.deepEqual(py.scores.coverage.missingCategories, ["ASSIGN", "CATCH", "IF", "LOOP"]);
-  // IrohScript: four reachable.
+  // IrohScript: five reachable (Amendment A1 decided LOOP, so a
+  // conditional loop can now fire LOOP_TEST/LOOP_ENTER).
   let iroh = Iroh.analyze([ev("CALL")], { language: "irohscript" });
-  assert.equal(iroh.scores.coverage.reachable, 4);
-  assert.equal(iroh.scores.coverage.value, 0.25);
+  assert.equal(iroh.scores.coverage.reachable, 5);
+  assert.equal(iroh.scores.coverage.value, 0.2);
   // BASIC: five reachable.
   let basic = Iroh.analyze([ev("CALL"), ev("LOOP")], { language: "basic" });
   assert.equal(basic.scores.coverage.reachable, 5);

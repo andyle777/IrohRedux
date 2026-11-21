@@ -160,6 +160,42 @@ class TestTracerBranches(unittest.TestCase):
         self.assertEqual([t["value"] for t in tests], [True])
 
 
+class TestTracerConditionalLoop(unittest.TestCase):
+    """Amendment A1 (2026-11-21): conditional LOOP traces exactly
+    like the python leg's while loop (LOOP_TEST per test, LOOP_ENTER
+    once per loop instance).
+    """
+
+    LOOP_PROGRAM = (
+        "LET i : Int = 0\n"
+        "LOOP i < 3\n"
+        " PRINT i\n"
+        " i = i + 1\n"
+        "END LOOP\n"
+    )
+
+    def test_conditional_loop_emits_tests_then_single_enter(self):
+        events = _events_of(self.LOOP_PROGRAM, filename="loop.iroh")
+        tests = [e for e in events if e["event"] == "LOOP_TEST"]
+        self.assertEqual([t["value"] for t in tests],
+                         [True, True, True, False])
+        for t in tests:
+            self.assertEqual(t["kind"], "Loop")
+            self.assertEqual(t["file"], "loop.iroh")
+        enters = [e for e in events if e["event"] == "LOOP_ENTER"]
+        self.assertEqual(len(enters), 1)
+        self.assertEqual(len({t["hash"] for t in tests}), 1)
+        self.assertEqual(enters[0]["hash"], tests[0]["hash"])
+
+    def test_zero_iteration_loop_tests_once_never_enters(self):
+        events = _events_of(
+            'LET f : Bool = FALSE\nLOOP f\n PRINT "never"\nEND LOOP\n',
+            filename="zero.iroh")
+        tests = [e for e in events if e["event"] == "LOOP_TEST"]
+        self.assertEqual([t["value"] for t in tests], [False])
+        self.assertFalse(any(e["event"] == "LOOP_ENTER" for e in events))
+
+
 class TestTracerErrors(unittest.TestCase):
     def test_loop_is_an_error_naming_the_open_question(self):
         _, error = trace_source(

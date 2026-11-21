@@ -1,0 +1,7 @@
+# Amendment A1 (2026-11-21): the conditional LOOP, decided.
+# Test-first like IF: one LOOP_TEST per test, one LOOP_ENTER.
+LET i : Int = 0
+LOOP i < 3
+    PRINT i
+    i = i + 1
+END LOOP

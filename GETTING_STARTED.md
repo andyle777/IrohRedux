@@ -184,10 +184,11 @@ IrohScript (stdlib only, `irohscript/src/tracer.py`): hooks in the IRX
 interpreter — function calls (arguments, return, depth), `IF` tests
 (`IF_TEST`), assignments (`ASSIGN`). A one-sided branch analyzes to
 `ONE_SIDED_BRANCH`, a 25-deep recursion to `DEEP_RECURSION`. Honest
-limits: `LOOP` has no defined exit rule in the spec, so executing one
-is an error, not a trace — `HOT_LOOP` / `ZERO_ITERATION_LOOP` can never
-fire for IrohScript until that rule is decided; `INTENT` has no event
-category; a call that raises has no `CALL_END` / `LEAVE`.
+limits: the conditional `LOOP <Bool-expr>` runs and traces since
+Amendment A1 (`HOT_LOOP` / `ZERO_ITERATION_LOOP` now fire); the
+legacy bare `LOOP` still errors when executed (the spec shows the
+form, not the rule). `INTENT` has no event category; a call that
+raises has no `CALL_END` / `LEAVE`.
 
 BASIC (stdlib only, `irohscript/src/basic.py` + `src/basic_trace.py`):
 a small dedicated interpreter — `FOR`/`NEXT` loops (`LOOP_TEST` /
@@ -377,7 +378,7 @@ node cli/iroh.js doctor
 #   python: ran 25, failed 0, skipped 0
 #   ...
 # Toolchains: node v24.22.1, python3 3.12.3, g++ ...
-# dist: iroh-node.js 5fadb433f801, ...
+# dist: iroh-node.js d656d42a8de5, ...
 ```
 
 `iroh doctor` prints the last recorded test run (from
@@ -596,7 +597,7 @@ fact here disagrees with a prose paragraph above, this section wins
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `5fadb433f801367b965513a5d0d86fb612285404d4ec506eca76b418d7046ea5`.
+  `d656d42a8de51c068372c92900708c0ecce3ec5038f9662122369684f440c5cf`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set.
