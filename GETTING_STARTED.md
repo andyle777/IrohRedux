@@ -187,8 +187,11 @@ interpreter — function calls (arguments, return, depth), `IF` tests
 limits: the conditional `LOOP <Bool-expr>` runs and traces since
 Amendment A1 (`HOT_LOOP` / `ZERO_ITERATION_LOOP` now fire); the
 legacy bare `LOOP` still errors when executed (the spec shows the
-form, not the rule). `INTENT` has no event category; a call that
-raises has no `CALL_END` / `LEAVE`.
+form, not the rule). Since the lowering patch (Amendment A2,
+2026-11-21) the conditional LOOP exchanges with JavaScript `while`
+in both translate directions (do-while cannot be test-first and
+stays a stub). `INTENT` has no event category; a call that raises
+has no `CALL_END` / `LEAVE`.
 
 BASIC (stdlib only, `irohscript/src/basic.py` + `src/basic_trace.py`):
 a small dedicated interpreter — `FOR`/`NEXT` loops (`LOOP_TEST` /

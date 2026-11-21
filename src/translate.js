@@ -3789,7 +3789,18 @@ function makeIrohAstJSEmitter(report) {
       return;
     }
     if (node.node === "Loop") {
-      stubStmt("the legacy unconditional IrohScript LOOP still cannot execute or translate (Amendment A1 decided the conditional LOOP <Bool> form; lowering it is not in the translator yet)", "Loop");
+      // Amendment A2 (2026-11-21): the conditional LOOP <Bool-expr>
+      // (Amendment A1) lowers to a while loop — same test-first
+      // semantics. The legacy bare LOOP has no exit rule and stays
+      // a loud stub.
+      if (node.cond === null || node.cond === void 0) {
+        stubStmt("the legacy bare IrohScript LOOP has no exit rule (Amendment A1 kept it a run-time error), so it cannot translate; the conditional LOOP <Bool-expr> form can", "Loop");
+        return;
+      }
+      counts.loops += 1;
+      emitLine("while (" + expr(node.cond, 0) + ") {");
+      emitBlock(node.body);
+      emitLine("}");
       return;
     }
     if (node.node === "FunctionDef") {
@@ -4222,7 +4233,7 @@ function finishSourceLeg(report, c) {
     report.clean.push({ construct: "variables", count: c.variables, detail: "variable declarations translated" });
   }
   if (c.loops > 0) {
-    report.clean.push({ construct: "loops", count: c.loops, detail: "for loops translated" });
+    report.clean.push({ construct: "loops", count: c.loops, detail: "loops translated" });
   }
   if (c.conditionals > 0) {
     report.clean.push({ construct: "conditionals", count: c.conditionals, detail: "if statements translated" });
@@ -4648,7 +4659,7 @@ function makeIrohJSEmitter(target, report, env, hints) {
     }
     if (node.type === "ForStatement") {
       if (isIroh) {
-        stubStmt("a for-loop has no equivalent in IrohScript v1 (the conditional LOOP decided in Amendment A1 is not lowered by the translator yet)", "ForStatement");
+        stubStmt("a for-loop is still out of scope for IrohScript v1 (Amendment A2 lowers while loops into the conditional LOOP; a numeric for-loop can be rewritten by hand as a LET plus a LOOP)", "ForStatement");
         return;
       }
       let pat = forLoopPattern(node);
@@ -4676,8 +4687,22 @@ function makeIrohJSEmitter(target, report, env, hints) {
       emitLine("NEXT " + pat.name);
       return;
     }
-    if (node.type === "WhileStatement" || node.type === "DoWhileStatement") {
-      stubStmt("a " + (node.type === "WhileStatement" ? "while" : "do-while") + " loop has no equivalent in " + target + " v1", node.type);
+    if (node.type === "WhileStatement") {
+      // Amendment A2 (2026-11-21): a JavaScript while lowers into
+      // the conditional IrohScript LOOP (Amendment A1) — the same
+      // test-first semantics. BASIC stays a loud stub.
+      if (!isIroh) {
+        stubStmt("a while loop has no equivalent in " + target + " v1", "WhileStatement");
+        return;
+      }
+      counts.loops += 1;
+      emitLine("LOOP " + expr(node.test, 0));
+      emitBody(node.body.type === "BlockStatement" ? node.body : { type: "BlockStatement", body: [node.body] });
+      emitLine("END LOOP");
+      return;
+    }
+    if (node.type === "DoWhileStatement") {
+      stubStmt("a do-while loop cannot be test-first (it runs its body before the first test), and " + target + " has no post-test loop", "DoWhileStatement");
       return;
     }
     if (node.type === "ClassDeclaration" || node.type === "LabeledStatement") {

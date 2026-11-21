@@ -163,7 +163,16 @@ function makeCodegenEmitter() {
       return;
     }
     if (node.node === "Loop") {
-      throw compileError("LOOP has no defined exit condition in IrohScript 3.0 (spec section 6 shows the form but not the termination rule) — the compiler cannot emit a loop it cannot end");
+      // Amendment A2 (2026-11-21): the conditional LOOP <Bool-expr>
+      // (Amendment A1) lowers to a while loop. The legacy bare LOOP
+      // still throws: the compiler never emits a loop it cannot end.
+      if (node.cond === null || node.cond === void 0) {
+        throw compileError("LOOP has no defined exit condition in IrohScript 3.0 (spec section 6 shows the form but not the termination rule) — the compiler cannot emit a loop it cannot end; write the conditional form LOOP <Bool-expr> (Amendment A1) instead");
+      }
+      emitLine("while (" + expr(node.cond, 0) + ") {");
+      emitBlock(node.body);
+      emitLine("}");
+      return;
     }
     if (node.node === "Action") {
       throw compileError("ACTION is a program behaviour (record + print), not core library code — the compiler does not emit it");

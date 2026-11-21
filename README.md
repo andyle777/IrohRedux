@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-730%20passing-brightgreen.svg?style=flat-square" alt="730 tests passing" />
+  <img src="https://img.shields.io/badge/tests-740%20passing-brightgreen.svg?style=flat-square" alt="740 tests passing" />
 </p>
 
 <p align="center">
@@ -67,7 +67,7 @@ cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
 npm run build:catalog # builds the offline SQLite reference catalog
-npm test            # 730 tests: 457 Node + 25 Python + 9 C++ + 239 IrohScript/BASIC
+npm test            # 740 tests: 462 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
 ```
 
 The Python client installs with `pip install -e python/`. The C++
@@ -203,7 +203,11 @@ Honest limits, in one place.
   one LOOP_TEST per test plus one LOOP_ENTER per loop instance, so
   `HOT_LOOP` and `ZERO_ITERATION_LOOP` do fire for IrohScript. The
   legacy bare `LOOP ... END` has no exit rule in the spec and still
-  errors when executed.
+  errors when executed. The lowering patch (Amendment A2, same day)
+  took the rest: the conditional LOOP goes to JavaScript as `while`
+  in `translate()` and `compileIrohscript()`, and a JavaScript
+  `while` comes back as `LOOP <Bool> ... END LOOP`; do-while stays a
+  loud stub (IrohScript has no post-test loop).
 - **BASIC:** GOTO has no event category, so GOTO loops are invisible
   in the trace (FOR/NEXT is the observable loop). DIM and array
   reads have no events either.
@@ -236,8 +240,8 @@ Newest first. Hashes live on the release page, not in this file.
   laptop joins it as a node (`iroh node`) to run the legs the
   phone cannot — see `SERVER.md`. The perceptron weights are now
   defined by `personality-matrix.json`, and the AI bundle includes a
-  read-only SQLite memory catalog. 730 tests (457 Node + 25 Python
-  + 9 C++ + 239 IrohScript/BASIC).
+  read-only SQLite memory catalog. 740 tests (462 Node + 25 Python
+  + 9 C++ + 244 IrohScript/BASIC).
 - **1.1.1 (20 Nov 2026) — the patch.** The trace memory release:
   a finished trace releases its Stage (a 500,013-event trace now
   leaves a 472,976-byte residual heap, down from ~68 MB). Plus

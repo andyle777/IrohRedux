@@ -115,6 +115,22 @@ test("compileIrohscript: modulo is floored (Python-style), division is float", a
   assert.equal(mod.Fdiv(7, 2), 3.5);
 });
 
+test("compileIrohscript: the conditional LOOP lowers to a while loop (Amendment A2)", async () => {
+  let mod = await importCompiled(
+    "FUNCTION Sum(n)\n" +
+    "    LET i : Int = 0\n" +
+    "    LET s : Int = 0\n" +
+    "    LOOP i < n\n" +
+    "        s = s + i\n" +
+    "        i = i + 1\n" +
+    "    END LOOP\n" +
+    "    RETURN s\n" +
+    "END FUNCTION\n"
+  );
+  assert.equal(mod.Sum(5), 10);   // 0+1+2+3+4
+  assert.equal(mod.Sum(0), 0);    // zero-iteration conditional
+});
+
 test("compileIrohscript: LOOP, ACTION, INTENT and IMPORT throw a clear error", () => {
   assert.throws(
     () => Iroh.compileIrohscript("LOOP\n    PRINT 1\nEND LOOP\n", { irohscriptHome: path.join(ROOT, "irohscript") }),

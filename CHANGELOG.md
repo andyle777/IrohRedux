@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Amendment A2 (2026-11-21, the lowering patch): the conditional
+  IrohScript LOOP now lowers both directions. IrohScript
+  `LOOP <Bool-expr>` emits a JavaScript `while` in translate() and
+  compileIrohscript(); a JavaScript `while` emits
+  `LOOP <Bool> ... END LOOP` into IrohScript, round-trip tested
+  through the interpreter. The bridge AST view is ast_with_conds:
+  to_dict() plus the grafted Loop cond (golden to_dict stays
+  byte-stable, asserted by test; the graft walk asserts length
+  parity so a dropped statement can never pass silently). The
+  legacy bare LOOP still never lowers (stub in translate, throw in
+  compileIrohscript, error points at the conditional form); a
+  do-while cannot be test-first and is a loud stub; for-loops into
+  IrohScript remain out of v1 scope, reason updated. +5 Python
+  tests (AST graft view; suite 239 -> 244), +5 Node tests
+  (conditional-loop lowering round trips both ways, zero-iteration
+  while, do-while stub, codegen Sum(n) runs; suite 457 -> 462).
+  API.md, README.md, GETTING_STARTED.md, irohscript README, and a
+  dated addendum in the spec's Amendment A1 section updated.
 - Amendment A1 (2026-11-21): the IrohScript LOOP exit rule, decided.
   `LOOP <Bool-expr> ... END` (or `END LOOP`) is test-first like IF:
   the checker requires a Bool condition ("LOOP condition must be

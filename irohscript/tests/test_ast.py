@@ -77,6 +77,83 @@ class TestAstToDict(unittest.TestCase):
                           {"name": "b", "type": None}])
 
 
+class TestAstWithConds(unittest.TestCase):
+    """Amendment A2: the translation view of the AST carries the
+    Amendment A1 Loop cond (golden to_dict stays cond-free).
+    """
+
+    def test_conditional_loop_cond_is_grafted(self):
+        program = canon("LOOP i < 3\n PRINT 1\nEND")
+        out = A.ast_with_conds(program)
+        loop = out["statements"][0]
+        self.assertIs(loop["node"], "Loop")
+        self.assertIsNotNone(loop["cond"])
+        self.assertEqual(loop["cond"]["node"], "BinOp")
+        self.assertEqual(loop["cond"]["op"], "LT")
+
+    def test_legacy_loop_cond_is_none(self):
+        program = canon("LOOP\n PRINT 1\nEND")
+        out = A.ast_with_conds(program)
+        self.assertIsNone(out["statements"][0]["cond"])
+
+    def test_nested_loops_get_conds(self):
+        program = canon(
+            "LOOP i < 3\n"
+            " IF i > 1\n"
+            "  LOOP i < 1\n"
+            "   PRINT 99\n"
+            "  END\n"
+            " ELSE\n"
+            "  PRINT 0\n"
+            " END IF\n"
+            " i = i + 1\n"
+            "END LOOP\n"
+            "FUNCTION F()\n"
+            " LOOP TRUE\n"
+            "  RETURN 1\n"
+            " END\n"
+            "END FUNCTION\n")
+        out = A.ast_with_conds(program)
+        found = []
+
+        def walk(node):
+            if isinstance(node, dict):
+                if node.get("node") == "Loop":
+                    found.append(node.get("cond"))
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(out)
+        # outer loop, loop inside the IF branch, loop in F's body
+        self.assertEqual(len(found), 3)
+        self.assertTrue(all(c is not None for c in found))
+
+    def test_to_dict_stays_byte_stable(self):
+        # The graft touches only its own view; to_dict() output
+        # (and so every golden AST file) is unchanged.
+        program = canon("LOOP i < 3\n PRINT 1\nEND")
+        self.assertEqual(program.to_dict(), {
+            "node": "Program",
+            "statements": [{"node": "Loop", "body": [
+                {"node": "Print",
+                 "value": {"node": "Literal", "value": 1,
+                           "type": "Int"}}]}],
+        })
+        self.assertNotIn("cond", program.to_dict()["statements"][0])
+
+    def test_length_drift_is_asserted(self):
+        # The graft never walks blind: a statement list whose dict
+        # twin has drifted in length fails loudly instead of
+        # silently dropping statements (the A1 lesson).
+        program = canon("LOOP i < 1\n PRINT 1\nEND")
+        out = A.ast_with_conds(program)
+        with self.assertRaises(AssertionError):
+            A._graft_conds(program.statements, out["statements"][:-1])
+
+
 class TestIrohCoreIntents(unittest.TestCase):
     def test_record_intent(self):
         core = IrohCore()

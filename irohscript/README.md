@@ -147,17 +147,19 @@ accepted and recorded, but any use of it is a clear compile error
 naming the extension. Legacy `LOOP` parses to an AST node but executing
 it raises a clear error: the spec shows the form, not the termination
 rule. The conditional `LOOP <Bool-expr>` form (Amendment A1,
-2026-11-21) does execute, test-first, and traces.
+2026-11-21) does execute, test-first, and traces, and since the
+lowering patch (Amendment A2, same day) it exchanges with JavaScript
+`while` in both translate directions.
 
 ## Tests
 
-239 tests, all passing (run: `python3 -m unittest discover -s tests`):
+244 tests, all passing (run: `python3 -m unittest discover -s tests`):
 
 | Layer | Tests |
 |---|---|
 | Lexer | 21 |
 | Parser | 37 |
-| AST / canonicalization / IrohCore | 14 |
+| AST / canonicalization / IrohCore | 19 |
 | Type checker / semantics | 31 |
 | IR lowering | 10 |
 | IRX / determinism | 7 |

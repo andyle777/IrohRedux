@@ -72,11 +72,15 @@ export function runIrohscriptPython(code, options, childProcess, helper, what) {
 // compiles it with the bootstrap compiler, writes the AST as JSON on
 // stdout (warnings go to stderr). No hand-rolled IrohScript parser
 // on the JS side — the bootstrap is the authority, the same way
-// Python -> JS uses Python's own ast module.
+// Python -> JS uses Python's own ast module. The AST JSON is
+// ast_with_conds: to_dict() plus the Amendment A1 Loop ``cond``
+// (golden to_dict stays cond-free; the translator needs the
+// condition to lower the conditional LOOP).
 export const IROHSCRIPT_AST_HELPER = [
   "import json, sys",
   "sys.path.insert(0, sys.argv[1])",
   "from src.compiler import IrohCompiler",
+  "from src.ast_nodes import ast_with_conds",
   "src = sys.stdin.read()",
   "try:",
   "    result = IrohCompiler().compile(src)",
@@ -85,7 +89,7 @@ export const IROHSCRIPT_AST_HELPER = [
   "    sys.exit(1)",
   "for w in result.warnings:",
   "    sys.stderr.write('warning: %s\\n' % (w,))",
-  "sys.stdout.write(json.dumps(result.ast.to_dict()))",
+  "sys.stdout.write(json.dumps(ast_with_conds(result.ast)))",
 ].join("\n");
 
 export function getChildProcessSync() {

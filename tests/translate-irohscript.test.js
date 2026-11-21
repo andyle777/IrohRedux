@@ -130,6 +130,24 @@ test("JS -> IrohScript: a for-loop is honestly unsupported (no for in v1)", () =
   assert.match(out.code, /__iroh_unsupported/);
 });
 
+test("JS -> IrohScript: a while loop lowers to the conditional LOOP and round-trips (Amendment A2)", { skip: !HAS_PYTHON }, () => {
+  let src = "let i = 0;\nwhile (i < 3) { console.log(i); i += 1; }";
+  let out = Iroh.translate(src, { to: "irohscript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /LOOP i < 3/);
+  assert.match(out.code, /END LOOP/);
+  let run = runIrohscript(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "0\n1\n2\n");
+});
+
+test("JS -> IrohScript: a do-while loop is honestly unsupported (not test-first)", () => {
+  let src = "let i = 0;\ndo { i += 1; } while (i < 3);\nconsole.log(i);";
+  let out = Iroh.translate(src, { to: "irohscript" });
+  assert.equal(out.report.ok, false);
+  assert.equal(out.report.unsupported[0].construct, "DoWhileStatement");
+});
+
 test("JS -> IrohScript: modulo on non-negative operands round-trips", { skip: !HAS_PYTHON }, () => {
   let src = "let r = 7 % 3;\nconsole.log(r);";
   let out = Iroh.translate(src, { to: "irohscript" });
@@ -215,11 +233,33 @@ test("IrohScript -> JS: legacy enemy->defend becomes an ACTION call", { skip: !H
   assert.equal(run.stdout, "defend\n");
 });
 
-test("IrohScript -> JS: LOOP is honestly unsupported (no exit rule)", { skip: !HAS_PYTHON }, () => {
+test("IrohScript -> JS: the legacy bare LOOP is honestly unsupported (no exit rule)", { skip: !HAS_PYTHON }, () => {
   let src = "LOOP\n  PRINT \"again\"\nEND LOOP";
   let out = Iroh.translate(src, { from: "irohscript", to: "javascript" });
   assert.equal(out.report.ok, false);
   assert.equal(out.report.unsupported[0].construct, "Loop");
+});
+
+test("IrohScript -> JS: the conditional LOOP lowers to a while loop (Amendment A2)", { skip: !HAS_PYTHON }, () => {
+  let src = "LET i : Int = 0\nLOOP i < 3\n  PRINT i\n  i = i + 1\nEND LOOP";
+  let out = Iroh.translate(src, { from: "irohscript", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /while \(i < 3\) \{/);
+  assert.ok(out.report.clean.some(function(c) {
+    return c.construct === "loops" && c.count === 1;
+  }), "one loop in the clean report");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "0\n1\n2\n");
+});
+
+test("IrohScript -> JS: a zero-iteration conditional LOOP emits a valid while loop", { skip: !HAS_PYTHON }, () => {
+  let src = 'LET f : Bool = FALSE\nLOOP f\n  PRINT "never"\nEND LOOP\nPRINT "done"';
+  let out = Iroh.translate(src, { from: "irohscript", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "done\n");
 });
 
 test("IrohScript -> JS: a program that does not compile fails clearly", { skip: !HAS_PYTHON }, () => {

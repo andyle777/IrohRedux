@@ -226,3 +226,37 @@ class Intent:
 
     def to_dict(self):
         return {"node": "Intent", "value": _d(self.value)}
+
+
+def _graft_conds(stmts, dicts):
+    """Walk statements and their to_dict() output in parallel,
+    grafting the Amendment A1 Loop ``cond`` onto each Loop dict.
+
+    Golden to_dict() output stays byte-stable (no cond key); only this
+    translation view carries the condition. The walk is explicit and
+    asserts lengths so a dropped statement can never pass silently.
+    """
+    assert len(stmts) == len(dicts), "AST/dict length drift"
+    for st, dc in zip(stmts, dicts):
+        if isinstance(st, Loop):
+            dc["cond"] = _d(st.cond) if st.cond is not None else None
+            _graft_conds(st.body, dc["body"])
+        elif isinstance(st, If):
+            _graft_conds(st.then_body, dc["then"])
+            if st.else_body:
+                _graft_conds(st.else_body, dc["else"])
+        elif isinstance(st, FunctionDef):
+            _graft_conds(st.body, dc["body"])
+
+
+def ast_with_conds(program):
+    """to_dict(program) plus the Loop conditions (Amendment A1).
+
+    The JavaScript translator needs the condition to lower the
+    conditional LOOP; to_dict() alone cannot distinguish the two
+    LOOP forms. Nested loops (a loop inside a loop body, an IF
+    branch, or a function body) are grafted too.
+    """
+    out = program.to_dict()
+    _graft_conds(program.statements, out["statements"])
+    return out
