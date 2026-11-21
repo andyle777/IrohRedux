@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/andyle777/IrohRedux/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/version-1.1.1-orange.svg?style=flat-square" alt="Version 1.1.1" />
+  <img src="https://img.shields.io/badge/version-1.2.0-orange.svg?style=flat-square" alt="Version 1.2.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D%2022-339933.svg?style=flat-square" alt="Node >= 22" />
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
@@ -77,9 +77,12 @@ Works offline — no network required. Nothing in the app or the
 binaries phones home, checks for updates, or downloads at first run.
 The APK manifest does not even request internet permission.
 
-## Download — 1.1.1 patched (current)
+## Download — 1.2.0 (current)
 
-Direct links to the [v1.1.1 release](https://github.com/andyle777/IrohRedux/releases/tag/v1.1.1). These are the patched assets, re-uploaded to the existing release — no new version, no new tag.
+The [v1.2.0 release](https://github.com/andyle777/IrohRedux/releases/tag/v1.2.0) carries the amendment tree, the rebuilt dist and the AI bundle. The desktop EXEs and the Android APK are rebuilt on the dev box (the same recipe as 1.1.1) and attach to that release; until they land, the [v1.1.1 binaries](https://github.com/andyle777/IrohRedux/releases/tag/v1.1.1) remain the last built executables — the engine inside them speaks 1.1.1.
+
+- [iroh-1.2.0-ai-bundle.zip](https://github.com/andyle777/IrohRedux/releases/download/v1.2.0/iroh-1.2.0-ai-bundle.zip) — AI bundle. API reference, memory/state model, JSON schemas and samples, generated from the 1.2.0 tree, for AI agents to load and use the engine.
+- `iroh-1.2.0-linux`, `iroh-1.2.0-macos`, `iroh-1.2.0-macos-arm64`, `iroh-1.2.0-win.exe`, `iroh-1.2.0.apk` — the platform binaries, same engines and legs as 1.1.1, rebuilt on the dev box; watch the release page for their hashes.
 
 - [iroh-1.1.1-linux](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1-linux) — Linux. The engine as a single executable, rebuilt from the patched tree. Includes `iroh serve` and `iroh node` — the laptop becomes a local node. JavaScript legs run standalone; Python, C++, IrohScript and BASIC legs need `python3` (and `g++` for C++).
 - [iroh-1.1.1-macos](https://github.com/andyle777/IrohRedux/releases/download/v1.1.1/iroh-1.1.1-macos) — macOS (Intel). Same engine, same legs.
@@ -236,7 +239,20 @@ Honest limits, in one place.
 
 Newest first. Hashes live on the release page, not in this file.
 
-- **1.1.1 (patched, 20 Nov 2026) — this tree.** Same version,
+- **1.2.0 (21 Nov 2026) — this tree. The amendment release.** Four
+  amendments on top of the 1.1.1 patched line, one per honest swing:
+  A1 gave the IrohScript LOOP its exit rule (`LOOP <Bool-expr>`,
+  test-first like IF, traced so `HOT_LOOP` and
+  `ZERO_ITERATION_LOOP` fire), A2 lowered the conditional LOOP to
+  a JavaScript `while` and back, A3 desugared the JavaScript
+  `for` into init + `LOOP <test>` + update, and A4 lowered the
+  while between JavaScript and BASIC (`WHILE ... WEND`), opening
+  both translate hops (BASIC WHILE reaches Python `while` and the
+  IrohScript `LOOP`). do-while stays a loud stub everywhere — it
+  cannot be test-first. Tag v1.2.0; the dist, the AI bundle, the
+  docs and the memory catalog are regenerated from this tree.
+  749 tests (471 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC).
+- **1.1.1 (patched, 20 Nov 2026).** Same version,
   patched in place: no 1.1.2, no version bump. The Python
   translator no longer emits f-strings for template literals
   (concatenation instead — the old output was a SyntaxError on
@@ -274,21 +290,21 @@ Newest first. Hashes live on the release page, not in this file.
 
 ## Compatibility table
 
-Dated 20 Nov 2026. "Present" means the defect is in that
+Dated 21 Nov 2026. "Present" means the defect is in that
 generation as shipped; "patched" means fixed in the 1.1.1 patched
-rebuild (same version, this tree). The machine-readable form is
-`generations.json` in this repo.
+rebuild; 1.2.0 (this tree) inherits every fixed state. The
+machine-readable form is `generations.json` in this repo.
 
-| Defect | 1.0.1 | 1.1.0 | 1.1.1 | 1.1.1 patched |
-|---|---|---|---|---|
-| APK cannot execute its own runtime (error=13) | present | present | present | fixed (Fix B) |
-| Bool interpolation emits an unparsable f-string below 3.12 | present | present | fixed | fixed |
-| Any interpolation containing a delimiter quote, backslash, brace or colon | present | present | present | fixed (concatenation) |
-| Success reported when the artifact cannot run (no verify field) | present | present | present | fixed |
-| EXE bundles a Node 18.5.0 runtime while metadata claims >= 22 | unchecked | unchecked | verified | stated honestly (doctor + --version + README) |
-| AI bundle API text does not document 1.1.1 fields | unchecked | unchecked | verified | fixed (generated from API.md + CI check) |
-| No manifest of file hashes in the AI bundle | present | present | present | fixed |
-| APK ships arm64 only, debug cert | present | present | present | present (unchanged) |
+| Defect | 1.0.1 | 1.1.0 | 1.1.1 | 1.1.1 patched | 1.2.0 |
+|---|---|---|---|---|---|
+| APK cannot execute its own runtime (error=13) | present | present | present | fixed (Fix B) | fixed (Fix B) |
+| Bool interpolation emits an unparsable f-string below 3.12 | present | present | fixed | fixed | fixed |
+| Any interpolation containing a delimiter quote, backslash, brace or colon | present | present | present | fixed (concatenation) | fixed (concatenation) |
+| Success reported when the artifact cannot run (no verify field) | present | present | present | fixed | fixed |
+| EXE bundles a Node 18.5.0 runtime while metadata claims >= 22 | unchecked | unchecked | verified | stated honestly (doctor + --version + README) | stated honestly (doctor + --version + README) |
+| AI bundle API text does not document 1.1.1 fields | unchecked | unchecked | verified | fixed (generated from API.md + CI check) | fixed (generated from API.md + CI check) |
+| No manifest of file hashes in the AI bundle | present | present | present | fixed | fixed |
+| APK ships arm64 only, debug cert | present | present | present | present (unchanged) | present (unchanged) |
 
 ## Learn more
 
@@ -334,17 +350,16 @@ fact here disagrees with a prose paragraph above, this section wins
 
 ## Engine identity
 
-- Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026).
-  No 1.1.2. No version bump.
+- Engine: IrohRedux 1.2.0 (the amendment release, 21 Nov 2026).
 - `dist/iroh-node.js` SHA-256:
-  `851a800e75f990eae66786685b616d78651bafef6c49d6ab19c1482a8abfc670`
+  `3969bee3c820b613679d5d47480c6512452558760ceab0af69dcc1c863b7c083`
 - The dist is self-contained: the parser and codegen dependencies
   (acorn, acorn-walk, astring) are bundled in, not `require`d at
   runtime. A fresh source checkout runs the CLI with no npm install,
   so a restricted AI sandbox needs nothing but Node on PATH:
   `node cli/iroh.js program.js --analyze`
-- `iroh --version` prints `iroh 1.1.1 (engine dist iroh-node.js
-  851a800e75f9, runtime node v18.5.0)` inside a packaged binary
+- `iroh --version` prints `iroh 1.2.0 (engine dist iroh-node.js
+  3969bee3c820, runtime node v18.5.0)` inside a packaged binary
   (runtime is the embedded Node; on npm it is the local node).
 - `iroh doctor` prints the dist hashes, the toolchains, the last
   test run, and the leg capabilities.

@@ -386,7 +386,7 @@ node cli/iroh.js doctor
 #   python: ran 25, failed 0, skipped 0
 #   ...
 # Toolchains: node v24.22.1, python3 3.12.3, g++ ...
-# dist: iroh-node.js 851a800e75f9, ...
+# dist: iroh-node.js 3969bee3c820, ...
 ```
 
 `iroh doctor` prints the last recorded test run (from
@@ -411,7 +411,7 @@ The APK starts a local server on your phone after setup, and shows
 its address on the status line:
 
 ```
-Ready — Node v26.13.1 · IrohRedux 1.1.1 · JS legs only (no python3 on Android)
+Ready — Node v26.13.1 · IrohRedux 1.2.0 · JS legs only (no python3 on Android)
 · Server on 192.168.1.5:8471
 ```
 
@@ -603,9 +603,9 @@ Machine-readable facts. Load this section without guessing. If a
 fact here disagrees with a prose paragraph above, this section wins
 — and the disagreement is a bug; file it.
 
-- Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
-  1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `851a800e75f990eae66786685b616d78651bafef6c49d6ab19c1482a8abfc670`.
+- Engine: IrohRedux 1.2.0 (the amendment release, 21 Nov 2026).
+  `dist/iroh-node.js` SHA-256:
+  `3969bee3c820b613679d5d47480c6512452558760ceab0af69dcc1c863b7c083`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set.

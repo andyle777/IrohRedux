@@ -104,7 +104,7 @@ test("server: a JS trace through the server matches the local engine exactly", a
   let health = await request(handle.port, "GET", "/health");
   assert.equal(health.status, 200);
   assert.equal(health.body.service, "iroh");
-  assert.equal(health.body.version, "1.1.1");
+  assert.equal(health.body.version, "1.2.0");
   assert.ok(health.body.distSha);
   assert.ok(handle.addresses.indexOf("127.0.0.1") !== -1);
   let res = await request(handle.port, "POST", "/trace", { language: "javascript", code: LOOP_JS });

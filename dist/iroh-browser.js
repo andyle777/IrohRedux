@@ -14,7 +14,7 @@ var iroh = (function () {
       }
     }}
 
-  var version$1="1.1.1";
+  var version$1="1.2.0";
 
   // indent factor
   var INDENT_FACTOR = 1;

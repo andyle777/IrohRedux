@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+Nothing unreleased yet.
+
+## 1.2.0 — the amendment release (21 Nov 2026)
+
 - Amendment A4 (2026-11-21, the WHILE/WEND patch): the while lowers
   between JavaScript and BASIC, both directions, and the classic
   column lights up end to end. A JavaScript `while` becomes
