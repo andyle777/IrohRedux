@@ -231,3 +231,28 @@ test("CLI --version prints version, dist SHA and runtime, exit 0", () => {
   let distSha = crypto.createHash("sha256").update(fs.readFileSync(path.join(__dirname, "..", "dist", "iroh-node.js"))).digest("hex").slice(0, 12);
   assert.equal(proc.stdout.trim(), "iroh " + pkg.version + " (engine dist iroh-node.js " + distSha + ", runtime node " + process.version + ")");
 });
+
+// Minor fix (2026-11-22): the python / irohscript / basic legs
+// already redirect the traced program's own stdout to stderr while
+// it runs, so stdout stays a clean JSONL stream. The JavaScript leg
+// runs in-process, so a traced console.log used to write to real
+// stdout, mixing program output into the event lines and breaking
+// the lines-are-JSON contract. The CLI now reroutes a traced
+// program's console.log / console.info to stderr for the duration
+// of the run; every stdout line must stay parseable JSON.
+test("CLI keeps stdout pure JSONL and reroutes a traced program's console.log to stderr", () => {
+  let proc = spawnSync(process.execPath, [CLI], {
+    input: 'console.log("MARK_LOG");\nconsole.info("MARK_INFO");\n23 + 19\n',
+    encoding: "utf8",
+  });
+  assert.equal(proc.status, 0);
+  // Every stdout line must parse: the program's own prints may not
+  // leak into the stream (they would fail this parse).
+  let lines = proc.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  assert.ok(lines.length > 1, "expected event lines plus a result line");
+  let result = lines[lines.length - 1];
+  assert.equal(result.type, "result");
+  assert.equal(result.value, 42);
+  assert.ok(proc.stderr.includes("MARK_LOG"), "console.log output goes to stderr");
+  assert.ok(proc.stderr.includes("MARK_INFO"), "console.info output goes to stderr");
+});

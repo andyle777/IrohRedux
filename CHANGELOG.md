@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Minor fix (2026-11-22, found in the post-rollback test run): the
+  JavaScript leg now reroutes a traced program's `console.log` /
+  `console.info` to stderr for the duration of the CLI run, so
+  stdout stays pure JSON lines — matching every other leg (python,
+  irohscript, basic, cpp already redirect the program's stdout
+  while it runs). Before, a traced `console.log` mixed plain
+  program output into the event stream, breaking the
+  lines-are-JSON contract the docs promise and the CLI tests rely
+  on (the `--json`-style parse-all-every-line pattern). Covers the
+  plain trace, `--analyze`, `--scan`, `--live`, `--verify`'s second
+  run, `--direct` and `--synthesize`. One new CLI test (node 472,
+  total 750).
 - Amendment A4 (2026-11-21, the WHILE/WEND patch): the while lowers
   between JavaScript and BASIC, both directions, and the classic
   column lights up end to end. A JavaScript `while` becomes
