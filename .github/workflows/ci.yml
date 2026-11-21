@@ -54,4 +54,4 @@ jobs:
           python-version: "3.12"
       - run: npm ci
       - run: npm run dist
-      - run: tools/check-translate-matrix.sh
+      - run: bash tools/check-translate-matrix.sh
