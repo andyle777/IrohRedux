@@ -363,7 +363,14 @@ body, the update statement, `END LOOP` — the JavaScript definition
 of the construct, so the init-once/test-before-body/update-after-body
 ordering is exact, and every piece keeps its own stub rules (the
 loop variable stays in scope after the loop, the same flat-scope
-simplification the BASIC leg makes). No classes, no
+simplification the BASIC leg makes). Since Amendment A4
+(2026-11-21) a JavaScript `while` also lowers into BASIC as
+`WHILE ... WEND` — the bootstrap interpreter's own test-first
+construct (1.1.1 M5) — and BASIC `WHILE ... WEND` lowers into
+JavaScript as `while`, both round-trip tested. One case stays a
+loud stub: a call inside the condition, which unlike FOR bounds
+cannot be hoisted to a GOSUB before the loop, because the WHILE
+line is re-tested every pass. No classes, no
 closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the
@@ -540,7 +547,7 @@ the generated text form of this file). Flags take a value with
   versions, the dist hash, and the capabilities. Does not run
   the suite itself — run `npm test` first.
 - `--version` — one line: version, dist hash, embedded runtime
-  (`iroh 1.1.1 (engine dist iroh-node.js 9a6471780739, runtime
+  (`iroh 1.1.1 (engine dist iroh-node.js 851a800e75f9, runtime
   node v18.5.0)` inside a packaged binary).
 - `serve [--port 8471] [--host 0.0.0.0] [--token T]
   [--timeout-ms 120000] [--local-legs javascript,...]` — start
@@ -969,7 +976,7 @@ every flag in `iroh --help` appears in it.
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `9a64717807390fd79cb2c41406615b9afaa119e287cf93630fe108a24c64b0ab`.
+  `851a800e75f990eae66786685b616d78651bafef6c49d6ab19c1482a8abfc670`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set.

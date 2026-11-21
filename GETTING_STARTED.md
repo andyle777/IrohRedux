@@ -207,7 +207,10 @@ so `GOTO` loops are invisible in the trace; `DIM` and array reads have
 no events. The v1 subset is LET, PRINT, IF/THEN/ELSE, FOR/NEXT,
 WHILE/WEND, GOTO, GOSUB/RETURN, INPUT, DIM/arrays, END/STOP — anything
 else (DATA/READ, DEF FN, built-in functions) is a clear error naming
-the construct.
+the construct. Since the WHILE/WEND patch (Amendment A4, 2026-11-21)
+WHILE/WEND also translates both ways with a JavaScript `while`
+(a call inside the condition stays a loud, named stub — the WHILE
+line is re-tested every pass).
 
 C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
 `-finstrument-functions -rdynamic -O0` and linked against the runtime
@@ -383,7 +386,7 @@ node cli/iroh.js doctor
 #   python: ran 25, failed 0, skipped 0
 #   ...
 # Toolchains: node v24.22.1, python3 3.12.3, g++ ...
-# dist: iroh-node.js 9a6471780739, ...
+# dist: iroh-node.js 851a800e75f9, ...
 ```
 
 `iroh doctor` prints the last recorded test run (from
@@ -602,7 +605,7 @@ fact here disagrees with a prose paragraph above, this section wins
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `9a64717807390fd79cb2c41406615b9afaa119e287cf93630fe108a24c64b0ab`.
+  `851a800e75f990eae66786685b616d78651bafef6c49d6ab19c1482a8abfc670`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set.
