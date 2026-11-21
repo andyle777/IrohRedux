@@ -1416,3 +1416,14 @@ JavaScript `while` lowers back into `LOOP <Bool-expr> ... END
 LOOP`. The legacy bare form never lowers; do-while never lowers
 (IrohScript has no post-test loop). No rule of 3.0 changed here,
 and no rule of this amendment did either.
+
+**Addendum (2026-11-22):** the do-while sentence above is now
+historic. A JavaScript do-while lowers since Amendment A5 — not by
+giving IrohScript a post-test loop (it still has none) but through
+a minted Bool flag: `LET __do_while_flag_N : Bool = TRUE`, `LOOP
+<flag>`, the body, `<flag> = <test>`, `END LOOP`. The body runs
+once before the first test either way, and the test runs exactly
+once per pass, so runs match the JavaScript one for one; the minted
+name is checked against the program's identifier set so it cannot
+collide with a user name. Still no rule of 3.0 changed, and the LOOP
+of Amendment A1 keeps its test-first meaning.

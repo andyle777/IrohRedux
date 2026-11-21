@@ -196,8 +196,9 @@ form, not the rule). Since the lowering patch (Amendment A2,
 2026-11-21) the conditional LOOP exchanges with JavaScript `while`
 in both translate directions, and since the for-desugar patch
 (Amendment A3, later the same day) a JavaScript for-loop desugars
-into init + `LOOP <test>` + update too (do-while cannot be
-test-first and stays a stub). `INTENT` has no event category; a call that raises
+into init + `LOOP <test>` + update too (and a do-while lowers since
+Amendment A5, through a minted Bool flag that starts TRUE and is
+rewritten from the test at the end of every body pass). `INTENT` has no event category; a call that raises
 has no `CALL_END` / `LEAVE`.
 
 BASIC (stdlib only, `irohscript/src/basic.py` + `src/basic_trace.py`):

@@ -185,11 +185,77 @@ test("JS -> IrohScript: a while loop lowers to the conditional LOOP and round-tr
   assert.equal(run.stdout, "0\n1\n2\n");
 });
 
-test("JS -> IrohScript: a do-while loop is honestly unsupported (not test-first)", () => {
+test("JS -> IrohScript: a do-while lowers through a minted Bool flag and round-trips (Amendment A5)", { skip: !HAS_PYTHON }, () => {
   let src = "let i = 0;\ndo { i += 1; } while (i < 3);\nconsole.log(i);";
   let out = Iroh.translate(src, { to: "irohscript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /LET __do_while_flag_1 : Bool = TRUE/);
+  assert.match(out.code, /LOOP __do_while_flag_1/);
+  assert.match(out.code, /__do_while_flag_1 = i < 3/);
+  assert.match(out.code, /END LOOP/);
+  let run = runIrohscript(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "3\n");
+});
+
+test("JS -> IrohScript: a do-while body runs once even when the test is already false (Amendment A5)", { skip: !HAS_PYTHON }, () => {
+  let src = "let n = 0;\nlet i = 0;\ndo { n += 1; i += 1; } while (i > 9);\nconsole.log(n);";
+  let out = Iroh.translate(src, { to: "irohscript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runIrohscript(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "1\n");
+});
+
+test("JS -> IrohScript: the minted flag skips a colliding user name (Amendment A5)", { skip: !HAS_PYTHON }, () => {
+  let src = "let __do_while_flag_1 = 5;\nlet i = 0;\ndo { i += 1; } while (i < 2);\nconsole.log(i + __do_while_flag_1);";
+  let out = Iroh.translate(src, { to: "irohscript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /LET __do_while_flag_2 : Bool = TRUE/);
+  assert.doesNotMatch(out.code, /LET __do_while_flag_1 : Bool/);
+  let run = runIrohscript(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "7\n");
+});
+
+test("JS -> IrohScript: nested do-while loops get distinct flags (Amendment A5)", { skip: !HAS_PYTHON }, () => {
+  let src = "let total = 0;\nlet i = 0;\ndo { let j = 0; do { total += 1; j += 1; } while (j < 2); i += 1; } while (i < 3);\nconsole.log(total);";
+  let out = Iroh.translate(src, { to: "irohscript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /__do_while_flag_1/);
+  assert.match(out.code, /__do_while_flag_2/);
+  let run = runIrohscript(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "6\n");
+});
+
+test("JS -> BASIC: a do-while lowers through the flag and WHILE/WEND and round-trips (Amendment A5)", { skip: !HAS_PYTHON }, () => {
+  let src = "let i = 0;\ndo { i += 1; } while (i < 3);\nconsole.log(i);";
+  let out = Iroh.translate(src, { to: "basic" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /LET __do_while_flag_1 = -1/);
+  assert.match(out.code, /WHILE __do_while_flag_1/);
+  assert.match(out.code, /WEND/);
+  let run = runBasic(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "3\n");
+});
+
+test("JS -> BASIC: a do-while body runs once even when the test is already false (Amendment A5)", { skip: !HAS_PYTHON }, () => {
+  let src = "let n = 0;\nlet i = 0;\ndo { n += 1; i += 1; } while (i > 9);\nconsole.log(n);";
+  let out = Iroh.translate(src, { to: "basic" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runBasic(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "1\n");
+});
+
+test("JS -> BASIC: a call inside the do-while condition stays a loud stub", () => {
+  let src = "let i = 0;\ndo { i += 1; } while (i < f());\nconsole.log(i);";
+  let out = Iroh.translate(src, { to: "basic" });
   assert.equal(out.report.ok, false);
   assert.equal(out.report.unsupported[0].construct, "DoWhileStatement");
+  assert.match(out.report.unsupported[0].message, /do-while condition/);
 });
 
 test("JS -> IrohScript: modulo on non-negative operands round-trips", { skip: !HAS_PYTHON }, () => {

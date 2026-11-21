@@ -354,8 +354,13 @@ unsupported, and the legacy bare IrohScript LOOP does not lower (no
 exit rule). Since Amendment A2 (2026-11-21) the conditional LOOP
 lowers both ways: IrohScript `LOOP <Bool>` becomes a JavaScript
 `while`, and a JavaScript `while` becomes IrohScript `LOOP <Bool> ...
-END LOOP`, with the round trip run in the tests. A do-while cannot
-be test-first and stays a loud stub. Since Amendment A3
+END LOOP`, with the round trip run in the tests. Since Amendment A5
+(2026-11-22) a JavaScript do-while lowers through a minted Bool flag
+(`LET __do_while_flag_N : Bool = TRUE`, `LOOP <flag>`, the body,
+`<flag> = <test>`, `END LOOP`; to BASIC: `LET <flag> = -1`, `WHILE
+<flag>`, the body, `LET <flag> = <test>`, `WEND`) — the body runs
+once before the first test either way, and the test runs exactly
+once per pass, so runs match the JavaScript one for one. Since Amendment A3
 (2026-11-21) a JavaScript for-loop desugars into IrohScript instead
 of stubbing: the init statement (LET with its inferred type, or an
 assignment), `LOOP <test>` (True when the loop has no test), the
