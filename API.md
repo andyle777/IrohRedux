@@ -355,8 +355,16 @@ exit rule). Since Amendment A2 (2026-11-21) the conditional LOOP
 lowers both ways: IrohScript `LOOP <Bool>` becomes a JavaScript
 `while`, and a JavaScript `while` becomes IrohScript `LOOP <Bool> ...
 END LOOP`, with the round trip run in the tests. A do-while cannot
-be test-first and stays a loud stub; for-loops into IrohScript are
-still out of v1 scope. No classes, no closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
+be test-first and stays a loud stub. Since Amendment A3
+(2026-11-21) a JavaScript for-loop desugars into IrohScript instead
+of stubbing: the init statement (LET with its inferred type, or an
+assignment), `LOOP <test>` (True when the loop has no test), the
+body, the update statement, `END LOOP` — the JavaScript definition
+of the construct, so the init-once/test-before-body/update-after-body
+ordering is exact, and every piece keeps its own stub rules (the
+loop variable stays in scope after the loop, the same flat-scope
+simplification the BASIC leg makes). No classes, no
+closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the
 loop. Unsupported constructs are reported in `report.unsupported` and

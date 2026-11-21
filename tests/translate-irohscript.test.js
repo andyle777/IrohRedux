@@ -122,12 +122,56 @@ test("JS -> IrohScript: booleans use True/False", { skip: !HAS_PYTHON }, () => {
   assert.equal(run.stdout, "yes\n");
 });
 
-test("JS -> IrohScript: a for-loop is honestly unsupported (no for in v1)", () => {
+test("JS -> IrohScript: a for-loop desugars into LET + conditional LOOP + increment and round-trips (Amendment A3)", { skip: !HAS_PYTHON }, () => {
   let src = "function f(n) { let s = 0; for (let i = 0; i < n; i++) { s += i; } return s; }\nconsole.log(f(5));";
   let out = Iroh.translate(src, { to: "irohscript" });
-  assert.equal(out.report.ok, false);
-  assert.equal(out.report.unsupported[0].construct, "ForStatement");
-  assert.match(out.code, /__iroh_unsupported/);
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /LET i : Int = 0/);
+  assert.match(out.code, /LOOP i < n/);
+  assert.match(out.code, /s = s \+ i/);
+  assert.match(out.code, /i = i \+ 1/);
+  assert.match(out.code, /END LOOP/);
+  let run = runIrohscript(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "10\n");
+});
+
+test("JS -> IrohScript: the update runs after the body (a body that moves the loop variable changes what it adds to)", { skip: !HAS_PYTHON }, () => {
+  let src = "for (let i = 0; i < 3; i++) { console.log(i); i += 1; }";
+  let out = Iroh.translate(src, { to: "irohscript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runIrohscript(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "0\n2\n");
+});
+
+test("JS -> IrohScript: a zero-iteration for-loop emits a valid LOOP that never enters", { skip: !HAS_PYTHON }, () => {
+  let src = 'for (let i = 5; i < 0; i++) { console.log("never"); }\nconsole.log("done");';
+  let out = Iroh.translate(src, { to: "irohscript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runIrohscript(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "done\n");
+});
+
+test("JS -> IrohScript: a for-loop with a step update round-trips", { skip: !HAS_PYTHON }, () => {
+  let src = "for (let i = 0; i < 10; i += 3) { console.log(i); }";
+  let out = Iroh.translate(src, { to: "irohscript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /i = i \+ 3/);
+  let run = runIrohscript(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "0\n3\n6\n9\n");
+});
+
+test("JS -> IrohScript: a test-less for-loop lowers to LOOP True and still ends via RETURN", { skip: !HAS_PYTHON }, () => {
+  let src = "function f() { for (;;) { return 42; } }\nconsole.log(f());";
+  let out = Iroh.translate(src, { to: "irohscript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /LOOP True/);
+  let run = runIrohscript(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "42\n");
 });
 
 test("JS -> IrohScript: a while loop lowers to the conditional LOOP and round-trips (Amendment A2)", { skip: !HAS_PYTHON }, () => {

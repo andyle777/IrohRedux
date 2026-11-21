@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Amendment A3 (2026-11-21, the for-desugar patch): a JavaScript
+  for-loop desugars into IrohScript instead of stubbing — the init
+  statement (LET with its inferred type, or an assignment),
+  `LOOP <test>` (True when the loop has no test), the body, the
+  update statement, `END LOOP`. That is the JavaScript definition
+  of a for loop, so the ordering is exact: init once, test before
+  the body, update after it (pinned by a test whose body moves the
+  loop variable: 0 then 2). Every piece keeps its own stub rules,
+  and the loop variable stays in scope after the loop (flat
+  IrohScript scope, noted in the report, the same simplification
+  the BASIC leg makes); a do-while still cannot be test-first.
+  +5 Node tests (the old stub example f(5)=10 now round-trips,
+  body-before-update ordering, zero-iteration, step update,
+  LOOP True with RETURN; suite 462 -> 466). API.md, README.md
+  (counts 740 -> 744), GETTING_STARTED.md updated.
 - Amendment A2 (2026-11-21, the lowering patch): the conditional
   IrohScript LOOP now lowers both directions. IrohScript
   `LOOP <Bool-expr>` emits a JavaScript `while` in translate() and
