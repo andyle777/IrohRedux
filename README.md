@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-740%20passing-brightgreen.svg?style=flat-square" alt="740 tests passing" />
+  <img src="https://img.shields.io/badge/tests-744%20passing-brightgreen.svg?style=flat-square" alt="744 tests passing" />
 </p>
 
 <p align="center">
@@ -67,7 +67,7 @@ cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
 npm run build:catalog # builds the offline SQLite reference catalog
-npm test            # 740 tests: 462 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
+npm test            # 744 tests: 466 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
 ```
 
 The Python client installs with `pip install -e python/`. The C++
@@ -206,8 +206,13 @@ Honest limits, in one place.
   errors when executed. The lowering patch (Amendment A2, same day)
   took the rest: the conditional LOOP goes to JavaScript as `while`
   in `translate()` and `compileIrohscript()`, and a JavaScript
-  `while` comes back as `LOOP <Bool> ... END LOOP`; do-while stays a
-  loud stub (IrohScript has no post-test loop).
+  `while` comes back as `LOOP <Bool> ... END LOOP`. The for-desugar
+  patch (Amendment A3, later still) took the for-loop too: a
+  JavaScript `for` desugars into the init statement, `LOOP <test>`
+  (True when there is no test), the body, the update statement and
+  `END LOOP` — the JavaScript definition of the construct, so the
+  init-once/test-before-body/update-after-body ordering is exact;
+  do-while stays a loud stub (IrohScript has no post-test loop).
 - **BASIC:** GOTO has no event category, so GOTO loops are invisible
   in the trace (FOR/NEXT is the observable loop). DIM and array
   reads have no events either.
@@ -240,7 +245,7 @@ Newest first. Hashes live on the release page, not in this file.
   laptop joins it as a node (`iroh node`) to run the legs the
   phone cannot — see `SERVER.md`. The perceptron weights are now
   defined by `personality-matrix.json`, and the AI bundle includes a
-  read-only SQLite memory catalog. 740 tests (462 Node + 25 Python
+  read-only SQLite memory catalog. 744 tests (466 Node + 25 Python
   + 9 C++ + 244 IrohScript/BASIC).
 - **1.1.1 (20 Nov 2026) — the patch.** The trace memory release:
   a finished trace releases its Stage (a 500,013-event trace now
@@ -325,14 +330,14 @@ fact here disagrees with a prose paragraph above, this section wins
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026).
   No 1.1.2. No version bump.
 - `dist/iroh-node.js` SHA-256:
-  `e4089c563ac925fae8108baf523c46b96e897c15cb43725f59567ded7dfcd842`
+  `9a64717807390fd79cb2c41406615b9afaa119e287cf93630fe108a24c64b0ab`
 - The dist is self-contained: the parser and codegen dependencies
   (acorn, acorn-walk, astring) are bundled in, not `require`d at
   runtime. A fresh source checkout runs the CLI with no npm install,
   so a restricted AI sandbox needs nothing but Node on PATH:
   `node cli/iroh.js program.js --analyze`
 - `iroh --version` prints `iroh 1.1.1 (engine dist iroh-node.js
-  e4089c563ac9, runtime node v18.5.0)` inside a packaged binary
+  9a6471780739, runtime node v18.5.0)` inside a packaged binary
   (runtime is the embedded Node; on npm it is the local node).
 - `iroh doctor` prints the dist hashes, the toolchains, the last
   test run, and the leg capabilities.

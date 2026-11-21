@@ -22827,7 +22827,33 @@ function makeIrohJSEmitter(target, report, env, hints) {
     }
     if (node.type === "ForStatement") {
       if (isIroh) {
-        stubStmt("a for-loop is still out of scope for IrohScript v1 (Amendment A2 lowers while loops into the conditional LOOP; a numeric for-loop can be rewritten by hand as a LET plus a LOOP)", "ForStatement");
+        // Amendment A3 (2026-11-21): a JavaScript for-loop desugars
+        // through the Amendment A2 machinery instead of stubbing:
+        // the init statement, LOOP <test> (True when the loop has
+        // no test), the body, the update statement, END LOOP. That
+        // is the JavaScript definition of the construct, so the
+        // semantics are exact — init once, test before the body,
+        // update after it. Every piece keeps its own rules: a piece
+        // this emitter cannot write still stubs loudly on its own
+        // merits.
+        counts.loops += 1;
+        if (node.init) {
+          if (node.init.type === "VariableDeclaration") {
+            noteOnce("for-loop-scope", "a for-loop's init variable stays in scope after the loop (IrohScript scope is flat, the same simplification the BASIC leg makes)");
+            stmt(node.init);
+          } else {
+            stmt({ type: "ExpressionStatement", expression: node.init });
+          }
+        }
+        emitLine("LOOP " + (node.test ? expr(node.test, 0) : "True"));
+        emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
+        indentLevel += 1;
+        // The update runs after the body every iteration — a body
+        // that changes the loop variable changes what the update
+        // adds to (the ordering test pins this).
+        if (node.update) stmt({ type: "ExpressionStatement", expression: node.update });
+        indentLevel -= 1;
+        emitLine("END LOOP");
         return;
       }
       let pat = forLoopPattern(node);
