@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Tests (2026-11-22, A5 follow-up, BASIC-source WHILE legs closure):
+  the BASIC `WHILE/WEND` legs were already functional end to end
+  (Amendment A4 opened BASIC to JavaScript; the in-place two-hop
+  covers the rest), so this closes the two genuine gaps the audit
+  found, no source changes: a nested WHILE/WEND program rides both
+  hops (BASIC to Python `while`, then to the IrohScript `LOOP`) and
+  round-trips its answer through both engines, and a BASIC WHILE
+  program translates to C++ and is compiled and run, its output
+  checked. Two new Node tests (46 in the file now); the suite goes
+  756 to 758. Docs updated (README, GETTING_STARTED) with the
+  four-leg reach and the new counts.
 - Feature (2026-11-22, Amendment A5): a JavaScript `do-while` now
   lowers into IrohScript and BASIC instead of stubbing. Neither
   target has a post-test loop, so the lowering mints one fresh Bool

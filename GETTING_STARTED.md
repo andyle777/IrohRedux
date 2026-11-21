@@ -216,7 +216,10 @@ else (DATA/READ, DEF FN, built-in functions) is a clear error naming
 the construct. Since the WHILE/WEND patch (Amendment A4, 2026-11-21)
 WHILE/WEND also translates both ways with a JavaScript `while`
 (a call inside the condition stays a loud, named stub — the WHILE
-line is re-tested every pass).
+line is re-tested every pass), and a BASIC WHILE program rides
+every translate leg from there: JavaScript `while`, Python
+`while`, the IrohScript `LOOP`, C++ `while` — nested WHILE/WEND
+included, each round trip executed in the tests.
 
 C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
 `-finstrument-functions -rdynamic -O0` and linked against the runtime
