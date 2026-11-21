@@ -979,7 +979,11 @@ every flag in `iroh --help` appears in it.
   `851a800e75f990eae66786685b616d78651bafef6c49d6ab19c1482a8abfc670`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
-  with the `language` field always set.
+  with the `language` field always set. A CLI trace's stdout is
+  exactly those JSON lines on every leg: the traced program's own
+  prints (`console.log` / `print` / `std::cout`) are rerouted to
+  stderr while it runs, so one JSON parse per line never trips on
+  program output.
 - Event line:
   `{"type":"event","event":"FUNCTION_CALL","category":"CALL",
   "trigger":"before","language":"javascript","hash":11,"indent":1,"name":"factorial",

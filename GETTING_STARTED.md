@@ -172,7 +172,12 @@ trace as one call pair (yields don't re-emit calls), and a program
 importing a sibling module works — the tracer puts the script's
 directory at `sys.path[0]`, as `python3 prog.py` does. The program's
 stdout is redirected to stderr while it runs, so the JSONL stream stays
-clean; the result line is `{"type":"result","value":null}`. Honest
+clean; the result line is `{"type":"result","value":null}`. Every leg
+follows the same rule, the JavaScript one included: the CLI reroutes a
+traced JavaScript program's `console.log` / `console.info` to stderr
+for the duration of the run (the trace runs in-process, so the global
+console is swapped, then restored), so stdout never mixes program
+output with event lines. Honest
 limits: per-assignment events fire for simple Name targets only
 (tuple targets, attributes and subscripts are blind spots, and the
 event carries the post-assignment value, unlike JS compound

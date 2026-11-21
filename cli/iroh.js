@@ -156,6 +156,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const util = require("node:util");
 
 const Iroh = require("../dist/iroh-node.js");
 // The singleton carries the label tables and the event projection (see
@@ -195,6 +196,37 @@ function printEventLine(event, language) {
   printLine(Object.assign({}, event, { language: language }));
 }
 
+// Minor fix (2026-11-22): keep stdout a pure JSONL stream on the
+// JavaScript leg too. Every other leg (python, irohscript, basic,
+// cpp) runs the traced program as a child process with the
+// program's stdout redirected to stderr while it runs, so its own
+// prints never mix into the event lines. The JavaScript leg runs
+// in-process, so a traced program's console.log wrote to real
+// stdout, interleaving plain program output with the JSON lines --
+// breaking the lines-are-JSON contract the docs promise and the
+// CLI tests rely on (tests/cli.test.js parses every stdout line).
+// For the duration of the traced run this swaps the global
+// console.log / console.info to write to stderr (console.warn and
+// console.error already do), then restores them in finally. The
+// CLI's own output goes through printLine / process.stdout.write,
+// so the swap never touches it. translate() already swaps
+// console.log for its evidence trace (src/translate.js); this is
+// the same idea for the CLI run paths: --direct, --synthesize,
+// the plain trace, and the --verify second run. util.format keeps
+// Node's own console formatting (objects inspect the same).
+const ORIG_CONSOLE_LOG = console.log;
+const ORIG_CONSOLE_INFO = console.info;
+async function withProgramOutputOnStderr(fn) {
+  console.log = (...a) => process.stderr.write(util.format(...a) + "\n");
+  console.info = (...a) => process.stderr.write(util.format(...a) + "\n");
+  try {
+    return await fn();
+  } finally {
+    console.log = ORIG_CONSOLE_LOG;
+    console.info = ORIG_CONSOLE_INFO;
+  }
+}
+
 function printUsage() {
   process.stderr.write(
     "Usage: iroh <file.js> [--events CALL,IF,VAR] [--no-result] [--analyze] [--scan]\n" +
@@ -232,6 +264,9 @@ function printUsage() {
     "and posts the result back. It reconnects with backoff when the\n" +
     "server drops, and stops cleanly on SIGINT/SIGTERM.\n" +
     "Events are streamed as JSON lines on stdout, then a result line.\n" +
+    "A traced JavaScript program's console.log / console.info go to stderr\n" +
+    "while it runs (the other legs redirect their program stdout already),\n" +
+    "so stdout stays pure JSON lines.\n" +
     "Use --events ALL (default) or a comma list of categories, e.g. CALL.\n" +
     ".mjs files (or --module) run as ES modules through Iroh.traceModule();\n" +
     "everything else runs as a script through Iroh.traceAsync().\n" +
@@ -969,11 +1004,12 @@ async function main() {
           printLiveFindings(fired);
         };
       }
-      if (isModule) {
-        out = await Iroh.directModule(code, guard, directOptions);
-      } else {
-        out = await Iroh.directAsync(code, guard, directOptions);
-      }
+      out = await withProgramOutputOnStderr(async () => {
+        if (isModule) {
+          return await Iroh.directModule(code, guard, directOptions);
+        }
+        return await Iroh.directAsync(code, guard, directOptions);
+      });
     } catch (e) {
       if (e && Array.isArray(e.events)) collected = e.events;
       printLine(errorLine(e));
@@ -1074,7 +1110,7 @@ async function main() {
     }
     let synthOut;
     try {
-      synthOut = Iroh.synthesize(code, {
+      synthOut = await withProgramOutputOnStderr(() => Iroh.synthesize(code, {
         entry: entryArg,
         seeds: seeds,
         maxRuns: maxRuns,
@@ -1101,7 +1137,7 @@ async function main() {
             printLine(Object.assign({ type: "live-finding" }, ev.finding));
           }
         },
-      });
+      }));
     } catch (e) {
       printLine(errorLine(e));
       process.exitCode = 1;
@@ -1127,8 +1163,23 @@ async function main() {
     let isModule = moduleFlag || (file !== null && file.endsWith(".mjs"));
     let out;
     try {
-      if (isModule) {
-        out = await Iroh.traceModule(code, {
+      out = await withProgramOutputOnStderr(async () => {
+        if (isModule) {
+          return await Iroh.traceModule(code, {
+            events: eventsArg,
+            maxEvents: maxEvents,
+            onEvent: (line) => {
+              collected.push(line);
+              if (liveFlag) {
+                printLiveFindings(liveAnalyzer.feed(line));
+              } else if (!scanFlag) {
+                printEventLine(line, language);
+              }
+            },
+            filename: file || undefined,
+          });
+        }
+        return await Iroh.traceAsync(code, {
           events: eventsArg,
           maxEvents: maxEvents,
           onEvent: (line) => {
@@ -1139,22 +1190,8 @@ async function main() {
               printEventLine(line, language);
             }
           },
-          filename: file || undefined,
         });
-      } else {
-        out = await Iroh.traceAsync(code, {
-          events: eventsArg,
-          maxEvents: maxEvents,
-          onEvent: (line) => {
-            collected.push(line);
-            if (liveFlag) {
-              printLiveFindings(liveAnalyzer.feed(line));
-            } else if (!scanFlag) {
-              printEventLine(line, language);
-            }
-          },
-        });
-      }
+      });
       result = Iroh.safeValue(out.result, 4, new Set());
     } catch (e) {
       traceError = errorLine(e);
@@ -1173,20 +1210,21 @@ async function main() {
       let secondError = null;
       try {
         let second;
-        if (isModule) {
-          second = await Iroh.traceModule(code, {
+        second = await withProgramOutputOnStderr(async () => {
+          if (isModule) {
+            return await Iroh.traceModule(code, {
+              events: eventsArg,
+              maxEvents: maxEvents,
+              onEvent: (line) => { secondEvents.push(line); },
+              filename: file || undefined,
+            });
+          }
+          return await Iroh.traceAsync(code, {
             events: eventsArg,
             maxEvents: maxEvents,
             onEvent: (line) => { secondEvents.push(line); },
-            filename: file || undefined,
           });
-        } else {
-          second = await Iroh.traceAsync(code, {
-            events: eventsArg,
-            maxEvents: maxEvents,
-            onEvent: (line) => { secondEvents.push(line); },
-          });
-        }
+        });
         secondResult = Iroh.safeValue(second.result, 4, new Set());
       } catch (e2) {
         secondError = e2;
