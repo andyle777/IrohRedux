@@ -47,7 +47,7 @@ Reachable categories in this release:
 | javascript | 30 | All categories |
 | python | 6 | ASSIGN, CATCH, CALL, FUNCTION, IF, LOOP |
 | cpp | 2 | CALL, FUNCTION |
-| irohscript | 4 | ASSIGN, CALL, FUNCTION, IF |
+| irohscript | 5 | ASSIGN, CALL, FUNCTION, IF, LOOP (LOOP since Amendment A1) |
 | basic | 5 | ASSIGN, CALL, FUNCTION, IF, LOOP |
 
 These are capabilities of the current tracers, not a claim that a

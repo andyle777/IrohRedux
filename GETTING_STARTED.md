@@ -184,10 +184,11 @@ IrohScript (stdlib only, `irohscript/src/tracer.py`): hooks in the IRX
 interpreter — function calls (arguments, return, depth), `IF` tests
 (`IF_TEST`), assignments (`ASSIGN`). A one-sided branch analyzes to
 `ONE_SIDED_BRANCH`, a 25-deep recursion to `DEEP_RECURSION`. Honest
-limits: `LOOP` has no defined exit rule in the spec, so executing one
-is an error, not a trace — `HOT_LOOP` / `ZERO_ITERATION_LOOP` can never
-fire for IrohScript until that rule is decided; `INTENT` has no event
-category; a call that raises has no `CALL_END` / `LEAVE`.
+limits: the conditional `LOOP <Bool-expr>` runs and traces since
+Amendment A1 (`HOT_LOOP` / `ZERO_ITERATION_LOOP` now fire); the
+legacy bare `LOOP` still errors when executed (the spec shows the
+form, not the rule). `INTENT` has no event category; a call that
+raises has no `CALL_END` / `LEAVE`.
 
 BASIC (stdlib only, `irohscript/src/basic.py` + `src/basic_trace.py`):
 a small dedicated interpreter — `FOR`/`NEXT` loops (`LOOP_TEST` /

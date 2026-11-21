@@ -139,6 +139,33 @@ class TestParserStatements(unittest.TestCase):
     def test_loop(self):
         prog = parse("LOOP\n PRINT 1\nEND")
         self.assertIsInstance(prog.statements[0], A.Loop)
+        # The bare legacy form carries no condition (Amendment A1
+        # keeps cond None so the run-time error stays byte-stable).
+        self.assertIsNone(prog.statements[0].cond)
+
+    def test_conditional_loop_parses(self):
+        # Amendment A1 (2026-11-21): LOOP <Bool-expr> is the decided
+        # conditional (test-first) form.
+        prog = parse("LOOP i < 3\n PRINT 1\nEND")
+        node = prog.statements[0]
+        self.assertIsInstance(node, A.Loop)
+        self.assertIsNotNone(node.cond)
+        self.assertIsInstance(node.cond, A.BinOp)
+        self.assertEqual(node.cond.op, "LT")
+
+    def test_conditional_loop_accepts_end_loop(self):
+        prog = parse("LOOP x\n PRINT 1\nEND LOOP")
+        self.assertIsInstance(prog.statements[0], A.Loop)
+        self.assertIsNotNone(prog.statements[0].cond)
+
+    def test_lowered_conditional_loop_keeps_cond_through_compile(self):
+        # Regression: IrohCore.canonicalize used to rebuild Loop
+        # without the cond, so the condition vanished before IR.
+        from src.irohcore import IrohCore
+        ast = IrohCore().canonicalize(parse("LOOP i < 3\n PRINT 1\nEND"))
+        node = ast.statements[0]
+        self.assertIsInstance(node, A.Loop)
+        self.assertIsNotNone(node.cond)
 
     def test_assignment(self):
         prog = parse("x = 5")

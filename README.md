@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-718%20passing-brightgreen.svg?style=flat-square" alt="718 tests passing" />
+  <img src="https://img.shields.io/badge/tests-730%20passing-brightgreen.svg?style=flat-square" alt="730 tests passing" />
 </p>
 
 <p align="center">
@@ -67,7 +67,7 @@ cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
 npm run build:catalog # builds the offline SQLite reference catalog
-npm test            # 718 tests: 454 Node + 25 Python + 9 C++ + 230 IrohScript/BASIC
+npm test            # 730 tests: 457 Node + 25 Python + 9 C++ + 239 IrohScript/BASIC
 ```
 
 The Python client installs with `pip install -e python/`. The C++
@@ -198,10 +198,12 @@ Honest limits, in one place.
   another machine forces an uninstall first). The bundled Node
   is v26.13.1 and the binary is 16 KB page safe (measured: PT_LOAD
   alignment 0x4000).
-- **IrohScript:** LOOP has no defined exit rule in the spec, so
-  executing one is an error, not a trace. `HOT_LOOP` and
-  `ZERO_ITERATION_LOOP` can never fire for IrohScript until that
-  rule is decided.
+- **IrohScript:** the conditional `LOOP <Bool-expr> ... END` runs
+  and traces since Amendment A1 (2026-11-21): test-first like IF,
+  one LOOP_TEST per test plus one LOOP_ENTER per loop instance, so
+  `HOT_LOOP` and `ZERO_ITERATION_LOOP` do fire for IrohScript. The
+  legacy bare `LOOP ... END` has no exit rule in the spec and still
+  errors when executed.
 - **BASIC:** GOTO has no event category, so GOTO loops are invisible
   in the trace (FOR/NEXT is the observable loop). DIM and array
   reads have no events either.
@@ -234,8 +236,8 @@ Newest first. Hashes live on the release page, not in this file.
   laptop joins it as a node (`iroh node`) to run the legs the
   phone cannot — see `SERVER.md`. The perceptron weights are now
   defined by `personality-matrix.json`, and the AI bundle includes a
-  read-only SQLite memory catalog. 718 tests (454 Node + 25 Python
-  + 9 C++ + 230 IrohScript/BASIC).
+  read-only SQLite memory catalog. 730 tests (457 Node + 25 Python
+  + 9 C++ + 239 IrohScript/BASIC).
 - **1.1.1 (20 Nov 2026) — the patch.** The trace memory release:
   a finished trace releases its Stage (a 500,013-event trace now
   leaves a 472,976-byte residual heap, down from ~68 MB). Plus
@@ -448,7 +450,7 @@ why a missing field must never be read as `total`.
 | javascript | 30 | all categories (the full engine) |
 | python | 6 | ASSIGN, CATCH, CALL, FUNCTION, IF, LOOP |
 | cpp | 2 | CALL, FUNCTION |
-| irohscript | 4 | ASSIGN, CALL, FUNCTION, IF |
+| irohscript | 5 | ASSIGN, CALL, FUNCTION, IF, LOOP (LOOP since Amendment A1) |
 | basic | 5 | ASSIGN, CALL, FUNCTION, IF, LOOP |
 
 ## Findings cap

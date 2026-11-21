@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Amendment A1 (2026-11-21): the IrohScript LOOP exit rule, decided.
+  `LOOP <Bool-expr> ... END` (or `END LOOP`) is test-first like IF:
+  the checker requires a Bool condition ("LOOP condition must be
+  Bool, got ..."), the body runs while it is true, and the tracer
+  emits one LOOP_TEST per test plus one LOOP_ENTER per loop instance
+  (the python-leg event shape), so HOT_LOOP and ZERO_ITERATION_LOOP
+  now fire for IrohScript. The legacy bare `LOOP ... END` still
+  errors at run time; the message now points at the amendment.
+  IrohScript coverage denominators go 4 to 5 (adding LOOP). Root
+  cause found en route, pinned by a test: IrohCore.canonicalize
+  rebuilt Loop without the condition, so the parsed cond never
+  reached the IR. compileIrohscript still does not lower loops —
+  either form — and says so by name. Spec (appended amendment),
+  README, GETTING_STARTED, API, and irohscript README updated.
 - 1.1.1 patch (in place, same version, no 1.1.2, no version bump):
   template literals to Python now emit concatenation, not
   f-strings — `` `a=${"lit"}` `` becomes `("a=" + "lit")` — so the

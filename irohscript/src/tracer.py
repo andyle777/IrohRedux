@@ -27,10 +27,13 @@ has. The analyzer's one-sided-branch and deep-recursion findings
 read these events directly.
 
 What v1 does NOT see (stated plainly, not hidden):
-- LOOP: the spec shows the form but no exit rule, so executing one
-  raises a clear error naming it as an open design question — there
-  is no LOOP_TEST to emit, and HOT_LOOP / ZERO_ITERATION_LOOP can
-  never fire for IrohScript until the LOOP rule is decided.
+- The legacy bare LOOP still has no exit rule (spec section 6) and
+  still raises the same naming error. The CONDITIONAL LOOP was
+  decided in Amendment A1 (2026-11-21): LOOP <Bool-expr> ... END is
+  test-first like IF, emits LOOP_TEST per test and LOOP_ENTER once
+  per loop on the first true test (the exact shape python/iroh/
+  trace.py emits), so HOT_LOOP and ZERO_ITERATION_LOOP now fire
+  for IrohScript like every other leg.
 - INTENT records in the IrohCore graph but has no event category, so
   it is invisible in the trace (like PRINT, it is program output,
   not control flow).
@@ -59,7 +62,7 @@ from src.traceutil import EventSink, cli_main, error_name, safe_value, site_hash
 __all__ = ["TracingInterpreter", "trace_source", "trace_file", "main"]
 
 # Categories this tracer can emit.
-EMITTED_CATEGORIES = {"CALL", "FUNCTION", "IF", "ASSIGN"}
+EMITTED_CATEGORIES = {"CALL", "FUNCTION", "IF", "LOOP", "ASSIGN"}
 
 
 class TracingInterpreter(Interpreter):
@@ -77,6 +80,7 @@ class TracingInterpreter(Interpreter):
         self._depth = 0
         self._path = []  # index path of the instruction now executing
         self._func_paths = {}  # id(FunctionValue) -> definition path
+        self._entered_loops = set()  # loop hashes that emitted LOOP_ENTER
 
     # ------------------------------------------------------------ paths
     def _hash(self, kind):
@@ -108,6 +112,44 @@ class TracingInterpreter(Interpreter):
             self._exec_block(branch, env)
         finally:
             self._path = saved
+
+    def _do_LOOP(self, instr, env):
+        # Amendment A1: the decided conditional LOOP, mirroring the
+        # Python leg's event shape exactly — LOOP_TEST per test,
+        # LOOP_ENTER once per loop on the first true test — so the
+        # analyzer's language-independent loop findings fire. The
+        # legacy bare LOOP keeps the interpreter's honest error; no
+        # LOOP_TEST is faked before it.
+        cond_ir = instr.get("cond")
+        if cond_ir is None:
+            from src.errors import RuntimeError_ as IrohRuntimeError
+            raise IrohRuntimeError(
+                "Legacy LOOP has no defined exit condition in IrohScript "
+                "3.0 (spec section 6 shows the form but not the "
+                "termination rule); executing it is an open design "
+                "question for the Chaos Architect (the Amendment A1 "
+                "conditional form LOOP <Bool> has one)")
+        hash_ = self._hash("loop")
+        while True:
+            cond = self._eval(cond_ir, env)
+            if not isinstance(cond, bool):
+                from src.errors import RuntimeError_ as IrohRuntimeError
+                raise IrohRuntimeError("LOOP condition is not a Bool")
+            self.sink.emit("LOOP_TEST", "LOOP", "test", hash_,
+                           self._depth, value=bool(cond), kind="Loop",
+                           file=self.basename)
+            if not cond:
+                break
+            if hash_ not in self._entered_loops:
+                self._entered_loops.add(hash_)
+                self.sink.emit("LOOP_ENTER", "LOOP", "enter", hash_,
+                               self._depth, kind="Loop", file=self.basename)
+            saved = self._path
+            self._path = saved + ["loop"]
+            try:
+                self._exec_block(instr["body"], env)
+            finally:
+                self._path = saved
 
     def _do_FUNCDEF(self, instr, env):
         super()._do_FUNCDEF(instr, env)

@@ -3789,7 +3789,7 @@ function makeIrohAstJSEmitter(report) {
       return;
     }
     if (node.node === "Loop") {
-      stubStmt("IrohScript LOOP has no defined exit condition in IrohScript 3.0 (spec section 6 shows the form but not the termination rule)", "Loop");
+      stubStmt("the legacy unconditional IrohScript LOOP still cannot execute or translate (Amendment A1 decided the conditional LOOP <Bool> form; lowering it is not in the translator yet)", "Loop");
       return;
     }
     if (node.node === "FunctionDef") {
@@ -4648,7 +4648,7 @@ function makeIrohJSEmitter(target, report, env, hints) {
     }
     if (node.type === "ForStatement") {
       if (isIroh) {
-        stubStmt("a for-loop has no equivalent in IrohScript v1 (LOOP has no defined exit rule)", "ForStatement");
+        stubStmt("a for-loop has no equivalent in IrohScript v1 (the conditional LOOP decided in Amendment A1 is not lowered by the translator yet)", "ForStatement");
         return;
       }
       let pat = forLoopPattern(node);

@@ -196,6 +196,63 @@ test("IrohScript LOOP is an error line naming the open question, exit 1", () => 
   }
 });
 
+test("IrohScript conditional LOOP (Amendment A1) runs and traces loop events", () => {
+  let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-irohscript-"));
+  try {
+    let file = writeTemp(
+      dir, "loop.iroh",
+      "LET i : Int = 0\nLOOP i < 3\n PRINT i\n i = i + 1\nEND LOOP\n");
+    let { proc, lines } = runCliFile(file, ["--events", "loop"]);
+    assert.equal(proc.status, 0, proc.stderr);
+    let tests = lines.filter((l) => l.event === "LOOP_TEST");
+    let enters = lines.filter((l) => l.event === "LOOP_ENTER");
+    assert.deepEqual(tests.map((t) => t.value), [true, true, true, false]);
+    assert.equal(enters.length, 1);
+    assert.equal(enters[0].hash, tests[0].hash);
+    // The program output still reaches stdout through stderr, and
+    // the run itself terminated on the false test.
+    let run = lines.filter((l) => l.type !== "event");
+    assert.equal(proc.status, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("IrohScript zero-iteration LOOP raises ZERO_ITERATION_LOOP via --analyze", () => {
+  let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-irohscript-"));
+  try {
+    let file = writeTemp(
+      dir, "zero.iroh",
+      'LET f : Bool = FALSE\nLOOP f\n PRINT "never"\nEND LOOP\n');
+    let { proc, lines } = runCliFile(file, ["--analyze"]);
+    assert.equal(proc.status, 0, proc.stderr);
+    let analysis = analysisOf(lines);
+    assert.ok(analysis, "expected an analysis line");
+    assert.ok(analysis.findings.some((f) => f.code === "ZERO_ITERATION_LOOP"),
+              "expected ZERO_ITERATION_LOOP");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("IrohScript 150-iteration LOOP raises HOT_LOOP via --analyze", () => {
+  let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-irohscript-"));
+  try {
+    let file = writeTemp(
+      dir, "hot.iroh",
+      "LET i : Int = 0\nLOOP i < 150\n i = i + 1\nEND LOOP\n");
+    let { proc, lines } = runCliFile(file, ["--analyze"]);
+    assert.equal(proc.status, 0, proc.stderr);
+    let analysis = analysisOf(lines);
+    assert.ok(analysis, "expected an analysis line");
+    assert.ok(analysis.findings.some((f) => f.code === "HOT_LOOP"),
+              "expected HOT_LOOP");
+    assert.ok(!analysis.findings.some((f) => f.code === "ZERO_ITERATION_LOOP"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("IrohScript compile error is an error line, exit 1", () => {
   let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-irohscript-"));
   try {

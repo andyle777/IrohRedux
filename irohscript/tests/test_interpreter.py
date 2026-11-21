@@ -130,6 +130,34 @@ class TestInterpreterFeatures(unittest.TestCase):
             run("LOOP\n PRINT 1\nEND")
         self.assertIn("LOOP", str(ctx.exception))
 
+    def test_conditional_loop_executes_and_terminates(self):
+        # Amendment A1: LOOP <Bool> is test-first, like IF.
+        out = run("LET i : Int = 0\nLOOP i < 3\n"
+                  " PRINT i\n i = i + 1\nEND LOOP\n")
+        self.assertEqual(out["output"], ["0", "1", "2"])
+        self.assertEqual(out["variables"]["i"], 3)
+
+    def test_conditional_loop_zero_iterations(self):
+        out = run('LET f : Bool = FALSE\nLOOP f\n'
+                  ' PRINT "never"\nEND LOOP\n')
+        self.assertEqual(out["output"], [])
+
+    def test_conditional_loop_requires_bool_condition(self):
+        with self.assertRaises(CompileError):
+            run("LOOP 3\n PRINT 1\nEND\n")
+
+    def test_conditional_loop_runtime_guards_non_bool(self):
+        # Direct execution of a hand-built IRX document bypasses the
+        # checker; the interpreter still refuses to guess.
+        from src.interpreter import Interpreter
+        from src.irohcore import IrohCore
+        irx = {"version": "3.0", "program": [
+            {"version": "3.0", "opcode": "LOOP", "cond":
+             {"op": "LIT", "value": 3, "type": "Int"},
+             "body": []}]}
+        with self.assertRaises(IrohRuntimeError):
+            Interpreter(IrohCore()).execute(irx)
+
     def test_undefined_at_runtime_cannot_happen_via_compile(self):
         # The checker catches it first; the interpreter never sees it.
         with self.assertRaises(CompileError):

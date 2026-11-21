@@ -1363,3 +1363,48 @@ That is the self-hosting loop.
 That is where I would put the period.
 
 Not because IrohScript is finished forever—but because 3.0 becomes the point where we stop inventing the machine and start learning how to build it.
+
+
+---
+
+## Amendment A1 (2026-11-21): the LOOP exit rule, decided
+
+Section 6 shows the bare `loop ... end` form but never says when it
+ends. This amendment decides that, additively, without reopening 3.0.
+
+**The conditional form.** `LOOP <Bool-expr>` followed by a body and
+`END` (a bare `END` or `END LOOP` both close it):
+
+    LET i : Int = 0
+    LOOP i < 3
+        PRINT i
+        i = i + 1
+    END LOOP
+
+Semantics, exactly like IF's condition:
+
+- The expression must type as Bool. The checker rejects anything
+  else at compile time ("LOOP condition must be Bool, got ...").
+- Test-first: the body runs only while the condition is true. A
+  false first test runs nothing.
+- The condition is re-evaluated before every iteration.
+
+**Tracing contract.** Per test, the tracer emits a LOOP_TEST event
+(value, kind "Loop", the loop's CRC32 hash, the file basename), and
+one LOOP_ENTER for the loop instance on the first true test. This
+is the same event shape as the python leg's while loop, so
+HOT_LOOP (default threshold 100) and ZERO_ITERATION_LOOP findings
+fire for IrohScript traces from this amendment onward.
+
+**The legacy bare form is unchanged** and still raises at run time:
+the spec shows the form, not a termination rule, and executing it
+remains an open design question for the Chaos Architect. The error
+message now also points to this amendment.
+
+**Reachable categories.** IrohScript coverage denominators go from
+four (ASSIGN, CALL, FUNCTION, IF) to five (adding LOOP).
+
+**Out of scope.** The JavaScript translator (`compileIrohscript`)
+still refuses to lower loops, either form, and says so by name.
+That lowering is future work, on purpose. This amendment does not
+reopen 3.0; it decides one open rule.

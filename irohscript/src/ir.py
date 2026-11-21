@@ -60,7 +60,11 @@ def lower_stmt(stmt):
                            "value": lower_expr(stmt.action)}],
                  "else": []}]
     if isinstance(stmt, A.Loop):
-        return [{"op": "LOOP", "body": _lower_block(stmt.body)}]
+        # Amendment A1: cond None = legacy bare LOOP (runtime error),
+        # otherwise the decided conditional form.
+        cond = lower_expr(stmt.cond) if stmt.cond is not None else None
+        return [{"op": "LOOP", "cond": cond,
+                 "body": _lower_block(stmt.body)}]
     if isinstance(stmt, A.FunctionDef):
         return [{"op": "FUNCDEF", "name": stmt.name,
                  "params": [{"name": n, "type": t}

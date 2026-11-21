@@ -167,7 +167,8 @@ export let CATEGORY = {};
 //   cpp: cpp/iroh_trace_rt.cpp emit sites — CALL, FUNCTION only
 //     (function-level by design; no loop/branch instrumentation).
 //   irohscript: irohscript/src/tracer.py sink.emit sites — ASSIGN,
-//     CALL, FUNCTION, IF.
+//     CALL, FUNCTION, IF, LOOP (LOOP since Amendment A1, the
+//     conditional LOOP <Bool-expr> form).
 //   basic: irohscript/src/basic_trace.py sink.emit sites — ASSIGN,
 //     CALL, FUNCTION, IF, LOOP.
 // A language not listed here (or an unknown one) falls back to all
@@ -178,7 +179,7 @@ export const REACHABLE_CATEGORIES = {
   javascript: null, // null = all categories (the full engine)
   python: ["ASSIGN", "CATCH", "CALL", "FUNCTION", "IF", "LOOP"],
   cpp: ["CALL", "FUNCTION"],
-  irohscript: ["ASSIGN", "CALL", "FUNCTION", "IF"],
+  irohscript: ["ASSIGN", "CALL", "FUNCTION", "IF", "LOOP"],
   basic: ["ASSIGN", "CALL", "FUNCTION", "IF", "LOOP"],
 };
 
