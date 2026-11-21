@@ -18129,11 +18129,15 @@ var iroh = (function () {
   // compiles it with the bootstrap compiler, writes the AST as JSON on
   // stdout (warnings go to stderr). No hand-rolled IrohScript parser
   // on the JS side — the bootstrap is the authority, the same way
-  // Python -> JS uses Python's own ast module.
+  // Python -> JS uses Python's own ast module. The AST JSON is
+  // ast_with_conds: to_dict() plus the Amendment A1 Loop ``cond``
+  // (golden to_dict stays cond-free; the translator needs the
+  // condition to lower the conditional LOOP).
   var IROHSCRIPT_AST_HELPER = [
     "import json, sys",
     "sys.path.insert(0, sys.argv[1])",
     "from src.compiler import IrohCompiler",
+    "from src.ast_nodes import ast_with_conds",
     "src = sys.stdin.read()",
     "try:",
     "    result = IrohCompiler().compile(src)",
@@ -18142,7 +18146,7 @@ var iroh = (function () {
     "    sys.exit(1)",
     "for w in result.warnings:",
     "    sys.stderr.write('warning: %s\\n' % (w,))",
-    "sys.stdout.write(json.dumps(result.ast.to_dict()))" ].join("\n");
+    "sys.stdout.write(json.dumps(ast_with_conds(result.ast)))" ].join("\n");
 
   function getChildProcessSync() {
     // `require` is the CJS bundle's module require; in the ESM and
@@ -21947,7 +21951,18 @@ var iroh = (function () {
         return;
       }
       if (node.node === "Loop") {
-        stubStmt("the legacy unconditional IrohScript LOOP still cannot execute or translate (Amendment A1 decided the conditional LOOP <Bool> form; lowering it is not in the translator yet)", "Loop");
+        // Amendment A2 (2026-11-21): the conditional LOOP <Bool-expr>
+        // (Amendment A1) lowers to a while loop — same test-first
+        // semantics. The legacy bare LOOP has no exit rule and stays
+        // a loud stub.
+        if (node.cond === null || node.cond === void 0) {
+          stubStmt("the legacy bare IrohScript LOOP has no exit rule (Amendment A1 kept it a run-time error), so it cannot translate; the conditional LOOP <Bool-expr> form can", "Loop");
+          return;
+        }
+        counts.loops += 1;
+        emitLine("while (" + expr(node.cond, 0) + ") {");
+        emitBlock(node.body);
+        emitLine("}");
         return;
       }
       if (node.node === "FunctionDef") {
@@ -22380,7 +22395,7 @@ var iroh = (function () {
       report.clean.push({ construct: "variables", count: c.variables, detail: "variable declarations translated" });
     }
     if (c.loops > 0) {
-      report.clean.push({ construct: "loops", count: c.loops, detail: "for loops translated" });
+      report.clean.push({ construct: "loops", count: c.loops, detail: "loops translated" });
     }
     if (c.conditionals > 0) {
       report.clean.push({ construct: "conditionals", count: c.conditionals, detail: "if statements translated" });
@@ -22806,7 +22821,7 @@ var iroh = (function () {
       }
       if (node.type === "ForStatement") {
         if (isIroh) {
-          stubStmt("a for-loop has no equivalent in IrohScript v1 (the conditional LOOP decided in Amendment A1 is not lowered by the translator yet)", "ForStatement");
+          stubStmt("a for-loop is still out of scope for IrohScript v1 (Amendment A2 lowers while loops into the conditional LOOP; a numeric for-loop can be rewritten by hand as a LET plus a LOOP)", "ForStatement");
           return;
         }
         var pat = forLoopPattern(node);
@@ -22834,8 +22849,22 @@ var iroh = (function () {
         emitLine("NEXT " + pat.name);
         return;
       }
-      if (node.type === "WhileStatement" || node.type === "DoWhileStatement") {
-        stubStmt("a " + (node.type === "WhileStatement" ? "while" : "do-while") + " loop has no equivalent in " + target + " v1", node.type);
+      if (node.type === "WhileStatement") {
+        // Amendment A2 (2026-11-21): a JavaScript while lowers into
+        // the conditional IrohScript LOOP (Amendment A1) — the same
+        // test-first semantics. BASIC stays a loud stub.
+        if (!isIroh) {
+          stubStmt("a while loop has no equivalent in " + target + " v1", "WhileStatement");
+          return;
+        }
+        counts.loops += 1;
+        emitLine("LOOP " + expr(node.test, 0));
+        emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
+        emitLine("END LOOP");
+        return;
+      }
+      if (node.type === "DoWhileStatement") {
+        stubStmt("a do-while loop cannot be test-first (it runs its body before the first test), and " + target + " has no post-test loop", "DoWhileStatement");
         return;
       }
       if (node.type === "ClassDeclaration" || node.type === "LabeledStatement") {
@@ -23366,7 +23395,16 @@ var iroh = (function () {
         return;
       }
       if (node.node === "Loop") {
-        throw compileError("LOOP has no defined exit condition in IrohScript 3.0 (spec section 6 shows the form but not the termination rule) — the compiler cannot emit a loop it cannot end");
+        // Amendment A2 (2026-11-21): the conditional LOOP <Bool-expr>
+        // (Amendment A1) lowers to a while loop. The legacy bare LOOP
+        // still throws: the compiler never emits a loop it cannot end.
+        if (node.cond === null || node.cond === void 0) {
+          throw compileError("LOOP has no defined exit condition in IrohScript 3.0 (spec section 6 shows the form but not the termination rule) — the compiler cannot emit a loop it cannot end; write the conditional form LOOP <Bool-expr> (Amendment A1) instead");
+        }
+        emitLine("while (" + expr(node.cond, 0) + ") {");
+        emitBlock(node.body);
+        emitLine("}");
+        return;
       }
       if (node.node === "Action") {
         throw compileError("ACTION is a program behaviour (record + print), not core library code — the compiler does not emit it");

@@ -1408,3 +1408,11 @@ four (ASSIGN, CALL, FUNCTION, IF) to five (adding LOOP).
 still refuses to lower loops, either form, and says so by name.
 That lowering is future work, on purpose. This amendment does not
 reopen 3.0; it decides one open rule.
+
+**Addendum, later the same day (2026-11-21):** the lowering landed
+as the follow-up patch. The conditional LOOP <Bool-expr> now lowers
+to a JavaScript `while` (translate and compileIrohscript), and a
+JavaScript `while` lowers back into `LOOP <Bool-expr> ... END
+LOOP`. The legacy bare form never lowers; do-while never lowers
+(IrohScript has no post-test loop). No rule of 3.0 changed here,
+and no rule of this amendment did either.
