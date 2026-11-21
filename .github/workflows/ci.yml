@@ -1,0 +1,61 @@
+# Minimal generation CI for the IrohRedux 1.1.0 patch line: runs
+# every gate this generation ships. npm ci uses the tracked
+# lockfile to keep builds reproducible. The C++ leg needs
+# g++, which ubuntu-latest ships.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: npm test
+      - run: npm run test:types
+      - run: npm run test:python
+      - run: npm run test:cpp
+      - run: npm run check:api-txt
+      - run: npm run check:catalog
+      - run: npm run build:ai-bundle /tmp/ai-bundle-ci
+
+  # Execution-matrix gate (Fix Spec 3.6 layer 2), ported to
+  # the 1.1.0 tree. All four interpreters installed side by side;
+  # the gate requires every one and fails if any is missing.
+  # This generation emits concatenation rather than f-strings;
+  # the gate still runs so the emitted code is proven identical
+  # across 3.9-3.12.
+  translate-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: npm run dist
+      - run: bash tools/check-translate-matrix.sh
