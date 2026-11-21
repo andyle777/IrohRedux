@@ -30,6 +30,7 @@ function has(cmd) {
   }
 }
 const HAS_PYTHON = has("python3");
+const HAS_GPP = has("g++");
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "iroh-translate-iroh-"));
@@ -71,6 +72,18 @@ function runBasic(code, input) {
   fs.writeFileSync(file, code);
   let proc = spawnSync("python3", ["-c", BASIC_RUNNER, file], { input: input || "", encoding: "utf8" });
   return { status: proc.status, stdout: proc.stdout, stderr: proc.stderr };
+}
+function runCpp(code) {
+  let dir = tmpDir();
+  let file = path.join(dir, "prog.cpp");
+  let bin = path.join(dir, "prog");
+  fs.writeFileSync(file, code);
+  let compile = spawnSync("g++", ["-std=c++17", "-o", bin, file], { encoding: "utf8" });
+  if (compile.status !== 0) {
+    return { status: compile.status, stdout: "", stderr: compile.stderr, compiled: false };
+  }
+  let proc = spawnSync(bin, [], { encoding: "utf8" });
+  return { status: proc.status, stdout: proc.stdout, stderr: proc.stderr, compiled: true };
 }
 function cliTranslate(file, args) {
   let proc = spawnSync(process.execPath, [CLI, file].concat(args || []), { encoding: "utf8" });
@@ -568,4 +581,34 @@ test("BASIC -> Python and -> IrohScript: a WHILE program rides both hops and rou
   let run = runIrohscript(iroh.code);
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stdout, "0\n1\n2\n");
+});
+
+test("BASIC -> Python and -> IrohScript: nested WHILE/WEND rides both hops and round-trips (A5 follow-up)", { skip: !HAS_PYTHON }, () => {
+  // Depth-matching through two hops: the inner WHILE/WEND pair must
+  // nest inside the outer one in the emitted JavaScript, and the
+  // second hop lowers each while again (Python while / LOOP).
+  let bas = "10 LET I = 0\n20 LET T = 0\n30 WHILE I < 3\n40 LET J = 0\n50 WHILE J < 2\n60 LET T = T + 1\n70 LET J = J + 1\n80 WEND\n90 LET I = I + 1\n100 WEND\n110 PRINT T";
+  let py = Iroh.translate(bas, { from: "basic", to: "python", irohscriptHome: IROHSCRIPT_DIR });
+  assert.equal(py.report.ok, true, JSON.stringify(py.report.unsupported));
+  assert.equal(runPython(py.code).stdout, "6\n");
+  let iroh = Iroh.translate(bas, { from: "basic", to: "irohscript", irohscriptHome: IROHSCRIPT_DIR });
+  assert.equal(iroh.report.ok, true, JSON.stringify(iroh.report.unsupported));
+  assert.match(iroh.code, /LOOP I < 3/);
+  assert.match(iroh.code, /LOOP J < 2/);
+  let run = runIrohscript(iroh.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "6\n");
+});
+
+test("BASIC -> C++: a WHILE program rides both hops and round-trips (A5 follow-up)", { skip: !HAS_GPP && "g++ not found on this box" }, () => {
+  // The classic column's last runtime leg: the while lowers at every
+  // hop, BASIC -> JavaScript -> C++ (compiled and run for real).
+  let bas = "10 LET I = 0\n20 LET T = 0\n30 WHILE I < 5\n40 LET T = T + I\n50 LET I = I + 1\n60 WEND\n70 PRINT T";
+  let cpp = Iroh.translate(bas, { from: "basic", to: "cpp", irohscriptHome: IROHSCRIPT_DIR });
+  assert.equal(cpp.report.ok, true, JSON.stringify(cpp.report.unsupported));
+  assert.match(cpp.code, /while \(I < 5\)/);
+  let run = runCpp(cpp.code);
+  assert.equal(run.compiled, true, "g++ failed: " + run.stderr + "\ncode:\n" + cpp.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "10\n");
 });
