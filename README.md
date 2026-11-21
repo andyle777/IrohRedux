@@ -283,7 +283,12 @@ fact here disagrees with a prose paragraph above, this section wins
 - Engine: IrohRedux 1.1.0 (patched in place, 20 Nov 2026).
   No 1.1.2. No version bump.
 - `dist/iroh-node.js` SHA-256:
-  `bbb12a7068d904d88426999bd587e9f76485bbdb7b72a41616fab63ed33455f2`
+  `38c4493ef663b037bd371a27902d9ab214e7452ebc2288ed8ab7ecee26b3606a`
+- The dist is self-contained: the parser and codegen dependencies
+  (acorn, acorn-walk, astring) are bundled in, not `require`d at
+  runtime. A fresh source checkout runs the CLI with no npm install,
+  so a restricted AI sandbox needs nothing but Node on PATH:
+  `node cli/iroh.js program.js --analyze`
 - `iroh --version` prints `iroh 1.1.0 (engine dist iroh-node.js
   0b13cb174f03, runtime node v18.5.0)` inside a packaged binary
   (runtime is the embedded Node; on npm it is the local node).

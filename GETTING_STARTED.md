@@ -352,7 +352,7 @@ on":
 
 ```sh
 node cli/iroh.js --version
-# iroh 1.1.0 (engine dist iroh-node.js bbb12a7068d9, runtime node v24.22.1)
+# iroh 1.1.0 (engine dist iroh-node.js 38c4493ef663, runtime node v24.22.1)
 ```
 
 `iroh --version` prints the version, the SHA-256 of the engine
@@ -533,7 +533,7 @@ fact here disagrees with a prose paragraph above, this section wins
 
 - Engine: IrohRedux 1.1.0 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `bbb12a7068d904d88426999bd587e9f76485bbdb7b72a41616fab63ed33455f2`.
+  `38c4493ef663b037bd371a27902d9ab214e7452ebc2288ed8ab7ecee26b3606a`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set.
