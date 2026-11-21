@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Feature (2026-11-22, Amendment A5): a JavaScript `do-while` now
+  lowers into IrohScript and BASIC instead of stubbing. Neither
+  target has a post-test loop, so the lowering mints one fresh Bool
+  flag per do-while (`LET __do_while_flag_N : Bool = TRUE`,
+  `LOOP <flag>`, the body, `<flag> = <test>`, `END LOOP`; to BASIC:
+  `LET <flag> = -1`, `WHILE <flag>`, the body, `LET <flag> =
+  <test>`, `WEND`) — the body runs once before the first test
+  either way, and the test runs exactly once per pass, so runs
+  match the JavaScript one for one, proven by round trips through
+  both bootstrap interpreters in the tests. The minted name is
+  checked against the program's identifier set, so it cannot
+  collide with a user name (a colliding user variable forces the
+  next flag number). One stub stays, on the BASIC leg only, by
+  parity with `while`: a call inside the condition cannot be hoisted
+  to a GOSUB from the re-tested WHILE line. Suite 750 -> 756
+  (+6 Node: 3 IrohScript round trips incl. the collision and nested
+  cases, 2 BASIC round trips, 1 condition-call stub).
 - Minor fix (2026-11-22, found in the post-rollback test run): the
   JavaScript leg now reroutes a traced program's `console.log` /
   `console.info` to stderr for the duration of the CLI run, so

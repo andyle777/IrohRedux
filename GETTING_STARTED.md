@@ -196,8 +196,9 @@ form, not the rule). Since the lowering patch (Amendment A2,
 2026-11-21) the conditional LOOP exchanges with JavaScript `while`
 in both translate directions, and since the for-desugar patch
 (Amendment A3, later the same day) a JavaScript for-loop desugars
-into init + `LOOP <test>` + update too (do-while cannot be
-test-first and stays a stub). `INTENT` has no event category; a call that raises
+into init + `LOOP <test>` + update too (and a do-while lowers since
+Amendment A5, through a minted Bool flag that starts TRUE and is
+rewritten from the test at the end of every body pass). `INTENT` has no event category; a call that raises
 has no `CALL_END` / `LEAVE`.
 
 BASIC (stdlib only, `irohscript/src/basic.py` + `src/basic_trace.py`):
@@ -391,7 +392,7 @@ node cli/iroh.js doctor
 #   python: ran 25, failed 0, skipped 0
 #   ...
 # Toolchains: node v24.22.1, python3 3.12.3, g++ ...
-# dist: iroh-node.js 851a800e75f9, ...
+# dist: iroh-node.js 114af46eca38, ...
 ```
 
 `iroh doctor` prints the last recorded test run (from
@@ -610,7 +611,7 @@ fact here disagrees with a prose paragraph above, this section wins
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `851a800e75f990eae66786685b616d78651bafef6c49d6ab19c1482a8abfc670`.
+  `114af46eca38e83f97f67f9e0a85ea5346a29abada1e990b076333748b357f79`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set.

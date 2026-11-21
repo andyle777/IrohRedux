@@ -354,8 +354,13 @@ unsupported, and the legacy bare IrohScript LOOP does not lower (no
 exit rule). Since Amendment A2 (2026-11-21) the conditional LOOP
 lowers both ways: IrohScript `LOOP <Bool>` becomes a JavaScript
 `while`, and a JavaScript `while` becomes IrohScript `LOOP <Bool> ...
-END LOOP`, with the round trip run in the tests. A do-while cannot
-be test-first and stays a loud stub. Since Amendment A3
+END LOOP`, with the round trip run in the tests. Since Amendment A5
+(2026-11-22) a JavaScript do-while lowers through a minted Bool flag
+(`LET __do_while_flag_N : Bool = TRUE`, `LOOP <flag>`, the body,
+`<flag> = <test>`, `END LOOP`; to BASIC: `LET <flag> = -1`, `WHILE
+<flag>`, the body, `LET <flag> = <test>`, `WEND`) — the body runs
+once before the first test either way, and the test runs exactly
+once per pass, so runs match the JavaScript one for one. Since Amendment A3
 (2026-11-21) a JavaScript for-loop desugars into IrohScript instead
 of stubbing: the init statement (LET with its inferred type, or an
 assignment), `LOOP <test>` (True when the loop has no test), the
@@ -547,7 +552,7 @@ the generated text form of this file). Flags take a value with
   versions, the dist hash, and the capabilities. Does not run
   the suite itself — run `npm test` first.
 - `--version` — one line: version, dist hash, embedded runtime
-  (`iroh 1.1.1 (engine dist iroh-node.js 851a800e75f9, runtime
+  (`iroh 1.1.1 (engine dist iroh-node.js 114af46eca38, runtime
   node v18.5.0)` inside a packaged binary).
 - `serve [--port 8471] [--host 0.0.0.0] [--token T]
   [--timeout-ms 120000] [--local-legs javascript,...]` — start
@@ -976,7 +981,7 @@ every flag in `iroh --help` appears in it.
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `851a800e75f990eae66786685b616d78651bafef6c49d6ab19c1482a8abfc670`.
+  `114af46eca38e83f97f67f9e0a85ea5346a29abada1e990b076333748b357f79`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set. A CLI trace's stdout is
