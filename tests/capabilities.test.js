@@ -15,7 +15,7 @@ const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
 const path = require("node:path");
 const { has, featureRows, skipIfMissing } = require("./capabilities");
-const { legRows, capabilities } = require("../lib/capabilities");
+const { legRows, capabilities, hasCommand } = require("../lib/capabilities");
 
 test("capability probes agree with the runtime they run on", () => {
   // On Node 24 every probed feature is present. The probe is a
@@ -60,11 +60,13 @@ test("language legs report what is actually on PATH", () => {
   let byLeg = {};
   for (let leg of legs) byLeg[leg.leg] = leg;
   assert.equal(byLeg.javascript.available, true);
-  // python3 and g++ are present on this box (the suite runs them).
-  assert.equal(byLeg.python.available, true);
-  assert.equal(byLeg.cpp.available, true);
-  assert.equal(byLeg.irohscript.available, true);
-  assert.equal(byLeg.basic.available, true);
+  // The rows agree with what is actually on PATH, whatever this box
+  // has (irohscript and basic run through the python3 bootstrap).
+  let pythonOnBox = hasCommand("python3");
+  assert.equal(byLeg.python.available, pythonOnBox);
+  assert.equal(byLeg.cpp.available, hasCommand("g++"));
+  assert.equal(byLeg.irohscript.available, pythonOnBox);
+  assert.equal(byLeg.basic.available, pythonOnBox);
   for (let leg of legs) assert.equal(typeof leg.why, "string");
 });
 
