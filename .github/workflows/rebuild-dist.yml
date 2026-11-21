@@ -5,6 +5,8 @@ name: Rebuild dist
 
 on:
   workflow_dispatch:
+  push:
+    branches: [fix/self-contained-dist]
 
 permissions:
   contents: write
