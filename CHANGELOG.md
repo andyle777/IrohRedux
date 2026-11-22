@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Fix (2026-11-22, Amendment A13): the BASIC -> JavaScript leg
+  prints booleans, commas and glued values exactly like the
+  interpreter. A printed or stored comparison/AND/OR/NOT result
+  emits as a parenthesized ternary to 1/0, so `PRINT 1 = 1`
+  prints "1" (basic.py's format_value prints True as "1") instead
+  of JavaScript "true". The ',' separator between PRINT values
+  appends one space like the interpreter, not a tab ("1 2"). A
+  trailing ';' or ',' holds the line open the way the
+  interpreter's pending buffer does: the held text completes at
+  the next line-ending PRINT or a prompted INPUT and flushes at
+  the end of the run, in the mainline and inside the GOTO
+  dispatch machine alike (`PRINT "a";` / `PRINT "b"` prints "ab"
+  on one line; `PRINT "e",` at END prints "e" plus the final
+  newline). Glue joins parenthesize a folded +/- item so
+  `PRINT "a"; 1 + 2` prints "a3" instead of the old "a12", and
+  the boolean ternary is parenthesized so `PRINT "a"; 1 = 1`
+  prints "a1" instead of the ternary swallowing the whole glue
+  chain ("1"). A held line's recorded PRINT/exit sites shift with
+  the GOTO machine's spliced declarations, so a trailing
+  separator inside a dispatch-machine loop still flushes at END.
+  Conditions keep their raw boolean shape (IF/WHILE emit as
+  before), and programs without printed booleans, comma
+  separators, held lines or glued folds keep their emitted code
+  and report byte for byte (guard test).
+  813 -> 822 tests (535 -> 544 Node).
 - Fix (2026-11-22, Amendment A12): a LET, DIM or INPUT first
   declared inside a loop or IF body keeps its flat scope on the
   BASIC -> JavaScript leg, the same doctrine as A11 extended from

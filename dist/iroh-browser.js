@@ -22128,7 +22128,16 @@ var iroh = (function () {
   function makeBasicJSEmitter(report) {
     var lines = [];
     var indentLevel = 0;
-    var needs = { pymod: false, input: false, dim: false };
+    var needs = { pymod: false, input: false, dim: false, pending: false };
+    // Amendment A13: every complete PRINT statement (a line closed
+    // with a newline) and every END/STOP site, recorded so the
+    // __basic_tail flag can be cleared/closed once the whole program
+    // is emitted - a GOTO machine can jump back into statements that
+    // were emitted before the first trailing separator set
+    // needs.pending, so the patch must run after emission, over
+    // recorded indices, never at statement time.
+    var logSites = [];
+    var exitSites = [];
     var counts = { functions: 0, loops: 0, conditionals: 0, variables: 0, outputs: 0 };
     var declared = {};
     var dimmed = {};
@@ -22218,7 +22227,8 @@ var iroh = (function () {
       if (node[0] === "un") { return 6; }
       return 7;
     }
-    function expr(node, parentPrec) {
+    function expr(node, parentPrec, valueCtx) {
+      if (valueCtx === undefined) { valueCtx = true; }
       if (!node || !Array.isArray(node)) { return "undefined"; }
       var prec = exprPrec(node);
       var out = "";
@@ -22249,14 +22259,51 @@ var iroh = (function () {
         var op = node[1];
         if (op === "%") {
           needs.pymod = true;
-          out = "__iroh_pymod(" + expr(node[2], 7) + ", " + expr(node[3], 7) + ")";
+          out = "__iroh_pymod(" + expr(node[2], 7, true) + ", " + expr(node[3], 7, true) + ")";
+        } else if (op === "AND" || op === "OR") {
+          // Amendment A13: an AND/OR in value position emits as a
+          // 1/0 ternary - BASIC's boolean is a number (basic.py
+          // formats True as "1"), while JavaScript && / || return
+          // the OPERAND and print it verbatim. Operands stay
+          // truthiness (not value) context, so comparisons need no
+          // extra wrap.
+          var jsOp = op === "AND" ? "&&" : "||";
+          var raw = expr(node[2], prec, false) + " " + jsOp + " " + expr(node[3], prec + 1, false);
+          if (valueCtx) {
+            noteOnce("basic-bool-1-0", "the BASIC program stores or prints a boolean value (a comparison, AND, OR or NOT result): BASIC boolean values print as 1/0 (basic.py's format_value prints True as \"1\"), so the emitted expression is a ternary to 1/0 instead of a raw JavaScript true/false");
+            out = "((" + raw + ") ? 1 : 0)";
+          } else {
+            out = raw;
+          }
         } else {
-          var map = { "=": "===", "<>": "!==", AND: "&&", OR: "||" };
-          var jsOp = map[op] || op;
-          out = expr(node[2], prec) + " " + jsOp + " " + expr(node[3], prec + 1);
+          var map = { "=": "===", "<>": "!==", "<": "<", "<=": "<=", ">": ">", ">=": ">=" };
+          var jsOp$1 = map[op] || op;
+          // Amendment A13: comparisons feed their operands as values
+          // (basic.py compares with ==, where True == 1, so a nested
+          // boolean must emit as its 1/0 number for ===), and the
+          // comparison itself wraps 1/0 in value position.
+          var raw$1 = expr(node[2], prec, true) + " " + jsOp$1 + " " + expr(node[3], prec + 1, true);
+          if (valueCtx && (op === "=" || op === "<>" || op === "<" || op === "<=" || op === ">" || op === ">=")) {
+            noteOnce("basic-bool-1-0", "the BASIC program stores or prints a boolean value (a comparison, AND, OR or NOT result): BASIC boolean values print as 1/0 (basic.py's format_value prints True as \"1\"), so the emitted expression is a ternary to 1/0 instead of a raw JavaScript true/false");
+            out = "((" + raw$1 + ") ? 1 : 0)";
+          } else {
+            out = raw$1;
+          }
         }
       } else if (node[0] === "un") {
-        out = (node[1] === "NOT" ? "!" : "-") + expr(node[2], 6);
+        if (node[1] === "NOT") {
+          // Amendment A13: NOT is boolean-producing like a comparison
+          // - its operand is consumed for truthiness only.
+          var raw$2 = "!" + expr(node[2], 6, false);
+          if (valueCtx) {
+            noteOnce("basic-bool-1-0", "the BASIC program stores or prints a boolean value (a comparison, AND, OR or NOT result): BASIC boolean values print as 1/0 (basic.py's format_value prints True as \"1\"), so the emitted expression is a ternary to 1/0 instead of a raw JavaScript true/false");
+            out = "((" + raw$2 + ") ? 1 : 0)";
+          } else {
+            out = raw$2;
+          }
+        } else {
+          out = "-" + expr(node[2], 6, true);
+        }
       } else {
         markUnsupported(report, "expression", "expression '" + node[0] + "' is not in the v1 scope");
         out = "(function() { throw new Error(" + JSON.stringify("IrohRedux: expression '" + node[0] + "' is not in the v1 scope") + "); })()";
@@ -22266,17 +22313,28 @@ var iroh = (function () {
     }
     function emitPrint(items) {
       counts.outputs += 1;
-      if (!items || items.length === 0) { emitLine("console.log();"); return; }
+      if (!items || items.length === 0) { logSites.push(lines.length); emitLine("console.log();"); return; }
       var parts = [];
       var trailing = false;
       for (var ii = 0; ii < items.length; ++ii) {
         var item = items[ii];
         var sep = item.length > 1 ? item[1] : null;
-        parts.push(expr(item[0], 0));
+        var piece = expr(item[0], 0);
+        // Amendment A13: the items join into ONE JavaScript "+"
+        // expression, so a non-first item with a top-level + or -
+        // would fold into the string concatenation print by print;
+        // it emits parenthesized so it adds up first.
+        if (parts.length > 0 && exprPrec(item[0]) === 4) {
+          noteOnce("print-glue-prec", "the PRINT statement glues its values into one line, and a following + or - item would fold into the JavaScript string concatenation instead of adding up first; the item emits parenthesized so JavaScript folds it as one value");
+          piece = "(" + piece + ")";
+        }
+        parts.push(piece);
         if (sep === ";") { parts.push('""'); trailing = true; }
         else if (sep === ",") {
-          noteOnce("print-zone", "PRINT with ',' moves to the next print zone (14 columns); translated as a tab.");
-          parts.push('"\\t"');
+          // Amendment A13: basic.py's ',' appends ONE space to the
+          // pending line, not a print-zone tab.
+          noteOnce("print-zone", "PRINT with ',' separates values with one space (basic.py appends a single space after a comma-separated value); translated as a space.");
+          parts.push('" "');
           trailing = true;
         } else {
           trailing = false;
@@ -22284,9 +22342,15 @@ var iroh = (function () {
       }
       var joined = parts.join(" + ");
       if (trailing) {
-        noteOnce("print-trailing", "PRINT with a trailing separator writes without a newline (process.stdout.write, Node-only).");
-        emitLine("process.stdout.write(" + joined + ");");
+        // Amendment A13: the interpreter keeps a pending output
+        // buffer that the next PRINT closes and the end of the run
+        // flushes; the write stays immediate (byte order matches)
+        // and a line-open flag carries the run-end newline.
+        needs.pending = true;
+        noteOnce("print-trailing", "PRINT with a trailing separator holds its text on an open line instead of printing a newline (basic.py keeps a pending output buffer that the next PRINT closes or the end of the run flushes); translated as a process.stdout.write plus a line-open flag closed at the next PRINT or at END (Node-only).");
+        emitLine("process.stdout.write(" + joined + "); __basic_tail = true;");
       } else {
+        logSites.push(lines.length);
         emitLine("console.log(" + joined + ");");
       }
     }
@@ -22361,6 +22425,10 @@ var iroh = (function () {
           for (var jj$1 = 0; jj$1 < s[2].length; ++jj$1) {
             var name = s[2][jj$1];
             var prompt = jj$1 === 0 ? s[1] : null;
+            // Amendment A13: basic.py buffers an INPUT prompt in the
+            // pending line (closed by the next PRINT or at the end of
+            // the run), so a prompted INPUT opens a line too.
+            if (jj$1 === 0 && prompt !== null) { needs.pending = true; }
             var call = "__basic_input(" + (prompt === null ? "null" : JSON.stringify(prompt)) + ")";
             hoistDecl(name);
             if (name.charAt(name.length - 1) === "$") {
@@ -22387,7 +22455,7 @@ var iroh = (function () {
         }
         if (kind === "if") {
           counts.conditionals += 1;
-          emitLine("if (" + expr(s[1], 0) + ") {");
+          emitLine("if (" + expr(s[1], 0, false) + ") {");
           indentLevel += 1;
           emitStmtList(s[2], subRanges, inSub);
           indentLevel -= 1;
@@ -22496,7 +22564,7 @@ var iroh = (function () {
             ii += 1;
             continue;
           }
-          emitLine("while (" + expr(s[1], 0) + ") {");
+          emitLine("while (" + expr(s[1], 0, false) + ") {");
           indentLevel += 1;
           emitSeq(items, ii + 1, wendIdx, subRanges, inSub, isFlat);
           indentLevel -= 1;
@@ -22547,6 +22615,7 @@ var iroh = (function () {
           continue;
         }
         if (kind === "end" || kind === "stop") {
+          exitSites.push(lines.length);
           emitLine("process.exit(0);");
           ii += 1;
           continue;
@@ -22673,7 +22742,15 @@ var iroh = (function () {
         var n = plan.decls[ii$1];
         if (!seen[n]) { seen[n] = true; decls.push("var " + n + ";"); }
       }
-      if (decls.length > 0) { lines.splice.apply(lines, [plan.declSpliceAt, 0].concat(decls)); }
+      if (decls.length > 0) {
+        // Amendment A13: this splice shifts every machine-emitted line
+        // after declSpliceAt, so the recorded PRINT/exit sites (which
+        // FINALIZE rewrites by index) shift with it.
+        var at = plan.declSpliceAt;
+        lines.splice.apply(lines, [at, 0].concat(decls));
+        for (var ii$2 = 0; ii$2 < logSites.length; ++ii$2) { if (logSites[ii$2] >= at) { logSites[ii$2] += decls.length; } }
+        for (var ii$3 = 0; ii$3 < exitSites.length; ++ii$3) { if (exitSites[ii$3] >= at) { exitSites[ii$3] += decls.length; } }
+      }
     }
     function run(prog) {
       var flat = [];
@@ -22731,6 +22808,18 @@ var iroh = (function () {
       // subroutine ranges itself.
         emitSeq(flat, 0, flat.length, subRanges, false, true);
       }
+      // Amendment A13: close every recorded line at END/STOP (the
+      // interpreter flushes its pending buffer at the end of the
+      // run), or - when the program never ends explicitly - at the
+      // very end. This runs BEFORE the progDecls splice so recorded
+      // indices still point at their statements, and over recorded
+      // sites so GOTO machines that jump back into earlier PRINTs
+      // keep the flag bookkeeping exact.
+      if (needs.pending) {
+        for (var ii$4 = 0; ii$4 < logSites.length; ++ii$4) { lines[logSites[ii$4]] += " __basic_tail = false;"; }
+        for (var ii$5 = 0; ii$5 < exitSites.length; ++ii$5) { lines[exitSites[ii$5]] = lines[exitSites[ii$5]].replace("process.exit(0);", "if (__basic_tail) process.stdout.write(\"\\n\"); process.exit(0);"); }
+        if (exitSites.length === 0) { lines.push("if (__basic_tail) process.stdout.write(\"\\n\");"); }
+      }
       // Amendment A8: hoist subroutine-declared names ahead of
       // everything (sub functions included) as program-level vars,
       // initialized like an untouched BASIC read (0, or "" for
@@ -22738,8 +22827,8 @@ var iroh = (function () {
       // the same binding.
       if (progDecls.length > 0) {
         var hoistVar = [];
-        for (var ii$4 = 0; ii$4 < progDecls.length; ++ii$4) {
-          var n = progDecls[ii$4];
+        for (var ii$6 = 0; ii$6 < progDecls.length; ++ii$6) {
+          var n = progDecls[ii$6];
           hoistVar.push("var " + n + " = " + (n.charAt(n.length - 1) === "$" ? '""' : "0") + ";");
         }
         lines.splice(0, 0, hoistVar.join("\n"), "");
@@ -22762,7 +22851,11 @@ var iroh = (function () {
         header.push("var __basic_input_lines = null;");
         header.push("var __basic_input_at = 0;");
         header.push("function __basic_input(prompt) {");
-        header.push("  if (prompt) process.stdout.write(prompt);");
+        if (needs.pending) {
+          header.push("  if (prompt) { process.stdout.write(prompt); __basic_tail = true; }");
+        } else {
+          header.push("  if (prompt) process.stdout.write(prompt);");
+        }
         header.push("  if (__basic_input_lines === null) {");
         header.push("    __basic_input_lines = require(\"fs\").readFileSync(0, \"utf8\").split(\"\\n\");");
         header.push("  }");
@@ -22771,6 +22864,10 @@ var iroh = (function () {
         header.push("}");
         header.push("");
         noteOnce("input-node", "INPUT in translated JavaScript reads stdin with require(\"fs\") (Node-only).");
+      }
+      if (needs.pending) {
+        header.push("var __basic_tail = false;");
+        header.push("");
       }
       return { text: header.concat(lines).join("\n") + "\n", counts: counts };
     }

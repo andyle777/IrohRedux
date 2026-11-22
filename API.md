@@ -462,7 +462,19 @@ flat vars dict printed the value. The GOTO dispatch machine is
 exempt (its hoistDecl already places every main-flow name) and
 FOR variables keep their A11 treatment. Programs without a
 declaration inside a nested block keep their emitted code and
-report byte for byte. No classes, no
+report byte for byte. And since Amendment A13 (same day) printed
+values match the interpreter's pending-line semantics: a
+comparison, AND, OR or NOT result in value position emits as a
+parenthesized ternary to 1/0 (format_value prints True as "1"),
+the ',' separator between PRINT values appends one space, a
+trailing ';' or ',' holds the line open until the next
+line-ending PRINT, a prompted INPUT, or the end of the run (an
+`if (__basic_tail)` flush woven into the recorded exit sites,
+which shift with the GOTO machine's spliced declarations), and
+a folded +/- item in a glued PRINT is parenthesized so
+`PRINT "a"; 1 + 2` prints "a3". Conditions in IF and WHILE keep
+their raw boolean shape, and programs without these shapes keep
+their emitted code and report byte for byte. No classes, no
 closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the
@@ -639,7 +651,7 @@ the generated text form of this file). Flags take a value with
   versions, the dist hash, and the capabilities. Does not run
   the suite itself — run `npm test` first.
 - `--version` — one line: version, dist hash, embedded runtime
-  (`iroh 1.1.1 (engine dist iroh-node.js 615e8d10def8, runtime
+  (`iroh 1.1.1 (engine dist iroh-node.js 57e042c374cc, runtime
   node v18.5.0)` inside a packaged binary).
 - `serve [--port 8471] [--host 0.0.0.0] [--token T]
   [--timeout-ms 120000] [--local-legs javascript,...]` — start
@@ -1068,7 +1080,7 @@ every flag in `iroh --help` appears in it.
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `615e8d10def8ddcb691c07de86d8c2d9949279dc500cc9dc80b5cd9ef0a11977`.
+  `57e042c374ccc377b4250631fee507bda4bffda94ed9776ca168e09d7f48a46a`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set. A CLI trace's stdout is
