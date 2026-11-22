@@ -375,7 +375,25 @@ construct (1.1.1 M5) — and BASIC `WHILE ... WEND` lowers into
 JavaScript as `while`, both round-trip tested. One case stays a
 loud stub: a call inside the condition, which unlike FOR bounds
 cannot be hoisted to a GOSUB before the loop, because the WHILE
-line is re-tested every pass. No classes, no
+line is re-tested every pass. Since Amendment A6 (2026-11-22) a
+JavaScript for-of lowers instead of stubbing: to BASIC, an array
+iterable rides DIM + FOR/NEXT — an inline literal is hoisted once
+through the declaration machinery into a minted `__for_of_arr_N`
+(a translate-time-fact walk: the bootstrap has no LEN at runtime, so
+a variable only qualifies while it is known to hold its original
+array literal; a reassignment retires the fact and stubs loudly),
+and the minted `__for_of_idx_N` walks `0..n-1` re-assigning the loop
+variable from the array each pass; a string literal unrolls one pass
+per character (printable ASCII only, loud stub beyond). To
+IrohScript, literals unroll one pass per item (first pass declares,
+later passes re-assign — the flat-scope re-binding; the language has
+no array type, so a runtime iterable is a loud stub). for-in stays
+a loud stub on every leg by design: no v1 target has an object
+surface. The same amendment fixed a silent divergence on the C++
+leg: a string literal in `for (auto c : ...)` decays to a char
+array and the walk included the NUL terminator; it is now wrapped
+in `std::string(...)`, with a compiled-and-run test that would
+catch the stray byte. No classes, no
 closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the

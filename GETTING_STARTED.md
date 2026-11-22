@@ -219,7 +219,17 @@ WHILE/WEND also translates both ways with a JavaScript `while`
 line is re-tested every pass), and a BASIC WHILE program rides
 every translate leg from there: JavaScript `while`, Python
 `while`, the IrohScript `LOOP`, C++ `while` — nested WHILE/WEND
-included, each round trip executed in the tests.
+included, each round trip executed in the tests. And since the
+for-of patch (Amendment A6, 2026-11-22) a JavaScript `for-of`
+rides both family legs too: to BASIC an array literal lowers to a
+minted DIM walked FOR/NEXT (a variable joins only while it holds
+its original literal — the bootstrap has no LEN at runtime), a
+string literal unrolls per character, and IrohScript unrolls
+literals per item (no array type exists there). `for-in` stays a
+loud stub everywhere by design: no target has an object surface.
+The C++ leg also gained a fix that day: a string literal in a
+range-for used to walk the NUL terminator too; it is wrapped in
+`std::string` now, with an execution test.
 
 C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
 `-finstrument-functions -rdynamic -O0` and linked against the runtime

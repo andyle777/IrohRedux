@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-758%20passing-brightgreen.svg?style=flat-square" alt="758 tests passing" />
+  <img src="https://img.shields.io/badge/tests-774%20passing-brightgreen.svg?style=flat-square" alt="774 tests passing" />
 </p>
 
 <p align="center">
@@ -67,7 +67,7 @@ cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
 npm run build:catalog # builds the offline SQLite reference catalog
-npm test            # 758 tests: 480 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
+npm test            # 774 tests: 496 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
 ```
 
 The Python client installs with `pip install -e python/`. The C++
@@ -218,7 +218,15 @@ Honest limits, in one place.
   `<flag> = <test>`, `END LOOP` — the body runs once before the
   first test either way, and the test runs once per pass, so
   runs match the JavaScript exactly; the minted name is checked
-  against the program's identifier set so it cannot collide).
+  against the program's identifier set so it cannot collide). The
+  for-of patch (Amendment A6, same day) unrolls the literals: a
+  JavaScript `for-of` over an array or string literal lowers to
+  one pass per item (the first pass declares the loop variable,
+  later passes re-assign it — the flat-scope re-binding the
+  for-desugar makes), because the language has no array type at
+  all; a runtime iterable stays a loud stub, and `for-in` stays a
+  loud stub on every leg by design (objects are outside every v1
+  target surface).
 - **BASIC:** GOTO has no event category, so GOTO loops are invisible
   in the trace (FOR/NEXT is the observable loop). DIM and array
   reads have no events either. The WHILE/WEND patch (Amendment A4,
@@ -230,7 +238,18 @@ Honest limits, in one place.
   compiled-and-run C++ leg both have execution tests). The one
   loud stub: a call inside a while condition — the WHILE line is
   re-tested every pass and cannot carry the GOSUB a hoisted call
-  needs.
+  needs. The for-of patch (Amendment A6, 2026-11-22) opens the
+  array walk too: a JavaScript `for-of` over an inline array
+  literal mints a hidden `DIM` and walks it `FOR/NEXT`, a variable
+  declared with an array literal rides its own `DIM` (a
+  translate-time fact — the bootstrap has no LEN at runtime, so
+  a reassigned or unknown iterable is a loud stub), calls inside
+  the literal ride the GOSUB lifts, and a string literal unrolls
+  one pass per character. The same amendment fixed a silent
+  divergence on the C++ column: a string literal in a range-for
+  decays to a char array whose walk included the NUL terminator;
+  it is now wrapped in `std::string`, with an execution test
+  that would catch the stray byte.
 - **Translate:** `translate()` runs the program for type evidence
   by default (pass `options.evidence: "none"` to skip it). The
   report carries a `verify` block saying whether the emitted
@@ -260,7 +279,7 @@ Newest first. Hashes live on the release page, not in this file.
   laptop joins it as a node (`iroh node`) to run the legs the
   phone cannot — see `SERVER.md`. The perceptron weights are now
   defined by `personality-matrix.json`, and the AI bundle includes a
-  read-only SQLite memory catalog. 758 tests (480 Node + 25 Python
+  read-only SQLite memory catalog. 774 tests (496 Node + 25 Python
   + 9 C++ + 244 IrohScript/BASIC).
 - **1.1.1 (20 Nov 2026) — the patch.** The trace memory release:
   a finished trace releases its Stage (a 500,013-event trace now

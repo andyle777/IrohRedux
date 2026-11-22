@@ -111,6 +111,23 @@ checkBothWays(
   "let xs = [3, 1, 2]; let s = 0; for (let x of xs) { s += x; } console.log(s); console.log(xs.length);",
   "6\n3\n"
 );
+// Amendment A6 (2026-11-22): a string literal in a for-of was silently
+// divergent on the C++ leg (range-for decays it to a char array and
+// walks the NUL terminator too); the fix wraps it in std::string, and
+// this round trip is the discriminating test.
+checkBothWays(
+  "for-of over a string literal (A6)",
+  'let t = "x"; for (const c of "hi") { t += c; } console.log(t);',
+  "xhi\n"
+);
+test("for-in over an object stays a loud stub on the Python and C++ legs (A6)", () => {
+  let js = "const o = { a: 1, b: 2 };\nlet n = 0;\nfor (const k in o) { n += 1; }\nconsole.log(n);";
+  for (let to of ["python", "cpp"]) {
+    let out = Iroh.translate(js, { to });
+    assert.equal(out.report.ok, false, to);
+    assert.ok(out.report.unsupported.some(u => u.construct === "ForInStatement"), to + ": " + JSON.stringify(out.report.unsupported));
+  }
+});
 checkBothWays(
   "strings and concatenation",
   'let name = "world"; console.log("hello " + name);',
