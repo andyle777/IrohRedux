@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Feature (2026-11-22, Amendment A9): a read of an unwritten
+  BASIC variable lowers to its BASIC default (0, or `""` for
+  string names), matching basic.py. The old lowering crashed on
+  the undeclared binding (PRINT of a name no LET ever wrote), hit
+  a TDZ crash on a self-referential first `LET A = A + 1`, ran
+  `FOR I = I TO N` with zero passes instead of basic's, and the
+  string default crashed too. Now a read of a not-yet-declared
+  name hoists it to a program-level `var` initialized 0 (or `""`),
+  and a self-referential first LET or FOR bound hoists the same
+  way, each with a per-name report note; a numeric read never
+  matches a string name (X vs X$ is checked exactly, by walking
+  the expression tuples, never by scanning emitted text).
+  Programs with no unwritten reads keep the previous output byte
+  for byte. 789 -> 797 tests (511 -> 519 Node).
 - Feature (2026-11-22, Amendment A8): a variable declared inside a
   BASIC GOSUB subroutine body is program-wide, matching the
   interpreter, which keeps one program-wide vars dict. The old

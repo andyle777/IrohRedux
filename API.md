@@ -413,7 +413,16 @@ lowering hoists it to a program-level `var` initialized like an
 untouched BASIC read (0, or `""` for string names) and the
 declaration site becomes a bare assignment, so the subroutine, the
 mainline, and the dispatch machine share one binding (a `report.notes`
-entry names the hoist). No classes, no
+entry names the hoist). Since Amendment A9 (2026-11-22) a read of an
+unwritten variable lowers to its BASIC default the same way: a
+not-yet-declared name in an expression hoists to a program-level
+`var` initialized 0 (or `""` for string names) instead of a
+reference to a binding that does not exist, a self-referential
+first `LET A = A + 1` or `FOR I = I TO N` hoists rather than
+TDZ-crashing or running zero passes, each hoisted read carries a
+per-name `report.notes` entry, and a numeric read never matches a
+string name (the check walks the expression tuples exactly, X
+versus X$). No classes, no
 closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the
@@ -590,7 +599,7 @@ the generated text form of this file). Flags take a value with
   versions, the dist hash, and the capabilities. Does not run
   the suite itself — run `npm test` first.
 - `--version` — one line: version, dist hash, embedded runtime
-  (`iroh 1.1.1 (engine dist iroh-node.js 2ba2c0566908, runtime
+  (`iroh 1.1.1 (engine dist iroh-node.js 4390a205bd2a, runtime
   node v18.5.0)` inside a packaged binary).
 - `serve [--port 8471] [--host 0.0.0.0] [--token T]
   [--timeout-ms 120000] [--local-legs javascript,...]` — start
@@ -1019,7 +1028,7 @@ every flag in `iroh --help` appears in it.
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `2ba2c056690868ec5f9bdd5ec065a1cbe16ce3a8276cd813e40bb8c9455e5836`.
+  `4390a205bd2a5d928c9c5b48a96f724e31b6e1399ba15d686e66c180d303186f`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set. A CLI trace's stdout is

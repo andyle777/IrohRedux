@@ -241,7 +241,11 @@ declared inside a GOSUB body is program-wide, the way the
 interpreter's one vars dict keeps it — the lowering hoists it to
 a program-level `var` initialized 0 (or `""` for strings), so
 sub writes, the mainline, and the machine all see the same
-variable, and a GOSUB counter persists across calls.
+variable, and a GOSUB counter persists across calls. And the
+unwritten-read patch (Amendment A9, same day): reading a
+never-written variable prints 0 ("" for a string name) exactly
+like the interpreter instead of crashing, and `LET A = A + 1`
+counts from 0, `FOR I = I TO 2` runs from 0 to 2.
 
 C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
 `-finstrument-functions -rdynamic -O0` and linked against the runtime
@@ -417,7 +421,7 @@ node cli/iroh.js doctor
 #   python: ran 25, failed 0, skipped 0
 #   ...
 # Toolchains: node v24.22.1, python3 3.12.3, g++ ...
-# dist: iroh-node.js 2ba2c0566908, ...
+# dist: iroh-node.js 4390a205bd2a, ...
 ```
 
 `iroh doctor` prints the last recorded test run (from
@@ -636,7 +640,7 @@ fact here disagrees with a prose paragraph above, this section wins
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `2ba2c056690868ec5f9bdd5ec065a1cbe16ce3a8276cd813e40bb8c9455e5836`.
+  `4390a205bd2a5d928c9c5b48a96f724e31b6e1399ba15d686e66c180d303186f`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set.

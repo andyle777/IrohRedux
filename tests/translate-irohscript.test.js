@@ -644,6 +644,112 @@ test("BASIC -> JS: a GOSUB-free program keeps the legacy straight-line output (A
   assert.equal(out.report.notes.some(function(n) { return /program-wide variable namespace/.test(n); }), false);
 });
 
+test("BASIC -> JS: a read of an unwritten variable prints 0 like the interpreter (A9)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 PRINT C\n20 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /^var C = 0;\n/);
+  assert.ok(out.report.notes.some(function(n) { return /reads variable 'C' before any assignment/.test(n); }), "the unwritten-read note names C");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "0\n");
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(basic.stdout, "0\n");
+});
+
+test("BASIC -> JS: a self-referential first LET reads the unwritten value (A9)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 LET A = A + 1\n20 PRINT A\n30 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.ok(!/\blet A\b/.test(out.code), "no TDZ-crashing let A in the output");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "1\n");
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(basic.stdout, "1\n");
+});
+
+test("BASIC -> JS: an unwritten string reads as empty, like the interpreter (A9)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 LET T$ = T$ + \"x\"\n20 PRINT T$\n30 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /^var T\$ = "";\n/);
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "x\n");
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(basic.stdout, "x\n");
+});
+
+test("BASIC -> JS: an unwritten read in an IF condition works through the dispatch machine (A9)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 IF Z < 1 THEN GOTO 30\n20 PRINT \"no\"\n30 PRINT Z\n40 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /__pcw: while \(true\) \{/);
+  assert.match(out.code, /^var Z = 0;\n/);
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "0\n");
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(basic.stdout, "0\n");
+});
+
+test("BASIC -> JS: a self-referential FOR bound runs like the interpreter, not zero passes (A9)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 FOR I = I TO 2\n20 PRINT I\n30 NEXT I\n40 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.ok(!/\blet I\b/.test(out.code), "no undefined-valued let I in the output");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "0\n1\n2\n");
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(basic.stdout, "0\n1\n2\n");
+});
+
+test("BASIC -> JS: an unwritten read inside a GOSUB body defaults like the interpreter (A9)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 GOSUB 100\n20 END\n100 PRINT V\n110 RETURN";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /^var V = 0;\n/);
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "0\n");
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(basic.stdout, "0\n");
+});
+
+test("BASIC -> JS: a read before the first write prints 0 then the written value (A9)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 PRINT A\n20 LET A = 5\n30 PRINT A\n40 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "0\n5\n");
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(basic.stdout, "0\n5\n");
+});
+
+test("BASIC -> JS: a numeric read never matches a string name (X vs X$, A9 guard)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 LET X$ = \"s\"\n20 LET X = 1\n30 PRINT X$ + X\n40 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.equal(out.code, "let X$ = \"s\";\nlet X = 1;\nconsole.log(X$ + X);\nprocess.exit(0);\n");
+  assert.equal(out.report.notes.length, 0);
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "s1\n");
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(basic.stdout, "s1\n");
+});
+
 // ------------------------------------------------------------------
 // Two-hop legs (via JavaScript)
 // ------------------------------------------------------------------

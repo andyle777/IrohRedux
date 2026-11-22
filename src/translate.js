@@ -3917,12 +3917,34 @@ function makeBasicJSEmitter(report) {
   // mainline, and the pc-dispatch machine share one binding.
   let progDecls = [];
   let progDeclSet = {};
-  function progHoist(name) {
+  // `kind` says why the name hoists: "sub" (Amendment A8, first
+  // declared inside a GOSUB subroutine body) or "read" (Amendment
+  // A9, read before any assignment — basic.py reads an unwritten
+  // variable as 0, or "" for string names, while an undeclared
+  // JavaScript binding would crash, so the name hoists initialized
+  // the BASIC way instead).
+  function progHoist(name, kind) {
     if (!progDeclSet[name]) {
       progDeclSet[name] = true;
       progDecls.push(name);
-      noteOnce("sub-namespace", "the BASIC program declares a variable inside a GOSUB subroutine: BASIC has one program-wide variable namespace (basic.py's interpreter keeps a single program-wide vars dict), so the declaration hoists to a program-level var shared with the mainline instead of a function-scoped let");
+      if (kind === "read") {
+        noteOnce("unwritten-read:" + name, "the BASIC program reads variable '" + name + "' before any assignment (BASIC reads an unwritten variable as 0, or \"\" for string names), so the name hoists to a program-level var initialized that way");
+      } else {
+        noteOnce("sub-namespace", "the BASIC program declares a variable inside a GOSUB subroutine: BASIC has one program-wide variable namespace (basic.py's interpreter keeps a single program-wide vars dict), so the declaration hoists to a program-level var shared with the mainline instead of a function-scoped let");
+      }
     }
+  }
+  // Does the expression read `name`? Walks the BASIC expression
+  // tuples exactly (["var", name], ["bin", op, l, r], ["un", op,
+  // x], ["arr", name, [idx...]]) — never a regex over emitted
+  // text, so a name like X never matches a read of X$.
+  function readsName(node, name) {
+    if (!node || !Array.isArray(node)) return false;
+    if (node[0] === "var" && node[1] === name) return true;
+    for (let ii = 0; ii < node.length; ++ii) {
+      if (Array.isArray(node[ii]) && readsName(node[ii], name)) return true;
+    }
+    return false;
   }
   function indentStr() { return "  ".repeat(indentLevel); }
   function emitLine(text) { lines.push(indentStr() + text); }
@@ -3961,6 +3983,17 @@ function makeBasicJSEmitter(report) {
     if (node[0] === "num" || node[0] === "str") {
       out = JSON.stringify(node[1]);
     } else if (node[0] === "var") {
+      // Amendment A9: a read of a name that has no declaration yet
+      // is a read of an unwritten BASIC variable (0, or "" for a
+      // string name): hoist it program-level instead of emitting a
+      // reference to a binding that does not exist in the lowered
+      // JavaScript. Marking it declared keeps a later LET a bare
+      // assignment against the hoisted var (a `let` there would
+      // redeclare the program-level `var` in the same scope).
+      if (!declared[node[1]] && !dimmed[node[1]]) {
+        declared[node[1]] = true;
+        progHoist(node[1], "read");
+      }
       out = node[1];
     } else if (node[0] === "arr") {
       if (!dimmed[node[1]]) {
@@ -4039,7 +4072,12 @@ function makeBasicJSEmitter(report) {
         hoistDecl(s[1]);
         if (!declared[s[1]]) {
           declared[s[1]] = true;
-          if (curInSub) progHoist(s[1]);
+          // Amendment A9: LET A = A + 1 reads A before the lowered
+          // binding has a value; basic.py reads the unwritten A as
+          // 0 (or ""), so hoist it like any unwritten read instead
+          // of emitting the TDZ-crashing `let A = A + 1`.
+          if (curInSub) progHoist(s[1], "sub");
+          else if (readsName(s[2], s[1])) progHoist(s[1], "read");
           emitLine((dispatchDecl() || progDeclSet[s[1]] ? "" : "let ") + s[1] + " = " + expr(s[2], 0) + ";");
         }
         else emitLine(s[1] + " = " + expr(s[2], 0) + ";");
@@ -4066,7 +4104,7 @@ function makeBasicJSEmitter(report) {
         hoistDecl(s[1]);
         if (!declared[s[1]]) {
           declared[s[1]] = true;
-          if (curInSub) progHoist(s[1]);
+          if (curInSub) progHoist(s[1], "sub");
           emitLine((dispatchDecl() || progDeclSet[s[1]] ? "" : "let ") + s[1] + " = __basic_dim([" + sizes + "], " + fill + ");");
         }
         else emitLine(s[1] + " = __basic_dim([" + sizes + "], " + fill + ");");
@@ -4084,14 +4122,14 @@ function makeBasicJSEmitter(report) {
           if (name.charAt(name.length - 1) === "$") {
             if (!declared[name]) {
               declared[name] = true;
-              if (curInSub) progHoist(name);
+              if (curInSub) progHoist(name, "sub");
               emitLine((dispatchDecl() || progDeclSet[name] ? "" : "let ") + name + " = " + call + ";");
             }
             else emitLine(name + " = " + call + ";");
           } else {
             if (!declared[name]) {
               declared[name] = true;
-              if (curInSub) progHoist(name);
+              if (curInSub) progHoist(name, "sub");
               emitLine((dispatchDecl() || progDeclSet[name] ? "" : "let ") + name + " = Number(" + call + ");");
             }
             else emitLine(name + " = Number(" + call + ");");
@@ -4137,7 +4175,12 @@ function makeBasicJSEmitter(report) {
         hoistDecl(varName);
         if (!declared[varName]) {
           declared[varName] = true;
-          if (curInSub) progHoist(varName);
+          // Amendment A9: FOR I = I TO 2 reads the loop variable
+          // before it holds its first value (basic.py reads it as
+          // 0, or ""); hoist it instead of the undefined-valued
+          // `let I;`, which ran zero passes instead of basic's.
+          if (curInSub) progHoist(varName, "sub");
+          else if (readsName(s[2], varName) || readsName(s[3], varName) || readsName(s[4], varName)) progHoist(varName, "read");
           emitLine((dispatchDecl() || progDeclSet[varName] ? "" : "let ") + varName + ";");
         }
         let stepExpr = s[4] === null || s[4] === void 0 ? "1" : expr(s[4], 0);
@@ -4156,7 +4199,7 @@ function makeBasicJSEmitter(report) {
           hoistDecl(stepName);
           if (!declared[stepName]) {
             declared[stepName] = true;
-            if (curInSub) progHoist(stepName);
+            if (curInSub) progHoist(stepName, "sub");
           }
           emitLine((dispatchDecl() || progDeclSet[stepName] ? "" : "let ") + stepName + " = " + stepExpr + ";");
         }
