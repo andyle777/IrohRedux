@@ -235,7 +235,13 @@ mainline to a program-counter dispatch machine (`__pcw:
 while/switch` on `__pc`, one case per basic block), so GOTO
 chains, IF GOTO shortcuts, and GOTO escapes out of loop bodies
 round-trip against the interpreter — while a GOTO into a loop
-body or into a subroutine stays a loud, named stub.
+body or into a subroutine stays a loud, named stub. And the
+single-namespace patch (Amendment A8, same day): a variable
+declared inside a GOSUB body is program-wide, the way the
+interpreter's one vars dict keeps it — the lowering hoists it to
+a program-level `var` initialized 0 (or `""` for strings), so
+sub writes, the mainline, and the machine all see the same
+variable, and a GOSUB counter persists across calls.
 
 C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
 `-finstrument-functions -rdynamic -O0` and linked against the runtime

@@ -406,7 +406,14 @@ execution (test-first parity). Loud stubs by design: a GOTO into
 a loop body (the body lowers to structured JavaScript; entering
 without the loop header is not representable), a GOTO into a
 GOSUB subroutine (subroutines lower to functions), a GOTO inside
-a subroutine, and a GOTO to an undefined line. No classes, no
+a subroutine, and a GOTO to an undefined line. Since Amendment A8
+(2026-11-22) a variable declared inside a GOSUB subroutine body is
+program-wide, matching the interpreter's single vars dict: the
+lowering hoists it to a program-level `var` initialized like an
+untouched BASIC read (0, or `""` for string names) and the
+declaration site becomes a bare assignment, so the subroutine, the
+mainline, and the dispatch machine share one binding (a `report.notes`
+entry names the hoist). No classes, no
 closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the
