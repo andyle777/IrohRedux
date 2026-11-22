@@ -22076,6 +22076,22 @@ function makeBasicJSEmitter(report) {
   // can be re-entered, so `let` inside the machine would redeclare).
   let gotoPlan = null;
   let curInSub = false;
+  // Amendment A8: BASIC has one program-wide variable namespace —
+  // basic.py's interpreter keeps a single program-wide vars dict,
+  // and a GOSUB body's variables are not private to the subroutine.
+  // A name first declared inside a subroutine body hoists to a
+  // program-level var (initialized like an untouched BASIC read:
+  // 0 for numbers, "" for string names) so the subroutine, the
+  // mainline, and the pc-dispatch machine share one binding.
+  let progDecls = [];
+  let progDeclSet = {};
+  function progHoist(name) {
+    if (!progDeclSet[name]) {
+      progDeclSet[name] = true;
+      progDecls.push(name);
+      noteOnce("sub-namespace", "the BASIC program declares a variable inside a GOSUB subroutine: BASIC has one program-wide variable namespace (basic.py's interpreter keeps a single program-wide vars dict), so the declaration hoists to a program-level var shared with the mainline instead of a function-scoped let");
+    }
+  }
   function indentStr() { return "  ".repeat(indentLevel); }
   function emitLine(text) { lines.push(indentStr() + text); }
   function noteOnce(key, text) {
@@ -22088,12 +22104,16 @@ function makeBasicJSEmitter(report) {
   // Declaration sites in dispatch mode: the machine can re-enter a
   // case, so main-flow declarations hoist as `var` ahead of it and
   // the site itself becomes a bare assignment. Subroutine bodies
-  // keep their function-scoped `let` (a fresh scope per call).
+  // write the program-wide namespace (Amendment A8): a name first
+  // declared in a subroutine hoists to a program-level var, and the
+  // site becomes a bare assignment against that shared binding.
   function dispatchDecl() {
     return !!gotoPlan && !curInSub;
   }
   function hoistDecl(name) {
-    if (gotoPlan && !curInSub) gotoPlan.decls.push(name);
+    // A program-level hoist (Amendment A8) already places the name
+    // in scope for the machine, so the machine needs no var of its own.
+    if (gotoPlan && !curInSub && !progDeclSet[name]) gotoPlan.decls.push(name);
   }
   let BIN_PREC = { OR: 1, AND: 2, "=": 3, "<>": 3, "<": 3, "<=": 3, ">": 3, ">=": 3, "+": 4, "-": 4, "*": 5, "/": 5, "%": 5 };
   function exprPrec(node) {
@@ -22185,7 +22205,11 @@ function makeBasicJSEmitter(report) {
       if (kind === "let") {
         counts.variables += 1;
         hoistDecl(s[1]);
-        if (!declared[s[1]]) { declared[s[1]] = true; emitLine((dispatchDecl() ? "" : "let ") + s[1] + " = " + expr(s[2], 0) + ";"); }
+        if (!declared[s[1]]) {
+          declared[s[1]] = true;
+          if (curInSub) progHoist(s[1]);
+          emitLine((dispatchDecl() || progDeclSet[s[1]] ? "" : "let ") + s[1] + " = " + expr(s[2], 0) + ";");
+        }
         else emitLine(s[1] + " = " + expr(s[2], 0) + ";");
         ii += 1;
         continue;
@@ -22208,7 +22232,11 @@ function makeBasicJSEmitter(report) {
         let fill = s[1].charAt(s[1].length - 1) === "$" ? '""' : "0";
         let sizes = s[2].map(function(e) { return expr(e, 0); }).join(", ");
         hoistDecl(s[1]);
-        if (!declared[s[1]]) { declared[s[1]] = true; emitLine((dispatchDecl() ? "" : "let ") + s[1] + " = __basic_dim([" + sizes + "], " + fill + ");"); }
+        if (!declared[s[1]]) {
+          declared[s[1]] = true;
+          if (curInSub) progHoist(s[1]);
+          emitLine((dispatchDecl() || progDeclSet[s[1]] ? "" : "let ") + s[1] + " = __basic_dim([" + sizes + "], " + fill + ");");
+        }
         else emitLine(s[1] + " = __basic_dim([" + sizes + "], " + fill + ");");
         ii += 1;
         continue;
@@ -22222,10 +22250,18 @@ function makeBasicJSEmitter(report) {
           let call = "__basic_input(" + (prompt === null ? "null" : JSON.stringify(prompt)) + ")";
           hoistDecl(name);
           if (name.charAt(name.length - 1) === "$") {
-            if (!declared[name]) { declared[name] = true; emitLine((dispatchDecl() ? "" : "let ") + name + " = " + call + ";"); }
+            if (!declared[name]) {
+              declared[name] = true;
+              if (curInSub) progHoist(name);
+              emitLine((dispatchDecl() || progDeclSet[name] ? "" : "let ") + name + " = " + call + ";");
+            }
             else emitLine(name + " = " + call + ";");
           } else {
-            if (!declared[name]) { declared[name] = true; emitLine((dispatchDecl() ? "" : "let ") + name + " = Number(" + call + ");"); }
+            if (!declared[name]) {
+              declared[name] = true;
+              if (curInSub) progHoist(name);
+              emitLine((dispatchDecl() || progDeclSet[name] ? "" : "let ") + name + " = Number(" + call + ");");
+            }
             else emitLine(name + " = Number(" + call + ");");
           }
         }
@@ -22267,7 +22303,11 @@ function makeBasicJSEmitter(report) {
         }
         let varName = s[1];
         hoistDecl(varName);
-        if (!declared[varName]) { declared[varName] = true; emitLine((dispatchDecl() ? "" : "let ") + varName + ";"); }
+        if (!declared[varName]) {
+          declared[varName] = true;
+          if (curInSub) progHoist(varName);
+          emitLine((dispatchDecl() || progDeclSet[varName] ? "" : "let ") + varName + ";");
+        }
         let stepExpr = s[4] === null || s[4] === void 0 ? "1" : expr(s[4], 0);
         let stepVal = s[4] === null || s[4] === void 0 ? 1 : (s[4][0] === "num" ? s[4][1] : null);
         let stepIsLiteral = stepVal !== null;
@@ -22280,7 +22320,14 @@ function makeBasicJSEmitter(report) {
           stepName = "__basic_step_" + stepCounter;
           test = "(" + stepName + " >= 0 ? " + varName + " <= " + expr(s[3], 0) + " : " + varName + " >= " + expr(s[3], 0) + ")";
         }
-        if (!stepIsLiteral) { hoistDecl(stepName); emitLine((dispatchDecl() ? "" : "let ") + stepName + " = " + stepExpr + ";"); }
+        if (!stepIsLiteral) {
+          hoistDecl(stepName);
+          if (!declared[stepName]) {
+            declared[stepName] = true;
+            if (curInSub) progHoist(stepName);
+          }
+          emitLine((dispatchDecl() || progDeclSet[stepName] ? "" : "let ") + stepName + " = " + stepExpr + ";");
+        }
         emitLine("for (" + varName + " = " + expr(s[2], 0) + "; " + test + "; " + varName + " += " + (stepIsLiteral ? stepExpr : stepName) + ") {");
         indentLevel += 1;
         emitSeq(items, ii + 1, nextIdx, subRanges, inSub, isFlat);
@@ -22550,6 +22597,19 @@ function makeBasicJSEmitter(report) {
     // Mainline: one pass over the flat slots; emitSeq skips the
     // subroutine ranges itself.
       emitSeq(flat, 0, flat.length, subRanges, false, true);
+    }
+    // Amendment A8: hoist subroutine-declared names ahead of
+    // everything (sub functions included) as program-level vars,
+    // initialized like an untouched BASIC read (0, or "" for
+    // string names) so both the subroutines and the mainline see
+    // the same binding.
+    if (progDecls.length > 0) {
+      let hoistVar = [];
+      for (let ii = 0; ii < progDecls.length; ++ii) {
+        let n = progDecls[ii];
+        hoistVar.push("var " + n + " = " + (n.charAt(n.length - 1) === "$" ? '""' : "0") + ";");
+      }
+      lines.splice(0, 0, hoistVar.join("\n"), "");
     }
     let header = [];
     if (needs.pymod) {
