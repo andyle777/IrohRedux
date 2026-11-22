@@ -406,7 +406,14 @@ execution (test-first parity). Loud stubs by design: a GOTO into
 a loop body (the body lowers to structured JavaScript; entering
 without the loop header is not representable), a GOTO into a
 GOSUB subroutine (subroutines lower to functions), a GOTO inside
-a subroutine, and a GOTO to an undefined line. No classes, no
+a subroutine, and a GOTO to an undefined line. Since Amendment A8
+(2026-11-22) a variable declared inside a GOSUB subroutine body is
+program-wide, matching the interpreter's single vars dict: the
+lowering hoists it to a program-level `var` initialized like an
+untouched BASIC read (0, or `""` for string names) and the
+declaration site becomes a bare assignment, so the subroutine, the
+mainline, and the dispatch machine share one binding (a `report.notes`
+entry names the hoist). No classes, no
 closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the
@@ -583,7 +590,7 @@ the generated text form of this file). Flags take a value with
   versions, the dist hash, and the capabilities. Does not run
   the suite itself — run `npm test` first.
 - `--version` — one line: version, dist hash, embedded runtime
-  (`iroh 1.1.1 (engine dist iroh-node.js 27fdc73f399c, runtime
+  (`iroh 1.1.1 (engine dist iroh-node.js 2ba2c0566908, runtime
   node v18.5.0)` inside a packaged binary).
 - `serve [--port 8471] [--host 0.0.0.0] [--token T]
   [--timeout-ms 120000] [--local-legs javascript,...]` — start
@@ -1012,7 +1019,7 @@ every flag in `iroh --help` appears in it.
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `27fdc73f399c918e581e912bb732353b12e126c1e95f4dabd198b6f469e639b4`.
+  `2ba2c056690868ec5f9bdd5ec065a1cbe16ce3a8276cd813e40bb8c9455e5836`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set. A CLI trace's stdout is

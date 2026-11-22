@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Feature (2026-11-22, Amendment A8): a variable declared inside a
+  BASIC GOSUB subroutine body is program-wide, matching the
+  interpreter, which keeps one program-wide vars dict. The old
+  lowering gave a subroutine's first LET a function-scoped `let`,
+  so a sub write was invisible to the mainline (a read after the
+  GOSUB crashed), a value did not persist across calls, and a
+  name shared with the mainline silently diverged. The lowering
+  now hoists a subroutine-declared name to a program-level `var`
+  initialized like an untouched BASIC read (0, or `""` for string
+  names), and the declaration site becomes a bare assignment, so
+  the subroutine, the mainline, and the GOTO pc-dispatch machine
+  all share one binding; the report carries a named note.
+  GOSUB-free programs keep the legacy straight-line output,
+  byte for byte. 783 -> 789 tests (505 -> 511 Node).
 - Feature (2026-11-22, Amendment A7): a BASIC GOTO lowers to
   JavaScript through the program-counter dispatch machine the v1
   stub always named as its follow-up (basic.py's interpreter walks

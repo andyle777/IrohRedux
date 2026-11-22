@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-783%20passing-brightgreen.svg?style=flat-square" alt="783 tests passing" />
+  <img src="https://img.shields.io/badge/tests-789%20passing-brightgreen.svg?style=flat-square" alt="789 tests passing" />
 </p>
 
 <p align="center">
@@ -67,7 +67,7 @@ cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
 npm run build:catalog # builds the offline SQLite reference catalog
-npm test            # 783 tests: 505 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
+npm test            # 789 tests: 511 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
 ```
 
 The Python client installs with `pip install -e python/`. The C++
@@ -258,7 +258,15 @@ Honest limits, in one place.
   its slots). Backward jumps, the IF GOTO shortcut, GOTO out of
   a loop, and re-entered loop headers all round-trip against
   the interpreter; a GOTO into a loop body, into a GOSUB
-  subroutine, or inside a subroutine stays a loud stub.
+  subroutine, or inside a subroutine stays a loud stub. The
+  single-namespace patch (Amendment A8, same day) makes a GOSUB
+  body's variables program-wide, exactly as the interpreter keeps
+  them: a name first declared inside a subroutine hoists to a
+  program-level `var` initialized 0 (or `""` for string names, how
+  an untouched BASIC read evaluates), so a subroutine write is
+  visible to the mainline and the dispatch machine alike, and a
+  counter persists across calls. GOSUB-free programs keep the
+  legacy straight-line output, byte for byte.
 - **Translate:** `translate()` runs the program for type evidence
   by default (pass `options.evidence: "none"` to skip it). The
   report carries a `verify` block saying whether the emitted
@@ -288,7 +296,7 @@ Newest first. Hashes live on the release page, not in this file.
   laptop joins it as a node (`iroh node`) to run the legs the
   phone cannot — see `SERVER.md`. The perceptron weights are now
   defined by `personality-matrix.json`, and the AI bundle includes a
-  read-only SQLite memory catalog. 783 tests (505 Node + 25 Python
+  read-only SQLite memory catalog. 789 tests (511 Node + 25 Python
   + 9 C++ + 244 IrohScript/BASIC).
 - **1.1.1 (20 Nov 2026) — the patch.** The trace memory release:
   a finished trace releases its Stage (a 500,013-event trace now
@@ -373,14 +381,14 @@ fact here disagrees with a prose paragraph above, this section wins
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026).
   No 1.1.2. No version bump.
 - `dist/iroh-node.js` SHA-256:
-  `27fdc73f399c918e581e912bb732353b12e126c1e95f4dabd198b6f469e639b4`
+  `2ba2c056690868ec5f9bdd5ec065a1cbe16ce3a8276cd813e40bb8c9455e5836`
 - The dist is self-contained: the parser and codegen dependencies
   (acorn, acorn-walk, astring) are bundled in, not `require`d at
   runtime. A fresh source checkout runs the CLI with no npm install,
   so a restricted AI sandbox needs nothing but Node on PATH:
   `node cli/iroh.js program.js --analyze`
 - `iroh --version` prints `iroh 1.1.1 (engine dist iroh-node.js
-  27fdc73f399c, runtime node v18.5.0)` inside a packaged binary
+  2ba2c0566908, runtime node v18.5.0)` inside a packaged binary
   (runtime is the embedded Node; on npm it is the local node).
 - `iroh doctor` prints the dist hashes, the toolchains, the last
   test run, and the leg capabilities.

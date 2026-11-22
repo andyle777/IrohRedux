@@ -568,6 +568,82 @@ test("BASIC -> JS: a GOTO to an undefined line stays a loud stub (A7)", { skip: 
   assert.match(out.report.unsupported[0].message, /GOTO line 999 does not exist/);
 });
 
+test("BASIC -> JS: a variable written in a GOSUB is visible to the mainline (single namespace, A8)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 GOSUB 100\n20 PRINT X\n30 END\n100 LET X = 42\n110 RETURN";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /^var X = 0;\n/);
+  assert.match(out.code, /  X = 42;\n  return;/);
+  assert.ok(out.report.notes.some(function(n) { return /one program-wide variable namespace/.test(n); }), "the single-namespace note fires");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "42\n");
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(basic.stdout, "42\n");
+});
+
+test("BASIC -> JS: a GOSUB counter persists across calls like the interpreter (A8)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 FOR I = 1 TO 3\n20 GOSUB 100\n30 NEXT I\n40 PRINT C\n50 END\n100 LET C = C + 1\n110 RETURN";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /^var C = 0;\n/);
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "3\n");
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(basic.stdout, "3\n");
+});
+
+test("BASIC -> JS: a mainline LET and a sub LET share one variable (A8)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 LET X = 1\n20 GOSUB 100\n30 PRINT X\n40 END\n100 LET X = 42\n110 RETURN";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.ok(!/\blet X\b/.test(out.code), "no function-scoped let for the shared name");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "42\n");
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(basic.stdout, "42\n");
+});
+
+test("BASIC -> JS: a string written in a GOSUB reads as empty before its first write (A8)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 GOSUB 100\n20 PRINT T$\n30 END\n100 LET T$ = T$ + \"a\"\n110 RETURN";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /^var T\$ = "";\n/);
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "a\n");
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(basic.stdout, "a\n");
+});
+
+test("BASIC -> JS: the pc-dispatch machine and a GOSUB share the program-wide namespace (A8)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 LET X = 1\n20 GOSUB 100\n30 GOTO 50\n40 PRINT \"skipped\"\n50 PRINT X\n60 END\n100 LET X = X + 1\n110 RETURN";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /__pcw: while \(true\) \{/);
+  assert.match(out.code, /var X = 0;\n/);
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "2\n");
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(basic.stdout, "2\n");
+});
+
+test("BASIC -> JS: a GOSUB-free program keeps the legacy straight-line output (A8 guard)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 LET A = 1\n20 PRINT A\n30 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.equal(out.code, "let A = 1;\nconsole.log(A);\nprocess.exit(0);\n");
+  assert.equal(out.report.notes.some(function(n) { return /program-wide variable namespace/.test(n); }), false);
+});
+
 // ------------------------------------------------------------------
 // Two-hop legs (via JavaScript)
 // ------------------------------------------------------------------
