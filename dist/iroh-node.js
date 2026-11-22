@@ -19677,7 +19677,15 @@ function makeJSEmitter(target, report, env, hints) {
           emitLine("for " + target + " in " + expr(node.right) + ":");
           emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
         } else {
-          emitLine("for (auto " + target + " : " + expr(node.right) + ") {");
+          // Amendment A6 (2026-11-22): a C++ string literal in a
+          // range-for decays to a char array INCLUDING the NUL
+          // terminator, which the source program's iterator never
+          // yields — wrap it in std::string so the walk is exact.
+          let iterText = expr(node.right);
+          if (node.right.type === "Literal" && typeof node.right.value === "string") {
+            iterText = "std::string(" + iterText + ")";
+          }
+          emitLine("for (auto " + target + " : " + iterText + ") {");
           emitBody(node.body.type === "BlockStatement" ? node.body : { body: [node.body] });
           emitLine("}");
         }
@@ -22476,6 +22484,13 @@ function makeIrohJSEmitter(target, report, env, hints) {
   let indentLevel = 0;
   let counts = { functions: 0, loops: 0, conditionals: 0, variables: 0, outputs: 0 };
   let declared = {};
+  // Amendment A6 (2026-11-22): BASIC only. When a declaration lowers
+  // to DIM, remember the literal's element count: a for-of over that
+  // variable can then walk 0..n-1 exactly (the bootstrap BASIC has no
+  // LEN at runtime, so the length must be a translate-time fact). A
+  // plain re-assignment or a non-array re-declaration of the name
+  // drops the entry, so the fact can never go stale.
+  let arrayLens = {};
   let noted = {};
   let ctx = { vars: {} };
   for (let k in env.vars) ctx.vars[k] = env.vars[k].type;
@@ -22491,6 +22506,12 @@ function makeIrohJSEmitter(target, report, env, hints) {
   // deterministic for the same program.
   let doWhileFlagCounter = 0;
   let programNames = {};
+  // Amendment A6 (2026-11-22): for-of minted helpers (the hoisted
+  // array for an inline literal, and the FOR/NEXT index) use the same
+  // collision-proof scheme as the A5 flags: minted against the
+  // program's full identifier set, deterministic for the same
+  // program.
+  let forOfCounter = 0;
   function collectNames(node) {
     if (!node || typeof node !== "object") return;
     if (Array.isArray(node)) {
@@ -22502,6 +22523,16 @@ function makeIrohJSEmitter(target, report, env, hints) {
     for (let ii = 0; ii < keys.length; ++ii) {
       let v = node[keys[ii]];
       if (v && typeof v === "object") collectNames(v);
+    }
+  }
+  function mintForOfName(kind) {
+    while (true) {
+      forOfCounter += 1;
+      let name = "__for_of_" + kind + "_" + forOfCounter;
+      if (!programNames[name]) {
+        programNames[name] = true;
+        return name;
+      }
     }
   }
   function mintDoWhileFlag() {
@@ -22780,6 +22811,9 @@ function makeIrohJSEmitter(target, report, env, hints) {
             emitLine(d.id.name + "(" + jj + ") = " + expr(d.init.elements[jj], 0));
           }
           declared[d.id.name] = true;
+          // Amendment A6: remember the length so a later for-of over
+          // this variable can lower to a FOR/NEXT index walk.
+          arrayLens[d.id.name] = n;
           continue;
         }
         if (isIroh) {
@@ -22796,6 +22830,9 @@ function makeIrohJSEmitter(target, report, env, hints) {
           try { t = inferType(d.init, ctx); } catch (e) { t = null; }
           if (t) ctx.vars[d.id.name] = t;
         }
+        // Amendment A6: this name was (re-)declared scalar, so any
+        // remembered array length for it is stale.
+        delete arrayLens[d.id.name];
       }
       return;
     }
@@ -23009,6 +23046,133 @@ function makeIrohJSEmitter(target, report, env, hints) {
       emitLine("WEND");
       return;
     }
+    if (node.type === "ForOfStatement") {
+      // Amendment A6 (2026-11-22): for-of lowers through existing
+      // machinery instead of stubbing. Both legs keep the v1 rule —
+      // every piece this emitter cannot write still stubs loudly on
+      // its own merits.
+      //
+      // BASIC: an array iterable rides DIM + FOR/NEXT. The literal's
+      // own declaration machinery hoists the contents once (the
+      // source evaluates the iterable exactly once), a minted index
+      // walks 0..n-1, and the loop variable is re-assigned from the
+      // array at the top of every pass. A variable works only when
+      // it was declared with an array literal (the length is a
+      // translate-time fact; the bootstrap BASIC has no LEN or MID
+      // at runtime). A string literal unrolls on the spot.
+      //
+      // IrohScript: the language has no array type at all, so both
+      // literals unroll into repeated passes — the first pass
+      // declares the loop variable (or assigns it), later passes
+      // re-assign it; a flat-scope re-binding, the same
+      // simplification the for-loop desugaring makes.
+      let declName = null;
+      let isDecl = false;
+      let declKind = "let";
+      if (node.left && node.left.type === "VariableDeclaration") {
+        isDecl = true;
+        declKind = node.left.kind || "let";
+        if (node.left.declarations.length === 1 && node.left.declarations[0].id.type === "Identifier") {
+          declName = node.left.declarations[0].id.name;
+        }
+      } else if (node.left && node.left.type === "Identifier") {
+        declName = node.left.name;
+      }
+      if (!declName) {
+        stubStmt("a for-of target that is not a simple variable is not in the v1 scope", "ForOfStatement");
+        return;
+      }
+      let items = null;
+      let fromArrayLiteral = false;
+      if (node.right && node.right.type === "ArrayExpression") {
+        fromArrayLiteral = true;
+        items = [];
+        let n = node.right.elements.length;
+        for (let ii = 0; ii < n; ++ii) {
+          if (node.right.elements[ii] === null) {
+            stubStmt("a hole in an array literal has no equivalent in " + (isIroh ? "IrohScript" : "BASIC"), "ForOfStatement");
+            return;
+          }
+          items.push(node.right.elements[ii]);
+        }
+      } else if (node.right && node.right.type === "Literal" && typeof node.right.value === "string") {
+        let s = node.right.value;
+        items = [];
+        for (let ii = 0; ii < s.length; ++ii) {
+          let code = s.charCodeAt(ii);
+          if (code < 32 || code > 126) {
+            stubStmt("for-of over a string with non-printable-ASCII characters is not in the v1 scope", "ForOfStatement");
+            return;
+          }
+          items.push({ type: "Literal", value: s[ii] });
+        }
+      }
+      let body = node.body.type === "BlockStatement" ? node.body : { body: [node.body] };
+      if (items === null) {
+        if (node.right && node.right.type === "Identifier" && declared[node.right.name] && !isIroh && arrayLens[node.right.name]) {
+          // A DIM'd array variable with a translate-time length.
+          counts.loops += 1;
+          noteOnce("forof-scope", "a for-of's binding stays in scope after the loop and holds its last value (flat scope, the same simplification the for-loop desugaring makes)");
+          let idxName = mintForOfName("idx");
+          emitLine("FOR " + idxName + " = 0 TO " + (arrayLens[node.right.name] - 1));
+          emitLine("LET " + declName + " = " + node.right.name + "(" + idxName + ")");
+          emitBody(body);
+          emitLine("NEXT " + idxName);
+          return;
+        }
+        stubStmt("for-of can only iterate an array literal (inline, or a variable declared with one) or a string literal in v1: " + (isIroh ? "IrohScript has no array type, so a runtime iterable cannot be walked" : "the bootstrap BASIC has no LEN at runtime, so a runtime-sized iterable cannot be walked"), "ForOfStatement");
+        return;
+      }
+      if (items.length === 0) {
+        // Zero iterations: the source statement does nothing, and the
+        // BODY-ONLY translations below cannot run zero passes better
+        // than by emitting nothing (an empty DIM has no BASIC form).
+        counts.loops += 1;
+        return;
+      }
+      if (!isIroh && fromArrayLiteral) {
+        // Hoist the inline literal through the declaration machinery
+        // (it lifts calls to GOSUBs, DIMs the minted array, and
+        // records the length for nesting).
+        let arrName = mintForOfName("arr");
+        stmt({
+          type: "VariableDeclaration",
+          kind: "let",
+          declarations: [{ type: "VariableDeclarator", id: { type: "Identifier", name: arrName }, init: node.right }],
+        });
+        counts.loops += 1;
+        noteOnce("forof-scope", "a for-of's binding stays in scope after the loop and holds its last value (flat scope, the same simplification the for-loop desugaring makes)");
+        let idxName = mintForOfName("idx");
+        emitLine("FOR " + idxName + " = 0 TO " + (arrayLens[arrName] - 1));
+        emitLine("LET " + declName + " = " + arrName + "(" + idxName + ")");
+        emitBody(body);
+        emitLine("NEXT " + idxName);
+        return;
+      }
+      // String literal on BASIC, or either literal on IrohScript:
+      // unroll one pass per item.
+      counts.loops += 1;
+      noteOnce("forof-scope", "a for-of's binding stays in scope after the loop and holds its last value (flat scope, the same simplification the for-loop desugaring makes)");
+      if (isIroh) {
+        noteOnce("forof-unroll", "a for-of over a literal was unrolled into one pass per item (the language has no array type), so the translated program holds no loop");
+        if (declKind === "const") {
+          noteOnce("forof-const", "a per-pass const binding is emulated with a flat declaration plus re-assignments (a const rebinding has no flat-scope encoding); assigning it inside the body was a TypeError in the source anyway");
+        }
+      }
+      for (let ii = 0; ii < items.length; ++ii) {
+        if (isIroh && ii === 0 && isDecl && !declared[declName]) {
+          stmt({
+            type: "VariableDeclaration",
+            kind: "let",
+            declarations: [{ type: "VariableDeclarator", id: { type: "Identifier", name: declName }, init: items[ii] }],
+          });
+        } else {
+          emitLine(declName + " = " + expr(items[ii], 0));
+        }
+        emitBody(body);
+      }
+      return;
+    }
     if (node.type === "ClassDeclaration" || node.type === "LabeledStatement") {
       stubStmt(node.type + " is not in the v1 scope", node.type);
       return;
@@ -23041,6 +23205,10 @@ function makeIrohJSEmitter(target, report, env, hints) {
         } else {
           emitLine(name + " = " + expr(right, 0));
         }
+        // Amendment A6: a plain re-assignment retires any remembered
+        // array length for the name (the for-of lowering may only
+        // ride the original literal).
+        if (target.type === "Identifier") delete arrayLens[target.name];
         return;
       }
       let op = null;

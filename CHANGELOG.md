@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Feature (2026-11-22, Amendment A6): a JavaScript `for-of` lowers
+  into the BASIC-family legs instead of stubbing, and `for-in`
+  stays a loud stub by design (no v1 target has an object
+  surface). To BASIC, an array iterable rides DIM + FOR/NEXT: an
+  inline literal is hoisted once through the declaration
+  machinery into a minted `__for_of_arr_N` and a minted
+  `__for_of_idx_N` walks `0..n-1`, re-assigning the loop variable
+  from the array each pass; a variable joins only while it is
+  known to hold its original array literal (a translate-time
+  fact — the bootstrap has no LEN at runtime; a reassignment
+  retires the fact and stubs loudly); a string literal unrolls
+  one pass per character; calls inside the literal ride the
+  GOSUB lifts. To IrohScript, array and string literals unroll
+  one pass per item (first pass declares, later passes assign —
+  the flat-scope re-binding the for-desugar makes); a runtime
+  iterable is a loud stub because the language has no array
+  type. Bug fix in the same amendment: the C++ leg emitted
+  `for (auto c : "hi")`, whose walk includes the NUL terminator —
+  a silent divergence with `report.ok true`; the literal is now
+  wrapped in `std::string(...)` and a compiled-and-run test
+  catches the stray byte. 774 tests (496 Node + 25 Python + 9
+  C++ + 244 IrohScript/BASIC).
 - Tests (2026-11-22, A5 follow-up, BASIC-source WHILE legs closure):
   the BASIC `WHILE/WEND` legs were already functional end to end
   (Amendment A4 opened BASIC to JavaScript; the in-place two-hop

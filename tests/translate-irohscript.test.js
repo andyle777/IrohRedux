@@ -612,3 +612,128 @@ test("BASIC -> C++: a WHILE program rides both hops and round-trips (A5 follow-u
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stdout, "10\n");
 });
+
+// --- Amendment A6 (2026-11-22): for-of closes on the BASIC-family legs
+// (and for-in stays a loud stub by design -- no target has an object
+// surface). BASIC lowers for-of through DIM + FOR/NEXT with minted
+// helpers; IrohScript unrolls literals (no array type exists).
+
+test("BASIC: a for-of over an inline array literal lowers to DIM + FOR/NEXT and round-trips (A6)", { skip: !HAS_PYTHON }, () => {
+  let out = Iroh.translate("let s = 0;\nfor (const x of [1, 2, 3]) { s += x; }\nconsole.log(s);", { to: "basic" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  // The literal is hoisted once through the declaration machinery
+  // (minted array, then a minted index walks 0..n-1).
+  assert.match(out.code, /DIM __for_of_arr_1\(2\)/);
+  assert.match(out.code, /FOR __for_of_idx_2 = 0 TO 2/);
+  assert.match(out.code, /LET x = __for_of_arr_1\(__for_of_idx_2\)/);
+  assert.match(out.code, /NEXT __for_of_idx_2/);
+  let run = runBasic(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "6\n");
+});
+
+test("BASIC: a for-of over a variable declared with an array literal rides its DIM (A6)", { skip: !HAS_PYTHON }, () => {
+  let out = Iroh.translate("const xs = [1, 2, 3];\nlet t = 0;\nfor (const x of xs) { t += x; }\nconsole.log(t);", { to: "basic" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /DIM xs\(2\)/);
+  assert.match(out.code, /FOR __for_of_idx_1 = 0 TO 2/);
+  assert.match(out.code, /LET x = xs\(__for_of_idx_1\)/);
+  let run = runBasic(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "6\n");
+});
+
+test("BASIC: a for-of over a string literal unrolls one pass per character (A6)", { skip: !HAS_PYTHON }, () => {
+  let out = Iroh.translate("let s = \"\";\nfor (const c of \"hi\") { s += c; }\nconsole.log(s);", { to: "basic" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /c = "h"/);
+  assert.match(out.code, /c = "i"/);
+  let run = runBasic(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "hi\n");
+});
+
+test("BASIC: a for-of over an empty array literal runs zero passes (A6)", { skip: !HAS_PYTHON }, () => {
+  let out = Iroh.translate("let n = 0;\nfor (const x of []) { n += 1; }\nconsole.log(n);", { to: "basic" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.ok(!out.code.includes("FOR "), out.code);
+  let run = runBasic(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "0\n");
+});
+
+test("BASIC: nested for-of over inline literals mints distinct helpers and round-trips (A6)", { skip: !HAS_PYTHON }, () => {
+  let js = "let n = 0;\nfor (const a of [1, 2]) { for (const b of [3, 4]) { n = n + 1; } }\nconsole.log(n);";
+  let out = Iroh.translate(js, { to: "basic" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /DIM __for_of_arr_1\(1\)/);
+  assert.match(out.code, /DIM __for_of_arr_3\(1\)/);
+  let run = runBasic(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "4\n");
+});
+
+test("BASIC: a call inside an array literal rides the GOSUB lifts into the for-of (A6)", { skip: !HAS_PYTHON }, () => {
+  let js = "function f(v) { return v + 1; }\nlet s = 0;\nfor (const x of [f(1), f(4)]) { s += x; }\nconsole.log(s);";
+  let out = Iroh.translate(js, { to: "basic" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /GOSUB/);
+  let run = runBasic(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "7\n");
+});
+
+test("BASIC: a for-of over a variable since reassigned stays a loud stub (A6)", () => {
+  let js = "let xs = [1, 2];\nlet t = 0;\nxs = 5;\nfor (const x of xs) { t += x; }\nconsole.log(t);";
+  let out = Iroh.translate(js, { to: "basic" });
+  assert.equal(out.report.ok, false);
+  assert.ok(out.report.unsupported.some(u => u.construct === "ForOfStatement"), JSON.stringify(out.report.unsupported));
+  assert.ok(out.report.unsupported.some(u => /has no LEN at runtime/.test(u.message)), JSON.stringify(out.report.unsupported));
+});
+
+test("IrohScript: a for-of over an array literal unrolls one pass per item and round-trips (A6)", { skip: !HAS_PYTHON }, () => {
+  let out = Iroh.translate("let s = 0;\nfor (const x of [5, 10]) { s += x; }\nconsole.log(s);", { to: "irohscript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  // First pass declares, later passes assign: a flat-scope re-binding.
+  assert.match(out.code, /LET x : Int = 5/);
+  assert.match(out.code, /^x = 10$/m);
+  assert.ok(!out.code.includes("LOOP"), out.code);
+  let run = runIrohscript(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "15\n");
+});
+
+test("IrohScript: a for-of over a string literal unrolls per character and round-trips (A6)", { skip: !HAS_PYTHON }, () => {
+  let out = Iroh.translate("let s = \"\";\nfor (const c of \"hi\") { s += c; }\nconsole.log(s);", { to: "irohscript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /LET c : String = "h"/);
+  assert.match(out.code, /^c = "i"$/m);
+  let run = runIrohscript(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "hi\n");
+});
+
+test("IrohScript: a for-of over an empty array literal runs zero passes (A6)", { skip: !HAS_PYTHON }, () => {
+  let out = Iroh.translate("let n = 0;\nfor (const x of []) { n += 1; }\nconsole.log(n);", { to: "irohscript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runIrohscript(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "0\n");
+});
+
+test("IrohScript: a for-of over a variable stays a loud stub (A6)", () => {
+  let js = "let s = 0;\nconst xs = [1, 2];\nfor (const x of xs) { s += x; }\nconsole.log(s);";
+  let out = Iroh.translate(js, { to: "irohscript" });
+  assert.equal(out.report.ok, false);
+  assert.ok(out.report.unsupported.some(u => u.construct === "ForOfStatement"), JSON.stringify(out.report.unsupported));
+  assert.ok(out.report.unsupported.some(u => /no array type/.test(u.message)), JSON.stringify(out.report.unsupported));
+});
+
+test("for-in over an object stays a loud stub on both BASIC-family legs (A6)", () => {
+  let js = "const o = { a: 1, b: 2 };\nlet n = 0;\nfor (const k in o) { n += 1; }\nconsole.log(n);";
+  for (let to of ["irohscript", "basic"]) {
+    let out = Iroh.translate(js, { to });
+    assert.equal(out.report.ok, false, to);
+    assert.ok(out.report.unsupported.some(u => u.construct === "ForInStatement"), to + ": " + JSON.stringify(out.report.unsupported));
+  }
+});
