@@ -422,7 +422,25 @@ first `LET A = A + 1` or `FOR I = I TO N` hoists rather than
 TDZ-crashing or running zero passes, each hoisted read carries a
 per-name `report.notes` entry, and a numeric read never matches a
 string name (the check walks the expression tuples exactly, X
-versus X$). No classes, no
+versus X$. Since Amendment A10 (2026-11-22) the Python leg keeps
+VALUE parity for the two silent-divergence classes the adversarial
+battery caught: a `&&` / `||` prints its operand value (Python's
+and/or already preserve it, so a homogeneous non-bool pair is no
+longer forced through a "true"/"false" ternary; homogeneous real
+booleans and comparisons still print true/false exactly as
+before, and mixed or unknown operands coerce with str() as JS
+String()'s closest neighbour), and a division rides the
+value-level `__iroh_jsdiv` helper (the `__iroh_jsmod` doctrine:
+Python's "/" always yields a float, so an even quotient printed
+"3.0" where JS prints "3" and the float-ness leaked into later
+products; now an integral quotient within the safe-integer range
+comes back int, prints bare, stays int-exact downstream, and the
+emitted call is typed double so string boundaries format through
+`__iroh_jsnum`; beyond the safe range a float formats the way JS
+String(v) does, so `1e22 / 10` prints "1e+21"). Division by zero
+still raises Python's ZeroDivisionError, surfaced by the verify
+block, the same accepted gap as "%" by design; the C++ leg is
+untouched. No classes, no
 closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the
@@ -599,7 +617,7 @@ the generated text form of this file). Flags take a value with
   versions, the dist hash, and the capabilities. Does not run
   the suite itself — run `npm test` first.
 - `--version` — one line: version, dist hash, embedded runtime
-  (`iroh 1.1.1 (engine dist iroh-node.js 4390a205bd2a, runtime
+  (`iroh 1.1.1 (engine dist iroh-node.js 44dd8d776847, runtime
   node v18.5.0)` inside a packaged binary).
 - `serve [--port 8471] [--host 0.0.0.0] [--token T]
   [--timeout-ms 120000] [--local-legs javascript,...]` — start
@@ -1028,7 +1046,7 @@ every flag in `iroh --help` appears in it.
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `4390a205bd2a5d928c9c5b48a96f724e31b6e1399ba15d686e66c180d303186f`.
+  `44dd8d7768472911a5e2b04596acb99bd980c8fe24a8d71cae3a01a1dbbda30b`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set. A CLI trace's stdout is

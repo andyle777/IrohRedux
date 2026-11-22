@@ -18465,6 +18465,11 @@ function inferType(node, ctx) {
         if (name === "Number" || name === "parseFloat") return "double";
         if (name === "parseInt") return "int";
         if (name === "Boolean") return "bool";
+        // The synthesized __iroh_jsdiv call (JS "/" to Python, A10) keeps
+        // its VALUE JS-shaped but is typed double at boundaries so the
+        // string paths format through __iroh_jsnum exactly like a traced
+        // double. The C++ leg never synthesizes this call.
+        if (name === "__iroh_jsdiv") return "double";
       }
       if (
         node.callee.type === "MemberExpression" &&
@@ -18540,7 +18545,7 @@ function makeJSEmitter(target, report, env, hints) {
   let isPy = target === "python";
   let lines = [];
   let indentLevel = 0;
-  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, cstdlib: false, sysexit: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false, jsbool: false };
+  let needs = { math: false, random: false, cmath: false, algorithm: false, stdexcept: false, cstdlib: false, sysexit: false, vectorHelper: false, unsupportedHelper: false, cout: false, jsmod: false, jsnum: false, jsbool: false, jsdiv: false };
   let noted = {};
   function noteOnce(key, text) {
     if (!noted[key]) {
@@ -18691,6 +18696,21 @@ function makeJSEmitter(target, report, env, hints) {
     return unsupportedExpr("literal of unsupported type", "Literal");
   }
 
+  // Python helper (A10): the type a && / || VALUE has. JS returns the
+  // left operand when falsy and the right otherwise, so the value's type
+  // is the operands' common type when they agree. Python's and/or already
+  // preserve the operand value (so a homogeneous non-bool pair needs NO
+  // "true"/"false" ternary — that path is for real booleans, the result of
+  // comparisons). Mixed or unknown operands resolve to null: honest
+  // unknown, handled per-boundary.
+  function pyLogicalType(node) {
+    if (node.type !== "LogicalExpression") return inferType(node, ctx);
+    let lt = pyLogicalType(node.left);
+    let rt = pyLogicalType(node.right);
+    if (lt !== null && lt === rt) return lt;
+    return null;
+  }
+
   // Python helper: render an expression as a string for concatenation.
   // Python "+" refuses str + number at runtime, so non-strings must be
   // converted — str() for ints, the JS "true"/"false" ternary for
@@ -18698,6 +18718,7 @@ function makeJSEmitter(target, report, env, hints) {
   // where JS prints "10000000000000000").
   function pyStringOf(node) {
     let t = inferType(node, ctx);
+    if (node.type === "LogicalExpression") t = pyLogicalType(node);
     let s = expr(node);
     if (t === "std::string") return s;
     if (t === "int") return "str(" + s + ")";
@@ -18711,6 +18732,13 @@ function makeJSEmitter(target, report, env, hints) {
         "string concatenation of an array in Python (JS joins with commas; Python str() prints brackets)",
         "BinaryExpression"
       );
+    }
+    if (node.type === "LogicalExpression") {
+      // Mixed/unknown operands (A10): Python's and/or preserve the
+      // operand like JS &&/||, but str + number is a TypeError, so coerce
+      // with str() — JS String()'s closest honest neighbour — instead of
+      // assuming a string.
+      return "str(" + s + ")";
     }
     recordAssumption(
       report,
@@ -18773,6 +18801,10 @@ function makeJSEmitter(target, report, env, hints) {
         if (ii < node.expressions.length) {
           let e = node.expressions[ii];
           let t = inferType(e, ctx);
+          // A10: a && / || interpolates as its VALUE (the operand), not
+          // as a forced bool — homogeneous bools still render "true"/
+          // "false" exactly like before.
+          if (e.type === "LogicalExpression") t = pyLogicalType(e);
           if (t === "std::string") {
             parts.push(expr(e));
           } else if (t === "int") {
@@ -18870,7 +18902,7 @@ function makeJSEmitter(target, report, env, hints) {
             args.push('"null"');
           } else if (a.type === "Literal" && typeof a.value === "boolean") {
             args.push(a.value ? '"true"' : '"false"');
-          } else if (inferType(a, ctx) === "bool") {
+          } else if ((a.type === "LogicalExpression" ? pyLogicalType(a) : inferType(a, ctx)) === "bool") {
             args.push('("true" if ' + expr(a) + ' else "false")');
           } else if (inferType(a, ctx) === "double") {
             // print() uses str(), which formats 1e16 as "1e+16"
@@ -19065,6 +19097,22 @@ function makeJSEmitter(target, report, env, hints) {
         needs.cmath = true;
         return "std::fmod(" + expr(node.left) + ", " + expr(node.right) + ")";
       }
+    }
+    if (op === "/" && isPy) {
+      // A10: JS "/" to Python. Python's "/" ALWAYS yields a float, so
+      // an even division printed "3.0" where JS prints "3", and the
+      // float-ness then leaked into every downstream product
+      // (f = 6/2; f * 2 printed "6.0"). Keep the VALUE JS-shaped through
+      // a helper (the __iroh_jsmod doctrine): an integral quotient within
+      // the safe-integer range comes back int — it prints bare, str()s
+      // bare, and stays int-exact in later arithmetic — while anything
+      // else comes back float. The emitted call is typed "double" by
+      // inferType, so string boundaries format through __iroh_jsnum
+      // exactly like a traced double. Division by zero still raises
+      // Python's ZeroDivisionError, surfaced by the verify block — the
+      // same accepted gap as "%" (documented by design).
+      needs.jsdiv = true;
+      return "__iroh_jsdiv(" + expr(node.left) + ", " + expr(node.right) + ")";
     }
     let outOp = op;
     if (op === "===") outOp = "==";
@@ -19864,6 +19912,31 @@ function makeJSEmitter(target, report, env, hints) {
         // and floats float, matching JS output exactly.
         header.push("def __iroh_jsmod(a, b):");
         header.push("    return a - int(a / b) * b");
+        header.push("");
+      }
+      if (needs.jsdiv) {
+        // JS Number -> JS-shaped quotient (A10): Python's "/" always
+        // yields a float, so an even division must come back int to
+        // print bare and stay int-exact in later arithmetic. Only an
+        // integral quotient within the safe-integer range converts
+        // (beyond it a float formats through __iroh_jsnum exactly the
+        // way JS String(v) does); anything else stays float. NaN and
+        // inf never reach int(q): a NaN fails q != q and falls straight
+        // through to return, and an inf fails the safe-range bounds,
+        // where Python's int(inf) would raise OverflowError — so the
+        // guard comes first. Every token here (a/b, !=, chained
+        // comparison, int(), ==) also back-translates to JavaScript:
+        // the JS->Python->JS round-trip property lowers this def to a
+        // working JS function (isinstance/float would not).
+        header.push("def __iroh_jsdiv(a, b):");
+        header.push("    q = a / b");
+        header.push("    if q != q:");
+        header.push("        return q");
+        header.push("    if -9007199254740992 <= q <= 9007199254740992:");
+        header.push("        i = int(q)");
+        header.push("        if i == q:");
+        header.push("            return i");
+        header.push("    return q");
         header.push("");
       }
       if (needs.jsbool) {

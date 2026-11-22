@@ -706,3 +706,114 @@ test("translateAsync() with evidence 'none' never runs the program", async () =>
   assert.ok(out.code.indexOf("def add") !== -1);
   delete global.__iroh_evidence_probe;
 });
+
+// Amendment A10 (2026-11-22): value parity for JS "/" and && / || on the
+// Python leg. Every case compares the emitted Python's real output with
+// the JavaScript source's real output (node), byte for byte.
+test("A10: && / || print their operand value, not a forced bool", { skip: !HAS_PYTHON }, () => {
+  for (let js of [
+    "let a = 1, b = 0; console.log(a && b); console.log(b || a);",
+    'let a = 1, b = 0; console.log(`x=${a && b}`); console.log(`y=${b || a}`);',
+    'let a = 1, b = 0; let s = "v=" + (a && b); console.log(s);',
+    'console.log("" || "b"); console.log(0 && "a");',
+  ]) {
+    let out = Iroh.translate(js, { to: "python" });
+    assert.equal(out.report.ok, true, "report: " + JSON.stringify(out.report.unsupported));
+    assertFStringFieldsHaveNoDoubleQuotes(out.code);
+    let run = runPython(out.code);
+    assert.equal(run.status, 0, "python failed: " + run.stderr + "\ncode:\n" + out.code);
+    let jsRun = runNode(js);
+    assert.equal(run.stdout, jsRun.stdout, "divergence for " + JSON.stringify(js));
+  }
+});
+
+test("A10: real booleans still print true/false (old class byte-stable)", { skip: !HAS_PYTHON }, () => {
+  for (let [js, expected] of [
+    ["console.log(3 > 2); console.log(2 < 1);", "true\nfalse\n"],
+    ["console.log(1 < 2 && 2 < 3);", "true\n"],
+    ["const b = true; console.log(`b=${b}`);", "b=true\n"],
+  ]) {
+    let out = Iroh.translate(js, { to: "python" });
+    assert.equal(out.report.ok, true);
+    let run = runPython(out.code);
+    assert.equal(run.status, 0, "python failed: " + run.stderr);
+    assert.equal(run.stdout, expected);
+  }
+});
+
+test("A10: '/' keeps the VALUE JS-shaped: 6/2 prints 3, stays int downstream", { skip: !HAS_PYTHON }, () => {
+  for (let js of [
+    "console.log(6 / 2); console.log(7 / 2); console.log(1 / 3);",
+    "let f = 6 / 2; console.log(f); console.log(f * 2);",
+    'console.log("v=" + (6 / 2)); console.log(`t=${8 / 4}`);',
+    "console.log(1e20 / 1e2); console.log(1e16 / 1); console.log(1e22 / 10);",
+    "console.log(-6 / 2); console.log(0 / 5);",
+  ]) {
+    let out = Iroh.translate(js, { to: "python" });
+    assert.equal(out.report.ok, true, "report: " + JSON.stringify(out.report.unsupported));
+    assertFStringFieldsHaveNoDoubleQuotes(out.code);
+    let run = runPython(out.code);
+    assert.equal(run.status, 0, "python failed: " + run.stderr + "\ncode:\n" + out.code);
+    let jsRun = runNode(js);
+    assert.equal(run.stdout, jsRun.stdout, "divergence for " + JSON.stringify(js));
+  }
+});
+
+test("A10: '/' emits the value-level __iroh_jsdiv helper (emit-shape)", () => {
+  let out = Iroh.translate("let f = 6 / 2; console.log(f * 2);", { to: "python" });
+  assert.equal(out.report.ok, true);
+  assert.match(out.code, /__iroh_jsdiv\(/);
+  assert.match(out.code, /def __iroh_jsdiv\(a, b\):/);
+  // no division by zero gold-plating: the gap matches "%" by design
+  assert.ok(out.code.indexOf("ZeroDivisionError") === -1);
+});
+
+test("A10: the C++ leg is untouched by the jsdiv groundwork", () => {
+  for (let js of [
+    "console.log(6 / 2);",
+    "let a = 1, b = 0; console.log(a && b);",
+  ]) {
+    let out = Iroh.translate(js, { to: "cpp" });
+    assert.equal(out.code.indexOf("__iroh_jsdiv"), -1, "cpp emission must not carry jsdiv");
+    if (out.code.indexOf("&&") !== -1) {
+      assert.match(out.code, /\? "true" : "false"/);
+    }
+  }
+});
+
+// A10 fix-up: the CI property caught the helper body rendering
+// isinstance()/float() into back-translated JavaScript (undefined at
+// trace time). The body now uses only back-translatable tokens, and
+// this test holds the exact counterexample shape the shrunk property
+// found (division by a non-zero literal, round-tripped) plus the inf
+// edge the old body would have made a Python OverflowError.
+test("A10: __iroh_jsdiv back-translates (round-trip) and survives inf", { skip: !HAS_PYTHON }, () => {
+  // The CI counterexample: ((a + 0) / 1), samples straight from the property.
+  let fnSrc = "function f(a, b) { return ((a + 0) / 1); }";
+  let py = Iroh.translate(fnSrc, { to: "python" });
+  assert.equal(py.report.ok, true, JSON.stringify(py.report.unsupported));
+  // every token in the helper def must be one the Python leg can lower back
+  assert.ok(py.code.indexOf("isinstance") === -1, "helper body must not use isinstance");
+  assert.ok(py.code.indexOf("float(") === -1, "helper body must not call float()");
+  let back = Iroh.translate(py.code, { from: "python", to: "javascript" });
+  assert.equal(back.report.ok, true, JSON.stringify(back.report.unsupported));
+  for (let [a, b] of [[2, 3], [-1, 4], [0, 5]]) {
+    let orig = Iroh.trace(fnSrc + " f(" + a + ", " + b + ");").result;
+    let rt = Iroh.trace(back.code + " f(" + a + ", " + b + ");").result;
+    assert.equal(rt, orig, "round-trip differs on f(" + a + ", " + b + ")");
+  }
+  // inf: 1e308 / 1e-308 overflows the quotient; JS prints Infinity and
+  // the helper must return the float (int(inf) is a Python OverflowError),
+  // so the boundary formats through __iroh_jsnum, not a crash.
+  for (let js of [
+    "console.log(1e308 / 1e-308);",
+    "let x = 1e308 / 1e-308; console.log(x / x);",
+  ]) {
+    let out = Iroh.translate(js, { to: "python" });
+    assert.equal(out.report.ok, true);
+    let run = runPython(out.code);
+    assert.equal(run.status, 0, "python failed: " + run.stderr + "\ncode:\n" + out.code);
+    let jsRun = runNode(js);
+    assert.equal(run.stdout, jsRun.stdout, "divergence for " + JSON.stringify(js));
+  }
+});

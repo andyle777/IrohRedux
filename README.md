@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-797%20passing-brightgreen.svg?style=flat-square" alt="797 tests passing" />
+  <img src="https://img.shields.io/badge/tests-803%20passing-brightgreen.svg?style=flat-square" alt="803 tests passing" />
 </p>
 
 <p align="center">
@@ -67,7 +67,7 @@ cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
 npm run build:catalog # builds the offline SQLite reference catalog
-npm test            # 797 tests: 519 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
+npm test            # 803 tests: 525 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
 ```
 
 The Python client installs with `pip install -e python/`. The C++
@@ -275,7 +275,18 @@ Honest limits, in one place.
   lowering matches the interpreter instead of crashing (or
   running zero passes); each hoisted read carries a named report
   note, and programs with no unwritten reads keep the previous
-  output byte for byte.
+  output byte for byte. On the
+  Python leg the value-parity patches (Amendment A10, same day)
+  heal the two silent wrong-output classes the adversarial
+  battery found: a `&&` / `||` now prints its operand value
+  ("0" or "1", not "false" / "true"; homogeneous real booleans
+  still print true/false byte for byte), and a division keeps
+  its VALUE JS-shaped through the value-level `__iroh_jsdiv`
+  helper (the `__iroh_jsmod` doctrine): `6 / 2` prints "3" not
+  "3.0", the stray float-ness no longer leaks into `f * 2`, and
+  `1e22 / 10` prints "1e+21" exactly like JS. Programs without
+  these shapes keep their previous output byte for byte, and
+  the C++ leg is untouched.
 - **Translate:** `translate()` runs the program for type evidence
   by default (pass `options.evidence: "none"` to skip it). The
   report carries a `verify` block saying whether the emitted
@@ -305,7 +316,7 @@ Newest first. Hashes live on the release page, not in this file.
   laptop joins it as a node (`iroh node`) to run the legs the
   phone cannot — see `SERVER.md`. The perceptron weights are now
   defined by `personality-matrix.json`, and the AI bundle includes a
-  read-only SQLite memory catalog. 797 tests (519 Node + 25 Python
+  read-only SQLite memory catalog. 803 tests (525 Node + 25 Python
   + 9 C++ + 244 IrohScript/BASIC).
 - **1.1.1 (20 Nov 2026) — the patch.** The trace memory release:
   a finished trace releases its Stage (a 500,013-event trace now
@@ -390,14 +401,14 @@ fact here disagrees with a prose paragraph above, this section wins
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026).
   No 1.1.2. No version bump.
 - `dist/iroh-node.js` SHA-256:
-  `4390a205bd2a5d928c9c5b48a96f724e31b6e1399ba15d686e66c180d303186f`
+  `44dd8d7768472911a5e2b04596acb99bd980c8fe24a8d71cae3a01a1dbbda30b`
 - The dist is self-contained: the parser and codegen dependencies
   (acorn, acorn-walk, astring) are bundled in, not `require`d at
   runtime. A fresh source checkout runs the CLI with no npm install,
   so a restricted AI sandbox needs nothing but Node on PATH:
   `node cli/iroh.js program.js --analyze`
 - `iroh --version` prints `iroh 1.1.1 (engine dist iroh-node.js
-  4390a205bd2a, runtime node v18.5.0)` inside a packaged binary
+  44dd8d776847, runtime node v18.5.0)` inside a packaged binary
   (runtime is the embedded Node; on npm it is the local node).
 - `iroh doctor` prints the dist hashes, the toolchains, the last
   test run, and the leg capabilities.

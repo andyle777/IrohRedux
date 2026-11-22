@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Feature (2026-11-22, Amendment A10): JavaScript "/" and && / ||
+  keep their VALUE on the Python leg, not their category. The old
+  lowering typed a && / || as a boolean, so console.log(a && b) and
+  `${a && b}` printed "false"/"true" where JavaScript prints the
+  operand itself ("0"/"1"); and a division was emitted raw, so Python's
+  always-float "/" printed "3.0" where JavaScript prints "3" - and the
+  float-ness then leaked into every downstream product
+  (f = 6 / 2; f * 2 printed "6.0"). Now a logical expression prints
+  as its operands' common type (homogeneous real booleans, the old
+  correct class, still print "true"/"false" byte for byte), and a
+  division rides a value-level `__iroh_jsdiv` helper (the
+  `__iroh_jsmod` doctrine): an integral quotient within the safe-
+  integer range comes back int, so it prints bare and stays int-exact
+  in later arithmetic, while the emitted call is typed double so
+  string boundaries still format through `__iroh_jsnum` (1e22 / 10
+  prints "1e+21" exactly like JS). Division by zero still raises
+  Python's ZeroDivisionError, surfaced by the verify block - the same
+  accepted gap as "%" (documented by design). The helper body uses
+  only back-translatable tokens (no isinstance/float), so the
+  JS -> Python -> JS round-trip property lowers its def to a working
+  JavaScript function - CI caught the first body rendering
+  isinstance() into undefined JS - and an infinite quotient returns
+  the float instead of crashing Python's int(inf) OverflowError
+  (1e308 / 1e-308 prints Infinity, like JS). The C++ leg is
+  untouched: no jsdiv, no ternary change, zero churn. 797 -> 803
+  tests (519 -> 525 Node).
 - Feature (2026-11-22, Amendment A9): a read of an unwritten
   BASIC variable lowers to its BASIC default (0, or `""` for
   string names), matching basic.py. The old lowering crashed on
