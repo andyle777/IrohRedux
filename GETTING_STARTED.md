@@ -245,7 +245,10 @@ variable, and a GOSUB counter persists across calls. And the
 unwritten-read patch (Amendment A9, same day): reading a
 never-written variable prints 0 ("" for a string name) exactly
 like the interpreter instead of crashing, and `LET A = A + 1`
-counts from 0, `FOR I = I TO 2` runs from 0 to 2.
+counts from 0, `FOR I = I TO 2` runs from 0 to 2. And the Python leg's
+value-parity patch (Amendment A10, same day): console.log(a && b)
+prints the operand ("0"), not "false", and 6 / 2 prints "3",
+not "3.0".
 
 C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
 `-finstrument-functions -rdynamic -O0` and linked against the runtime

@@ -422,7 +422,25 @@ first `LET A = A + 1` or `FOR I = I TO N` hoists rather than
 TDZ-crashing or running zero passes, each hoisted read carries a
 per-name `report.notes` entry, and a numeric read never matches a
 string name (the check walks the expression tuples exactly, X
-versus X$). No classes, no
+versus X$. Since Amendment A10 (2026-11-22) the Python leg keeps
+VALUE parity for the two silent-divergence classes the adversarial
+battery caught: a `&&` / `||` prints its operand value (Python's
+and/or already preserve it, so a homogeneous non-bool pair is no
+longer forced through a "true"/"false" ternary; homogeneous real
+booleans and comparisons still print true/false exactly as
+before, and mixed or unknown operands coerce with str() as JS
+String()'s closest neighbour), and a division rides the
+value-level `__iroh_jsdiv` helper (the `__iroh_jsmod` doctrine:
+Python's "/" always yields a float, so an even quotient printed
+"3.0" where JS prints "3" and the float-ness leaked into later
+products; now an integral quotient within the safe-integer range
+comes back int, prints bare, stays int-exact downstream, and the
+emitted call is typed double so string boundaries format through
+`__iroh_jsnum`; beyond the safe range a float formats the way JS
+String(v) does, so `1e22 / 10` prints "1e+21"). Division by zero
+still raises Python's ZeroDivisionError, surfaced by the verify
+block, the same accepted gap as "%" by design; the C++ leg is
+untouched. No classes, no
 closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the
