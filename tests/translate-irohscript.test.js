@@ -751,6 +751,82 @@ test("BASIC -> JS: a numeric read never matches a string name (X vs X$, A9 guard
 });
 
 // ------------------------------------------------------------------
+// Amendment A11 (2026-11-22): nested FOR flat-scope hoist. The
+// adversarial battery caught the inner FOR's loop variable declared
+// as a block-scoped `let` INSIDE the enclosing loop body, so a
+// mainline read after the loops crashed with ReferenceError while
+// basic.py's flat vars dict printed the value. Every case compares
+// the emitted JavaScript's real output with the interpreter's.
+// ------------------------------------------------------------------
+
+test("BASIC -> JS: a nested FOR keeps its loop variable program-wide like the interpreter (A11)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 FOR I=1 TO 3\n20 FOR J=1 TO 2\n30 PRINT I; J\n40 NEXT J\n50 NEXT I\n60 PRINT I; J\n70 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /^var J = 0;/m, "the inner loop variable hoists program-level");
+  assert.ok(!/^ {2}let J;/m.test(out.code), "no block-scoped let J inside the outer body");
+  assert.ok(out.report.notes.some(function(n) { return /declares loop variable 'J' inside another loop's body/.test(n); }), "the for-namespace note names J");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: a nested self-referential FOR bound runs the flat value (A11)", { skip: !HAS_PYTHON }, () => {
+  // J keeps its value ACROSS outer iterations in the flat dict: the
+  // first outer pass runs J = 0 TO 2, the second reads J = 3 and
+  // runs zero passes. The hoisted program-level var is the only
+  // lowering that can hold that state; the old block-scoped let
+  // re-declared J undefined each pass.
+  let src = "10 FOR I = 1 TO 2\n20 FOR J = J TO 2\n30 PRINT I; J\n40 NEXT J\n50 NEXT I\n60 PRINT I; J\n70 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: a FOR inside a WHILE body keeps flat scope (A11)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 LET K = 0\n20 WHILE K < 2\n30 FOR J = 1 TO 2\n40 PRINT K; J\n50 NEXT J\n60 LET K = K + 1\n70 WEND\n80 PRINT K; J\n90 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /^var J = 0;/m, "the WHILE-nested loop variable hoists program-level");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: nested FORs keep flat scope through the GOTO dispatch machine (A11)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 GOTO 20\n20 FOR I = 1 TO 2\n30 FOR J = 1 TO 2\n40 PRINT I; J\n50 NEXT J\n60 NEXT I\n70 PRINT I; J\n80 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.ok(!out.report.notes.some(function(n) { return /for-namespace/.test(n); }), "the machine already hoists its FOR vars, no second hoist");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: a single FOR keeps its shape (A11 guard)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 FOR I = 1 TO 3\n20 PRINT I\n30 NEXT I\n40 PRINT I\n50 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.equal(out.code, "let I;\nfor (I = 1; I <= 3; I += 1) {\n  console.log(I);\n}\nconsole.log(I);\nprocess.exit(0);\n");
+  assert.equal(out.report.notes.length, 0, "no hoist note without a nested FOR");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+// ------------------------------------------------------------------
 // Two-hop legs (via JavaScript)
 // ------------------------------------------------------------------
 

@@ -440,7 +440,18 @@ emitted call is typed double so string boundaries format through
 String(v) does, so `1e22 / 10` prints "1e+21"). Division by zero
 still raises Python's ZeroDivisionError, surfaced by the verify
 block, the same accepted gap as "%" by design; the C++ leg is
-untouched. No classes, no
+untouched. Since Amendment A11 (2026-11-22) a FOR whose variable is
+first declared inside another loop's body (or a WHILE body) hoists
+that variable the same flat way: basic.py's single vars dict lets a
+later line read both loop variables after the loops, so `PRINT I; J`
+lowers against one program-level binding (init 0, the BASIC way)
+and prints "43" like the interpreter, where the old block-scoped
+`let` inside the outer body crashed with a ReferenceError and a
+nested self-referential bound `FOR J = J TO 2` re-read undefined each
+outer pass instead of the flat value. Each such hoist carries a
+per-name `report.notes` entry; subroutine programs (A8) and GOTO
+dispatch machines already lower every FOR variable to one shared
+binding and are unchanged by this amendment. No classes, no
 closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the
@@ -617,7 +628,7 @@ the generated text form of this file). Flags take a value with
   versions, the dist hash, and the capabilities. Does not run
   the suite itself — run `npm test` first.
 - `--version` — one line: version, dist hash, embedded runtime
-  (`iroh 1.1.1 (engine dist iroh-node.js 44dd8d776847, runtime
+  (`iroh 1.1.1 (engine dist iroh-node.js 520deecec843, runtime
   node v18.5.0)` inside a packaged binary).
 - `serve [--port 8471] [--host 0.0.0.0] [--token T]
   [--timeout-ms 120000] [--local-legs javascript,...]` — start
@@ -1046,7 +1057,7 @@ every flag in `iroh --help` appears in it.
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `44dd8d7768472911a5e2b04596acb99bd980c8fe24a8d71cae3a01a1dbbda30b`.
+  `520deecec8433e2e6a692375909c39904f2bbabbc63d5b7f6090da3fa58479b8`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set. A CLI trace's stdout is

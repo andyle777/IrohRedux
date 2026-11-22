@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Fix (2026-11-22, Amendment A11): a nested FOR's loop variable keeps
+  its flat scope on the BASIC -> JavaScript leg. The old lowering
+  declared the inner FOR's variable with a block-scoped `let` inside
+  the enclosing loop body, so a mainline read after the loops
+  (PRINT I; J) crashed with ReferenceError while basic.py's flat
+  vars dict printed the value ("43"), and a self-referential inner
+  bound (FOR J = J TO 2) re-read undefined each outer pass instead
+  of the flat value. A FOR whose variable is first declared inside
+  another loop's body (or a WHILE body) now hoists to a
+  program-level var initialized the BASIC way (0, or "" for string
+  names) with a named report note - the same doctrine as the A8
+  subroutine hoist. The GOSUB and GOTO-machine paths already kept
+  flat scope and stay untouched. Programs without a nested FOR keep
+  their emitted code and report byte for byte (guard test).
+  803 -> 808 tests (525 -> 530 Node).
 - Feature (2026-11-22, Amendment A10): JavaScript "/" and && / ||
   keep their VALUE on the Python leg, not their category. The old
   lowering typed a && / || as a boolean, so console.log(a && b) and

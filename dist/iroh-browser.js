@@ -22153,17 +22153,22 @@ var iroh = (function () {
     var progDecls = [];
     var progDeclSet = {};
     // `kind` says why the name hoists: "sub" (Amendment A8, first
-    // declared inside a GOSUB subroutine body) or "read" (Amendment
-    // A9, read before any assignment — basic.py reads an unwritten
+    // declared inside a GOSUB subroutine body), "read" (Amendment A9,
+    // read before any assignment — basic.py reads an unwritten
     // variable as 0, or "" for string names, while an undeclared
     // JavaScript binding would crash, so the name hoists initialized
-    // the BASIC way instead).
+    // the BASIC way instead), or "for" (Amendment A11, a FOR loop
+    // variable first declared inside another loop's body — the same
+    // flat rule: a block-scoped `let` there dies with a ReferenceError
+    // on a later mainline read, so it hoists too).
     function progHoist(name, kind) {
       if (!progDeclSet[name]) {
         progDeclSet[name] = true;
         progDecls.push(name);
         if (kind === "read") {
           noteOnce("unwritten-read:" + name, "the BASIC program reads variable '" + name + "' before any assignment (BASIC reads an unwritten variable as 0, or \"\" for string names), so the name hoists to a program-level var initialized that way");
+        } else if (kind === "for") {
+          noteOnce("for-namespace:" + name, "the BASIC program declares loop variable '" + name + "' inside another loop's body: BASIC has one program-wide variable namespace (basic.py's interpreter keeps a single program-wide vars dict), so the name hoists to a program-level var instead of a block-scoped let inside the loop body");
         } else {
           noteOnce("sub-namespace", "the BASIC program declares a variable inside a GOSUB subroutine: BASIC has one program-wide variable namespace (basic.py's interpreter keeps a single program-wide vars dict), so the declaration hoists to a program-level var shared with the mainline instead of a function-scoped let");
         }
@@ -22415,6 +22420,18 @@ var iroh = (function () {
             // 0, or ""); hoist it instead of the undefined-valued
             // `let I;`, which ran zero passes instead of basic's.
             if (curInSub) { progHoist(varName, "sub"); }
+            // Amendment A11: a FOR nested inside another loop's body
+            // must not leave a block-scoped `let` there — the flat vars
+            // dict lets a later line read the loop variable after the
+            // loops (PRINT I; J), and a let inside the outer body dies
+            // with a ReferenceError. The same hoist as the unwritten
+            // read (initialized 0, or "" for string names), and it
+            // subsumes the A9 read case for a nested self-referential
+            // bound (FOR J = J TO 2): the hoisted init is the value.
+            // The GOTO dispatch machine is exempt (dispatchDecl): its
+            // hoistDecl already places every main-flow FOR var at
+            // machine level, so a second hoist would churn bytes.
+            else if (indentLevel > 0 && !dispatchDecl()) { progHoist(varName, "for"); }
             else if (readsName(s[2], varName) || readsName(s[3], varName) || readsName(s[4], varName)) { progHoist(varName, "read"); }
             emitLine((dispatchDecl() || progDeclSet[varName] ? "" : "let ") + varName + ";");
           }
