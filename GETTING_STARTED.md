@@ -255,7 +255,12 @@ value ("43") instead of crashing with ReferenceError. And the
 nested block flat-scope patch (Amendment A12, same day): a LET,
 DIM or INPUT first declared inside a loop or IF body hoists flat
 too, so `FOR A` / `LET X = A` / `NEXT A` / `PRINT X` prints "2"
-like the interpreter instead of crashing.
+like the interpreter instead of crashing. And the print-parity
+pass (Amendment A13, same day): printed booleans print "1"/"0"
+like the interpreter instead of JavaScript "true"/"false",
+`PRINT 1, 2` separates values with one space, a trailing ';' or
+',' holds the line open until the next PRINT or the end of the
+run, and `PRINT "a"; 1 + 2` prints "a3".
 
 C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
 `-finstrument-functions -rdynamic -O0` and linked against the runtime

@@ -462,7 +462,19 @@ flat vars dict printed the value. The GOTO dispatch machine is
 exempt (its hoistDecl already places every main-flow name) and
 FOR variables keep their A11 treatment. Programs without a
 declaration inside a nested block keep their emitted code and
-report byte for byte. No classes, no
+report byte for byte. And since Amendment A13 (same day) printed
+values match the interpreter's pending-line semantics: a
+comparison, AND, OR or NOT result in value position emits as a
+parenthesized ternary to 1/0 (format_value prints True as "1"),
+the ',' separator between PRINT values appends one space, a
+trailing ';' or ',' holds the line open until the next
+line-ending PRINT, a prompted INPUT, or the end of the run (an
+`if (__basic_tail)` flush woven into the recorded exit sites,
+which shift with the GOTO machine's spliced declarations), and
+a folded +/- item in a glued PRINT is parenthesized so
+`PRINT "a"; 1 + 2` prints "a3". Conditions in IF and WHILE keep
+their raw boolean shape, and programs without these shapes keep
+their emitted code and report byte for byte. No classes, no
 closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the

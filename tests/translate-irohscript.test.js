@@ -900,6 +900,133 @@ test("BASIC -> JS: mainline LET declarations keep their shape (A12 guard)", { sk
 });
 
 // ------------------------------------------------------------------
+// Amendment A13 (2026-11-22): BASIC print-parity pack. Boolean
+// values print as 1/0 the way basic.py's format_value does (not
+// JavaScript true/false); the ',' separator between PRINT values
+// appends one space, not a tab; a trailing ';' or ',' holds the
+// line open like the interpreter's pending buffer, and the buffer
+// flushes at the next line-ending PRINT or at the end of the run.
+// Glue joins of folded +/- items are parenthesized so JavaScript
+// folds each item before string concatenation.
+// ------------------------------------------------------------------
+
+test("BASIC -> JS: a printed comparison prints 1 like the interpreter (A13)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 PRINT 1 = 1\n20 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /\? 1 : 0\)/, "the comparison emits a ternary to 1/0, parenthesized as one value");
+  assert.ok(!/true|false/.test(out.code.replace(/ ?1 : 0/g, "")), "no raw JavaScript boolean leaks into the print");
+  assert.ok(out.report.notes.some(function(n) { return /print as 1\/0/.test(n); }), "the boolean 1/0 note fires");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: AND and OR of numeric operands print like the interpreter (A13)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 PRINT 2 AND 3\n20 PRINT 2 AND 0\n30 PRINT 0 OR 5\n40 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: a stored boolean concatenates as 1 like the interpreter (A13)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 LET T$ = \"v\" + (1 = 1)\n20 PRINT T$\n30 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /\(\(\(1 === 1\) \? 1 : 0\)\)/, "the ternary is parenthesized so the + folds it as one value");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: a comma between PRINT values separates with one space (A13)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 PRINT 1, 2\n20 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /1 \+ " " \+ 2/, "the comma emits a one-space join");
+  assert.ok(!out.code.includes("\\t"), "no tab separator remains");
+  assert.ok(out.report.notes.some(function(n) { return /separates values with one space/.test(n); }), "the comma note fires");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: a trailing ';' holds the line open until the run ends (A13)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 PRINT \"a\";\n20 PRINT \"b\"\n30 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /__basic_tail = true;/, "the held line records the pending tail");
+  assert.match(out.code, /__basic_tail = false;/, "the completing reset is emitted");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: a trailing ',' at END flushes the pending line (A13)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 PRINT \"e\",\n20 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /if \(__basic_tail\) process\.stdout\.write\("\\n"\);/, "the exit site flushes the pending newline");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: a folded + item in a glued PRINT keeps its value (A13)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 PRINT \"a\"; 1 + 2\n20 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /\(1 \+ 2\)/, "the folded item is parenthesized so it adds up before the concatenation");
+  assert.ok(out.report.notes.some(function(n) { return /parenthesized so JavaScript folds it as one value/.test(n); }), "the glue precedence note fires");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "a3\n", "1 + 2 folds to 3 before gluing");
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: a trailing ';' inside a GOTO machine loop keeps the run-end flush (A13)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 LET N = 0\n20 PRINT \"n\";\n30 LET N = N + 1\n40 IF N < 2 THEN 20\n50 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /if \(__basic_tail\) process\.stdout\.write\("\\n"\);/, "the machine exit site carries the flush");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: programs without held lines or printed booleans keep their emission (A13 guard)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 LET S = 0\n20 FOR A = 1 TO 3\n30 LET S = S + A\n40 NEXT A\n50 PRINT S\n60 IF S > 3 THEN PRINT \"big\"\n70 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.ok(!out.code.includes("__basic_tail"), "no pending-tail bookkeeping without a held line");
+  assert.ok(!out.code.includes("? 1 : 0"), "no boolean ternary without a printed boolean value");
+  assert.ok(!out.report.notes.some(function(n) { return /1\/0|one space|held|pending/.test(n); }), "no print-parity notes without the covered shapes");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+// ------------------------------------------------------------------
 // Two-hop legs (via JavaScript)
 // ------------------------------------------------------------------
 
