@@ -1752,12 +1752,21 @@ function makeJSEmitter(target, report, env, hints) {
         // print bare and stay int-exact in later arithmetic. Only an
         // integral quotient within the safe-integer range converts
         // (beyond it a float formats through __iroh_jsnum exactly the
-        // way JS String(v) does); anything else stays float.
+        // way JS String(v) does); anything else stays float. NaN and
+        // inf never reach int(q): a NaN fails q != q and falls straight
+        // through to return, and an inf fails the safe-range bounds,
+        // where Python's int(inf) would raise OverflowError — so the
+        // guard comes first. Every token here (a/b, !=, chained
+        // comparison, int(), ==) also back-translates to JavaScript:
+        // the JS->Python->JS round-trip property lowers this def to a
+        // working JS function (isinstance/float would not).
         header.push("def __iroh_jsdiv(a, b):");
         header.push("    q = a / b");
-        header.push("    if isinstance(q, float):");
+        header.push("    if q != q:");
+        header.push("        return q");
+        header.push("    if -9007199254740992 <= q <= 9007199254740992:");
         header.push("        i = int(q)");
-        header.push("        if i == q and -9007199254740992 <= q <= 9007199254740992:");
+        header.push("        if i == q:");
         header.push("            return i");
         header.push("    return q");
         header.push("");

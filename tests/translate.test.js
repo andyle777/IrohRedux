@@ -780,3 +780,40 @@ test("A10: the C++ leg is untouched by the jsdiv groundwork", () => {
     }
   }
 });
+
+// A10 fix-up: the CI property caught the helper body rendering
+// isinstance()/float() into back-translated JavaScript (undefined at
+// trace time). The body now uses only back-translatable tokens, and
+// this test holds the exact counterexample shape the shrunk property
+// found (division by a non-zero literal, round-tripped) plus the inf
+// edge the old body would have made a Python OverflowError.
+test("A10: __iroh_jsdiv back-translates (round-trip) and survives inf", { skip: !HAS_PYTHON }, () => {
+  // The CI counterexample: ((a + 0) / 1), samples straight from the property.
+  let fnSrc = "function f(a, b) { return ((a + 0) / 1); }";
+  let py = Iroh.translate(fnSrc, { to: "python" });
+  assert.equal(py.report.ok, true, JSON.stringify(py.report.unsupported));
+  // every token in the helper def must be one the Python leg can lower back
+  assert.ok(py.code.indexOf("isinstance") === -1, "helper body must not use isinstance");
+  assert.ok(py.code.indexOf("float(") === -1, "helper body must not call float()");
+  let back = Iroh.translate(py.code, { from: "python", to: "javascript" });
+  assert.equal(back.report.ok, true, JSON.stringify(back.report.unsupported));
+  for (let [a, b] of [[2, 3], [-1, 4], [0, 5]]) {
+    let orig = Iroh.trace(fnSrc + " f(" + a + ", " + b + ");").result;
+    let rt = Iroh.trace(back.code + " f(" + a + ", " + b + ");").result;
+    assert.equal(rt, orig, "round-trip differs on f(" + a + ", " + b + ")");
+  }
+  // inf: 1e308 / 1e-308 overflows the quotient; JS prints Infinity and
+  // the helper must return the float (int(inf) is a Python OverflowError),
+  // so the boundary formats through __iroh_jsnum, not a crash.
+  for (let js of [
+    "console.log(1e308 / 1e-308);",
+    "let x = 1e308 / 1e-308; console.log(x / x);",
+  ]) {
+    let out = Iroh.translate(js, { to: "python" });
+    assert.equal(out.report.ok, true);
+    let run = runPython(out.code);
+    assert.equal(run.status, 0, "python failed: " + run.stderr + "\ncode:\n" + out.code);
+    let jsRun = runNode(js);
+    assert.equal(run.stdout, jsRun.stdout, "divergence for " + JSON.stringify(js));
+  }
+});
