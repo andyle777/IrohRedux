@@ -570,7 +570,7 @@ the generated text form of this file). Flags take a value with
   versions, the dist hash, and the capabilities. Does not run
   the suite itself — run `npm test` first.
 - `--version` — one line: version, dist hash, embedded runtime
-  (`iroh 1.1.1 (engine dist iroh-node.js 114af46eca38, runtime
+  (`iroh 1.1.1 (engine dist iroh-node.js 462e7462c4f3, runtime
   node v18.5.0)` inside a packaged binary).
 - `serve [--port 8471] [--host 0.0.0.0] [--token T]
   [--timeout-ms 120000] [--local-legs javascript,...]` — start
@@ -999,7 +999,7 @@ every flag in `iroh --help` appears in it.
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `114af46eca38e83f97f67f9e0a85ea5346a29abada1e990b076333748b357f79`.
+  `462e7462c4f32f53a3e5964792ef26746c71224dadbfe591675dc12ccb0d6e31`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set. A CLI trace's stdout is
