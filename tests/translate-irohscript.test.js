@@ -827,6 +827,79 @@ test("BASIC -> JS: a single FOR keeps its shape (A11 guard)", { skip: !HAS_PYTHO
 });
 
 // ------------------------------------------------------------------
+// Amendment A12 (2026-11-22): nested block flat-scope hoist. The
+// same flat-namespace doctrine as A11, extended from FOR variables
+// to every declaration that first appears inside a loop or IF body:
+// LET, DIM and INPUT. A block-scoped `let` there died with a
+// ReferenceError on any later mainline read while basic.py's single
+// program-wide vars dict printed the value.
+// ------------------------------------------------------------------
+
+test("BASIC -> JS: a LET inside a FOR body keeps flat scope like the interpreter (A12)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 FOR A = 1 TO 2\n20 LET X = A\n30 NEXT A\n40 PRINT X\n50 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /^var X = 0;/m, "the body-declared LET hoists program-level");
+  assert.ok(!/^ {2}let X =/m.test(out.code), "no block-scoped let X inside the loop body");
+  assert.ok(out.report.notes.some(function(n) { return /declares a variable inside a loop or IF body/.test(n); }), "the block-namespace note fires");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: a DIM inside a FOR body keeps flat scope (A12)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 FOR A = 1 TO 2\n20 DIM X(3)\n30 LET X(A) = A * 10\n40 NEXT A\n50 PRINT X(2)\n60 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /^var X = 0;/m, "the body-declared DIM hoists program-level");
+  assert.ok(!/^ {2}let X =/m.test(out.code), "no block-scoped let X inside the loop body");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: a LET inside an IF THEN branch keeps flat scope (A12)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 IF 1 < 2 THEN LET Y = 5 ELSE LET Y = 6\n20 PRINT Y\n30 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /^var Y = 0;/m, "the branch-declared LET hoists program-level");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: a string LET inside a FOR body keeps flat scope (A12)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 FOR A = 1 TO 2\n20 LET T$ = \"n\" + A\n30 NEXT A\n40 PRINT T$\n50 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /^var T\$ = "";$/m, "the body-declared string LET hoists program-level");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+test("BASIC -> JS: mainline LET declarations keep their shape (A12 guard)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 LET S = 0\n20 FOR A = 1 TO 3\n30 LET S = S + A\n40 NEXT A\n50 PRINT S\n60 END";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  assert.match(out.code, /^let S = 0;/m, "a mainline LET stays a plain flat let");
+  assert.ok(!out.report.notes.some(function(n) { return /inside a loop or IF body/.test(n); }), "no block-namespace note without a body declaration");
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  let basic = runBasic(src);
+  assert.equal(basic.status, 0, basic.stderr);
+  assert.equal(run.stdout, basic.stdout, "emitted output must match the interpreter byte for byte");
+});
+
+// ------------------------------------------------------------------
 // Two-hop legs (via JavaScript)
 // ------------------------------------------------------------------
 

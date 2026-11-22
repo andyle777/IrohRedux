@@ -22169,6 +22169,8 @@ var iroh = (function () {
           noteOnce("unwritten-read:" + name, "the BASIC program reads variable '" + name + "' before any assignment (BASIC reads an unwritten variable as 0, or \"\" for string names), so the name hoists to a program-level var initialized that way");
         } else if (kind === "for") {
           noteOnce("for-namespace:" + name, "the BASIC program declares loop variable '" + name + "' inside another loop's body: BASIC has one program-wide variable namespace (basic.py's interpreter keeps a single program-wide vars dict), so the name hoists to a program-level var instead of a block-scoped let inside the loop body");
+        } else if (kind === "block") {
+          noteOnce("block-namespace", "the BASIC program declares a variable inside a loop or IF body: BASIC has one program-wide variable namespace (basic.py's interpreter keeps a single program-wide vars dict), so the declaration hoists to a program-level var and the site becomes a bare assignment instead of a block-scoped let inside the block");
         } else {
           noteOnce("sub-namespace", "the BASIC program declares a variable inside a GOSUB subroutine: BASIC has one program-wide variable namespace (basic.py's interpreter keeps a single program-wide vars dict), so the declaration hoists to a program-level var shared with the mainline instead of a function-scoped let");
         }
@@ -22317,6 +22319,7 @@ var iroh = (function () {
             // 0 (or ""), so hoist it like any unwritten read instead
             // of emitting the TDZ-crashing `let A = A + 1`.
             if (curInSub) { progHoist(s[1], "sub"); }
+            else if (indentLevel > 0 && !dispatchDecl()) { progHoist(s[1], "block"); }
             else if (readsName(s[2], s[1])) { progHoist(s[1], "read"); }
             emitLine((dispatchDecl() || progDeclSet[s[1]] ? "" : "let ") + s[1] + " = " + expr(s[2], 0) + ";");
           }
@@ -22345,6 +22348,7 @@ var iroh = (function () {
           if (!declared[s[1]]) {
             declared[s[1]] = true;
             if (curInSub) { progHoist(s[1], "sub"); }
+            else if (indentLevel > 0 && !dispatchDecl()) { progHoist(s[1], "block"); }
             emitLine((dispatchDecl() || progDeclSet[s[1]] ? "" : "let ") + s[1] + " = __basic_dim([" + sizes + "], " + fill + ");");
           }
           else { emitLine(s[1] + " = __basic_dim([" + sizes + "], " + fill + ");"); }
@@ -22363,6 +22367,7 @@ var iroh = (function () {
               if (!declared[name]) {
                 declared[name] = true;
                 if (curInSub) { progHoist(name, "sub"); }
+                else if (indentLevel > 0 && !dispatchDecl()) { progHoist(name, "block"); }
                 emitLine((dispatchDecl() || progDeclSet[name] ? "" : "let ") + name + " = " + call + ";");
               }
               else { emitLine(name + " = " + call + ";"); }
@@ -22370,6 +22375,7 @@ var iroh = (function () {
               if (!declared[name]) {
                 declared[name] = true;
                 if (curInSub) { progHoist(name, "sub"); }
+                else if (indentLevel > 0 && !dispatchDecl()) { progHoist(name, "block"); }
                 emitLine((dispatchDecl() || progDeclSet[name] ? "" : "let ") + name + " = Number(" + call + ");");
               }
               else { emitLine(name + " = Number(" + call + ");"); }
