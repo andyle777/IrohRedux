@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-808%20passing-brightgreen.svg?style=flat-square" alt="808 tests passing" />
+  <img src="https://img.shields.io/badge/tests-813%20passing-brightgreen.svg?style=flat-square" alt="813 tests passing" />
 </p>
 
 <p align="center">
@@ -67,7 +67,7 @@ cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
 npm run build:catalog # builds the offline SQLite reference catalog
-npm test            # 808 tests: 530 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
+npm test            # 813 tests: 535 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
 ```
 
 The Python client installs with `pip install -e python/`. The C++
@@ -295,7 +295,15 @@ Honest limits, in one place.
   self-referential inner bound (FOR J = J TO 2) keeps its flat
   value across outer passes. The GOSUB and GOTO-machine paths
   already kept flat scope; programs without a nested FOR keep
-  their emitted code and report byte for byte.
+  their emitted code and report byte for byte. And the nested
+  block flat-scope patch (Amendment A12, same day): a LET, DIM
+  or INPUT first declared inside a loop or IF body gets the same
+  treatment - the name hoists to a program-level var and the
+  site becomes a bare assignment, so `FOR A` / `LET X = A` /
+  `NEXT A` / `PRINT X` prints the interpreter's flat value ("2")
+  instead of crashing with ReferenceError, and the same holds for
+  a DIM ("20"), an INPUT ("7,9,9"), a WHILE body ("5"), an IF
+  THEN branch ("5") and a string LET ("n2").
 - **Translate:** `translate()` runs the program for type evidence
   by default (pass `options.evidence: "none"` to skip it). The
   report carries a `verify` block saying whether the emitted
@@ -325,7 +333,7 @@ Newest first. Hashes live on the release page, not in this file.
   laptop joins it as a node (`iroh node`) to run the legs the
   phone cannot — see `SERVER.md`. The perceptron weights are now
   defined by `personality-matrix.json`, and the AI bundle includes a
-  read-only SQLite memory catalog. 808 tests (530 Node + 25 Python
+  read-only SQLite memory catalog. 813 tests (535 Node + 25 Python
   + 9 C++ + 244 IrohScript/BASIC).
 - **1.1.1 (20 Nov 2026) — the patch.** The trace memory release:
   a finished trace releases its Stage (a 500,013-event trace now

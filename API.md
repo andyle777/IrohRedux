@@ -451,7 +451,18 @@ nested self-referential bound `FOR J = J TO 2` re-read undefined each
 outer pass instead of the flat value. Each such hoist carries a
 per-name `report.notes` entry; subroutine programs (A8) and GOTO
 dispatch machines already lower every FOR variable to one shared
-binding and are unchanged by this amendment. No classes, no
+binding and are unchanged by this amendment. Since Amendment A12
+(same day) that flat-scope doctrine covers every declaration
+first made inside a loop or IF body: LET, DIM and INPUT hoist to
+a program-level var (init 0, or `""` for string names) with a
+once-per-program `report.notes` entry and the site lowers to a
+bare assignment, because a block-scoped `let` inside the body
+crashed any later mainline read with a ReferenceError while the
+flat vars dict printed the value. The GOTO dispatch machine is
+exempt (its hoistDecl already places every main-flow name) and
+FOR variables keep their A11 treatment. Programs without a
+declaration inside a nested block keep their emitted code and
+report byte for byte. No classes, no
 closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the

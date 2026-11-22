@@ -251,7 +251,11 @@ prints the operand ("0"), not "false", and 6 / 2 prints "3",
 not "3.0". And the nested-FOR
 flat-scope patch (Amendment A11, same day): after nested
 FOR I / FOR J loops, PRINT I; J prints the interpreter's flat
-value ("43") instead of crashing with ReferenceError.
+value ("43") instead of crashing with ReferenceError. And the
+nested block flat-scope patch (Amendment A12, same day): a LET,
+DIM or INPUT first declared inside a loop or IF body hoists flat
+too, so `FOR A` / `LET X = A` / `NEXT A` / `PRINT X` prints "2"
+like the interpreter instead of crashing.
 
 C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
 `-finstrument-functions -rdynamic -O0` and linked against the runtime

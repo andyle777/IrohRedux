@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Fix (2026-11-22, Amendment A12): a LET, DIM or INPUT first
+  declared inside a loop or IF body keeps its flat scope on the
+  BASIC -> JavaScript leg, the same doctrine as A11 extended from
+  FOR variables to every declaration site. The old lowering
+  declared such a name with a block-scoped `let` inside the body,
+  so `FOR A` / `LET X = A` / `NEXT A` / `PRINT X` crashed with
+  ReferenceError while basic.py's single program-wide vars dict
+  printed the value ("2", "20" for a DIM, "7,9,9" for an INPUT,
+  "5" in a WHILE body, "5" in an IF THEN branch, "n2" for a
+  string LET). The declaration now hoists to a program-level var
+  initialized the BASIC way (0, or "" for string names) with a
+  named once-per-program report note, and the site becomes a
+  bare assignment. The GOTO dispatch machine is exempt (its
+  hoistDecl already places main-flow names) and FOR variables
+  stay A11's. Programs without a declaration inside a nested
+  block keep their emitted code and report byte for byte (guard
+  test).
+  808 -> 813 tests (530 -> 535 Node).
 - Fix (2026-11-22, Amendment A11): a nested FOR's loop variable keeps
   its flat scope on the BASIC -> JavaScript leg. The old lowering
   declared the inner FOR's variable with a block-scoped `let` inside
