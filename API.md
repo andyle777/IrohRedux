@@ -440,7 +440,18 @@ emitted call is typed double so string boundaries format through
 String(v) does, so `1e22 / 10` prints "1e+21"). Division by zero
 still raises Python's ZeroDivisionError, surfaced by the verify
 block, the same accepted gap as "%" by design; the C++ leg is
-untouched. No classes, no
+untouched. Since Amendment A11 (2026-11-22) a FOR whose variable is
+first declared inside another loop's body (or a WHILE body) hoists
+that variable the same flat way: basic.py's single vars dict lets a
+later line read both loop variables after the loops, so `PRINT I; J`
+lowers against one program-level binding (init 0, the BASIC way)
+and prints "43" like the interpreter, where the old block-scoped
+`let` inside the outer body crashed with a ReferenceError and a
+nested self-referential bound `FOR J = J TO 2` re-read undefined each
+outer pass instead of the flat value. Each such hoist carries a
+per-name `report.notes` entry; subroutine programs (A8) and GOTO
+dispatch machines already lower every FOR variable to one shared
+binding and are unchanged by this amendment. No classes, no
 closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the

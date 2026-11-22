@@ -248,7 +248,10 @@ like the interpreter instead of crashing, and `LET A = A + 1`
 counts from 0, `FOR I = I TO 2` runs from 0 to 2. And the Python leg's
 value-parity patch (Amendment A10, same day): console.log(a && b)
 prints the operand ("0"), not "false", and 6 / 2 prints "3",
-not "3.0".
+not "3.0". And the nested-FOR
+flat-scope patch (Amendment A11, same day): after nested
+FOR I / FOR J loops, PRINT I; J prints the interpreter's flat
+value ("43") instead of crashing with ReferenceError.
 
 C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
 `-finstrument-functions -rdynamic -O0` and linked against the runtime
