@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
   <img src="https://img.shields.io/badge/TypeScript-types-3178C6.svg?style=flat-square" alt="TypeScript types included" />
-  <img src="https://img.shields.io/badge/tests-774%20passing-brightgreen.svg?style=flat-square" alt="774 tests passing" />
+  <img src="https://img.shields.io/badge/tests-783%20passing-brightgreen.svg?style=flat-square" alt="783 tests passing" />
 </p>
 
 <p align="center">
@@ -67,7 +67,7 @@ cd IrohRedux
 npm install
 npm run dist        # builds dist/iroh-node.js, dist/iroh-node.es.mjs, dist/iroh-browser.js
 npm run build:catalog # builds the offline SQLite reference catalog
-npm test            # 774 tests: 496 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
+npm test            # 783 tests: 505 Node + 25 Python + 9 C++ + 244 IrohScript/BASIC
 ```
 
 The Python client installs with `pip install -e python/`. The C++
@@ -249,7 +249,16 @@ Honest limits, in one place.
   divergence on the C++ column: a string literal in a range-for
   decays to a char array whose walk included the NUL terminator;
   it is now wrapped in `std::string`, with an execution test
-  that would catch the stray byte.
+  that would catch the stray byte. The GOTO lowering (Amendment
+  A7, same day) closes the stub the BASIC leg always named as
+  its follow-up: a program containing a GOTO lowers its mainline
+  to a program-counter dispatch machine (`__pcw: while (true)
+  switch (__pc)`, one case per basic block, a case at every valid
+  target's line slot — exactly how basic.py's interpreter walks
+  its slots). Backward jumps, the IF GOTO shortcut, GOTO out of
+  a loop, and re-entered loop headers all round-trip against
+  the interpreter; a GOTO into a loop body, into a GOSUB
+  subroutine, or inside a subroutine stays a loud stub.
 - **Translate:** `translate()` runs the program for type evidence
   by default (pass `options.evidence: "none"` to skip it). The
   report carries a `verify` block saying whether the emitted
@@ -279,7 +288,7 @@ Newest first. Hashes live on the release page, not in this file.
   laptop joins it as a node (`iroh node`) to run the legs the
   phone cannot — see `SERVER.md`. The perceptron weights are now
   defined by `personality-matrix.json`, and the AI bundle includes a
-  read-only SQLite memory catalog. 774 tests (496 Node + 25 Python
+  read-only SQLite memory catalog. 783 tests (505 Node + 25 Python
   + 9 C++ + 244 IrohScript/BASIC).
 - **1.1.1 (20 Nov 2026) — the patch.** The trace memory release:
   a finished trace releases its Stage (a 500,013-event trace now

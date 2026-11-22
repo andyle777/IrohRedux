@@ -349,8 +349,8 @@ arithmetic, loops, conditionals, arrays (Python lists / C++ vectors),
 strings, console output (`console.log` / `print` / `std::cout`).
 JavaScript functions become BASIC GOSUB subroutines; IrohScript
 `ACTION`/`INTENT` become `__iroh_action`/`__iroh_intent` recorders;
-recursive functions to BASIC and GOTO to JavaScript are still
-unsupported, and the legacy bare IrohScript LOOP does not lower (no
+recursive functions to BASIC are still unsupported, and the legacy bare
+IrohScript LOOP does not lower (no
 exit rule). Since Amendment A2 (2026-11-21) the conditional LOOP
 lowers both ways: IrohScript `LOOP <Bool>` becomes a JavaScript
 `while`, and a JavaScript `while` becomes IrohScript `LOOP <Bool> ...
@@ -393,7 +393,20 @@ surface. The same amendment fixed a silent divergence on the C++
 leg: a string literal in `for (auto c : ...)` decays to a char
 array and the walk included the NUL terminator; it is now wrapped
 in `std::string(...)`, with a compiled-and-run test that would
-catch the stray byte. No classes, no
+catch the stray byte. Since Amendment A7 (2026-11-22) a BASIC
+program containing a GOTO lowers its mainline through the
+program-counter dispatch machine: `__pc` walks the flat line
+slots exactly the way the interpreter does (`__pcw: while (true)
+switch (__pc)`, one case per basic block, a case start at every
+valid GOTO target's line slot, a GOTO a jump of `__pc`, `var`
+hoisted declarations because a case can be re-entered). Backward
+jumps, the `IF ... THEN GOTO` shortcut, a GOTO out of a FOR/WHILE
+body, and a re-entered loop header all match the interpreter's
+execution (test-first parity). Loud stubs by design: a GOTO into
+a loop body (the body lowers to structured JavaScript; entering
+without the loop header is not representable), a GOTO into a
+GOSUB subroutine (subroutines lower to functions), a GOTO inside
+a subroutine, and a GOTO to an undefined line. No classes, no
 closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Feature (2026-11-22, Amendment A7): a BASIC GOTO lowers to
+  JavaScript through the program-counter dispatch machine the v1
+  stub always named as its follow-up (basic.py's interpreter walks
+  its slots with pc arithmetic, so the mainline becomes
+  `__pcw: while (true) switch (__pc)`: one case per basic block, a
+  case start exactly at every valid target's line slot, a GOTO a
+  jump of `__pc`, machine declarations hoisted ahead as `var`
+  because a case can be re-entered). The IF GOTO shortcut,
+  backward jumps, GOTO out of a FOR/WHILE body, jumps from
+  mid-line on multi-statement lines, and re-entered loop headers
+  all round-trip against the interpreter (test-first parity).
+  Loud stubs by design: a GOTO into a loop body, into or inside a
+  GOSUB subroutine, and a GOTO to an undefined line. 774 -> 783
+  tests (496 -> 505 Node).
 - Feature (2026-11-22, Amendment A6): a JavaScript `for-of` lowers
   into the BASIC-family legs instead of stubbing, and `for-in`
   stays a loud stub by design (no v1 target has an object

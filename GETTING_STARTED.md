@@ -229,7 +229,13 @@ literals per item (no array type exists there). `for-in` stays a
 loud stub everywhere by design: no target has an object surface.
 The C++ leg also gained a fix that day: a string literal in a
 range-for used to walk the NUL terminator too; it is wrapped in
-`std::string` now, with an execution test.
+`std::string` now, with an execution test. And the GOTO lowering
+(Amendment A7, same day): a BASIC program with a GOTO lowers its
+mainline to a program-counter dispatch machine (`__pcw:
+while/switch` on `__pc`, one case per basic block), so GOTO
+chains, IF GOTO shortcuts, and GOTO escapes out of loop bodies
+round-trip against the interpreter — while a GOTO into a loop
+body or into a subroutine stays a loud, named stub.
 
 C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
 `-finstrument-functions -rdynamic -O0` and linked against the runtime
