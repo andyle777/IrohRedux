@@ -413,7 +413,16 @@ lowering hoists it to a program-level `var` initialized like an
 untouched BASIC read (0, or `""` for string names) and the
 declaration site becomes a bare assignment, so the subroutine, the
 mainline, and the dispatch machine share one binding (a `report.notes`
-entry names the hoist). No classes, no
+entry names the hoist). Since Amendment A9 (2026-11-22) a read of an
+unwritten variable lowers to its BASIC default the same way: a
+not-yet-declared name in an expression hoists to a program-level
+`var` initialized 0 (or `""` for string names) instead of a
+reference to a binding that does not exist, a self-referential
+first `LET A = A + 1` or `FOR I = I TO N` hoists rather than
+TDZ-crashing or running zero passes, each hoisted read carries a
+per-name `report.notes` entry, and a numeric read never matches a
+string name (the check walks the expression tuples exactly, X
+versus X$). No classes, no
 closures-as-objects, no async. The Python leg accepts `for (i = A; ...)`
 with `i` declared earlier, not just `for (let i = A; ...)` — the BASIC
 leg emits the first form so the loop variable stays visible after the

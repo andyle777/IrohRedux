@@ -241,7 +241,11 @@ declared inside a GOSUB body is program-wide, the way the
 interpreter's one vars dict keeps it — the lowering hoists it to
 a program-level `var` initialized 0 (or `""` for strings), so
 sub writes, the mainline, and the machine all see the same
-variable, and a GOSUB counter persists across calls.
+variable, and a GOSUB counter persists across calls. And the
+unwritten-read patch (Amendment A9, same day): reading a
+never-written variable prints 0 ("" for a string name) exactly
+like the interpreter instead of crashing, and `LET A = A + 1`
+counts from 0, `FOR I = I TO 2` runs from 0 to 2.
 
 C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
 `-finstrument-functions -rdynamic -O0` and linked against the runtime
