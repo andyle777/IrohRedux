@@ -229,7 +229,13 @@ literals per item (no array type exists there). `for-in` stays a
 loud stub everywhere by design: no target has an object surface.
 The C++ leg also gained a fix that day: a string literal in a
 range-for used to walk the NUL terminator too; it is wrapped in
-`std::string` now, with an execution test.
+`std::string` now, with an execution test. And the GOTO lowering
+(Amendment A7, same day): a BASIC program with a GOTO lowers its
+mainline to a program-counter dispatch machine (`__pcw:
+while/switch` on `__pc`, one case per basic block), so GOTO
+chains, IF GOTO shortcuts, and GOTO escapes out of loop bodies
+round-trip against the interpreter — while a GOTO into a loop
+body or into a subroutine stays a loud, named stub.
 
 C++ (`cpp/iroh_trace_rt.cpp`): the program is compiled with
 `-finstrument-functions -rdynamic -O0` and linked against the runtime
@@ -405,7 +411,7 @@ node cli/iroh.js doctor
 #   python: ran 25, failed 0, skipped 0
 #   ...
 # Toolchains: node v24.22.1, python3 3.12.3, g++ ...
-# dist: iroh-node.js 462e7462c4f3, ...
+# dist: iroh-node.js 27fdc73f399c, ...
 ```
 
 `iroh doctor` prints the last recorded test run (from
@@ -624,7 +630,7 @@ fact here disagrees with a prose paragraph above, this section wins
 
 - Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026). No
   1.1.2. No version bump. `dist/iroh-node.js` SHA-256:
-  `462e7462c4f32f53a3e5964792ef26746c71224dadbfe591675dc12ccb0d6e31`.
+  `27fdc73f399c918e581e912bb732353b12e126c1e95f4dabd198b6f469e639b4`.
 - Ask for JSON. Never parse console prose; it is for humans and
   will change. Event streams are JSON lines, one object per line,
   with the `language` field always set.

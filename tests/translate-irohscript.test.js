@@ -456,11 +456,116 @@ test("BASIC -> JS: INPUT reads stdin and prints the prompt", { skip: !HAS_PYTHON
   assert.equal(run.stdout, "name? hi Ada\n");
 });
 
-test("BASIC -> JS: GOTO is honestly unsupported (pc-dispatch is the follow-up)", { skip: !HAS_PYTHON }, () => {
+test("BASIC -> JS: GOTO lowers through the pc-dispatch machine (A7)", { skip: !HAS_PYTHON }, () => {
   let src = "10 LET X = 1\n20 GOTO 40\n30 LET X = 2\n40 PRINT X";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  // The mainline is a __pcw while/switch on __pc; a GOTO is a jump
+  // of __pc, and the case starts exactly at the target line's
+  // slot, the way basic.py's interpreter walks _slots.
+  assert.match(out.code, /__pcw: while \(true\) \{/);
+  assert.match(out.code, /var __pc = 0;/);
+  assert.match(out.code, /__pc = [0-9]+; continue __pcw;/);
+  assert.match(out.report.notes.join(" "), /pc-dispatch machine|program-counter dispatch machine/);
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "1\n");
+  // Parity: the interpreter agrees (the GOTO skips line 30).
+  let basicRun = runBasic(src);
+  assert.equal(basicRun.status, 0, basicRun.stderr);
+  assert.equal(basicRun.stdout, "1\n");
+});
+
+test("BASIC -> JS: a GOTO loop (IF shortcut + backward jump) round-trips against the interpreter (A7)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 LET S = 0\n20 LET I = 1\n30 IF I > 5 THEN GOTO 70\n40 LET S = S + I\n50 LET I = I + 1\n60 GOTO 30\n70 PRINT S";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "15\n");
+  let basicRun = runBasic(src);
+  assert.equal(basicRun.status, 0, basicRun.stderr);
+  assert.equal(basicRun.stdout, "15\n");
+});
+
+test("BASIC -> JS: a GOTO chain jumps forward and backward through multiple cases (A7)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 GOTO 50\n20 PRINT \"b\"\n30 END\n50 PRINT \"a\"\n60 GOTO 20";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "a\nb\n");
+  let basicRun = runBasic(src);
+  assert.equal(basicRun.status, 0, basicRun.stderr);
+  assert.equal(basicRun.stdout, "a\nb\n");
+});
+
+test("BASIC -> JS: a GOTO escapes out of a FOR loop mid-body (A7)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 FOR I = 1 TO 10\n20 IF I = 3 THEN GOTO 60\n30 NEXT I\n40 PRINT \"done\"\n60 PRINT \"escaped\"";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "escaped\n");
+  let basicRun = runBasic(src);
+  assert.equal(basicRun.status, 0, basicRun.stderr);
+  assert.equal(basicRun.stdout, "escaped\n");
+});
+
+test("BASIC -> JS: a GOTO after a zero-pass FOR still fires (A7)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 FOR I = 1 TO 0\n20 NEXT I\n30 GOTO 50\n40 PRINT \"skipped\"\n50 PRINT \"end\"";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "end\n");
+  let basicRun = runBasic(src);
+  assert.equal(basicRun.status, 0, basicRun.stderr);
+  assert.equal(basicRun.stdout, "end\n");
+});
+
+test("BASIC -> JS: a GOTO on a multi-statement line jumps from mid-line (A7)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 PRINT \"start\": GOTO 30\n20 PRINT \"hidden\"\n30 PRINT \"landed\"";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, true, JSON.stringify(out.report.unsupported));
+  let run = runNode(out.code);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, "start\nlanded\n");
+  let basicRun = runBasic(src);
+  assert.equal(basicRun.status, 0, basicRun.stderr);
+  assert.equal(basicRun.stdout, "start\nlanded\n");
+});
+
+test("BASIC -> JS: a GOTO into a loop body stays a loud stub (A7)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 FOR I = 1 TO 3\n20 PRINT I\n30 NEXT I\n40 GOTO 20\n50 END";
   let out = Iroh.translate(src, { from: "basic", to: "javascript" });
   assert.equal(out.report.ok, false);
   assert.equal(out.report.unsupported[0].construct, "GOTO");
+  assert.match(out.report.unsupported[0].message, /inside a loop body in the v1 scope/);
+});
+
+test("BASIC -> JS: a GOTO targeting a GOSUB subroutine line stays a loud stub (A7)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 GOSUB 40\n20 END\n40 PRINT \"sub\"\n50 RETURN\n60 GOTO 40";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, false);
+  assert.equal(out.report.unsupported[0].construct, "GOTO");
+  assert.match(out.report.unsupported[0].message, /GOSUB subroutine lives there/);
+});
+
+test("BASIC -> JS: a GOTO inside a GOSUB subroutine stays a loud stub (A7)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 GOSUB 30\n20 END\n30 PRINT \"s\"\n40 GOTO 20\n50 RETURN";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, false);
+  assert.equal(out.report.unsupported[0].construct, "GOTO");
+  assert.match(out.report.unsupported[0].message, /inside a GOSUB subroutine/);
+});
+
+test("BASIC -> JS: a GOTO to an undefined line stays a loud stub (A7)", { skip: !HAS_PYTHON }, () => {
+  let src = "10 GOTO 999\n20 PRINT \"x\"";
+  let out = Iroh.translate(src, { from: "basic", to: "javascript" });
+  assert.equal(out.report.ok, false);
+  assert.equal(out.report.unsupported[0].construct, "GOTO");
+  assert.match(out.report.unsupported[0].message, /GOTO line 999 does not exist/);
 });
 
 // ------------------------------------------------------------------

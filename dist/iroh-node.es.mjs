@@ -21797,8 +21797,9 @@ function translateFromCpp(code) {
 //     (staticOnly: true).
 //   BASIC -> JavaScript: the BASIC parse tree (from basic.py, via
 //     python3) is walked statically (staticOnly: true). GOSUB
-//     subroutines become functions; GOTO is not in the v1 scope and
-//     is a loud stub (the pc-dispatch transform is the follow-up).
+//     subroutines become functions; a GOTO lowers through the
+//     program-counter dispatch machine (Amendment A7) — a jump into
+//     a loop body or a subroutine is a loud stub, not a guess.
 //   JavaScript -> IrohScript / BASIC: the JS emitter below walks the
 //     Acorn AST with trace evidence, the way the Python/C++ legs do
 //     (hybrid, staticOnly: false). IrohScript has no for-loop and no
@@ -22053,8 +22054,10 @@ function makeIrohAstJSEmitter(report) {
 // BASIC parse tree (JSON lists, from basic.py) -> JavaScript.
 // Static-only. The program is flattened into slots in line order;
 // GOSUB subroutines become hoisted functions, FOR/NEXT becomes a
-// for loop, GOTO is not in the v1 scope (the pc-dispatch transform
-// is the follow-up) and is a loud stub.
+// for loop, and a program containing a GOTO lowers its mainline
+// through the pc-dispatch machine (Amendment A7): __pc walks the
+// slots the way basic.py's interpreter walks them, one case per
+// basic block. What the machine cannot represent stays a loud stub.
 function makeBasicJSEmitter(report) {
   let lines = [];
   let indentLevel = 0;
@@ -22065,6 +22068,14 @@ function makeBasicJSEmitter(report) {
   let noted = {};
   let subTargets = [];
   let stepCounter = 0;
+  // Amendment A7: pc-dispatch plan, set by run() when the program
+  // contains a GOTO. byTarget maps each GOTO target line to
+  // { slot, ok, reason }; caseStarts are the flat slots the machine
+  // opens cases at (the valid labels plus the mainline start);
+  // decls collects program-wide names for the `var` hoist (a case
+  // can be re-entered, so `let` inside the machine would redeclare).
+  let gotoPlan = null;
+  let curInSub = false;
   function indentStr() { return "  ".repeat(indentLevel); }
   function emitLine(text) { lines.push(indentStr() + text); }
   function noteOnce(key, text) {
@@ -22073,6 +22084,16 @@ function makeBasicJSEmitter(report) {
   function stubStmt(detail, construct) {
     markUnsupported(report, construct, detail);
     emitLine("throw new Error(" + JSON.stringify("IrohRedux: " + detail) + ");");
+  }
+  // Declaration sites in dispatch mode: the machine can re-enter a
+  // case, so main-flow declarations hoist as `var` ahead of it and
+  // the site itself becomes a bare assignment. Subroutine bodies
+  // keep their function-scoped `let` (a fresh scope per call).
+  function dispatchDecl() {
+    return !!gotoPlan && !curInSub;
+  }
+  function hoistDecl(name) {
+    if (gotoPlan && !curInSub) gotoPlan.decls.push(name);
   }
   let BIN_PREC = { OR: 1, AND: 2, "=": 3, "<>": 3, "<": 3, "<=": 3, ">": 3, ">=": 3, "+": 4, "-": 4, "*": 5, "/": 5, "%": 5 };
   function exprPrec(node) {
@@ -22147,6 +22168,7 @@ function makeBasicJSEmitter(report) {
   // `isFlat` is true when `items` is the program's flat slot array
   // (so subroutine ranges are skipped there, never inside a branch).
   function emitSeq(items, from, to, subRanges, inSub, isFlat) {
+    curInSub = inSub;
     let ii = from;
     while (ii < to) {
       if (isFlat) {
@@ -22162,7 +22184,8 @@ function makeBasicJSEmitter(report) {
       if (kind === "rem") { ii += 1; continue; }
       if (kind === "let") {
         counts.variables += 1;
-        if (!declared[s[1]]) { declared[s[1]] = true; emitLine("let " + s[1] + " = " + expr(s[2], 0) + ";"); }
+        hoistDecl(s[1]);
+        if (!declared[s[1]]) { declared[s[1]] = true; emitLine((dispatchDecl() ? "" : "let ") + s[1] + " = " + expr(s[2], 0) + ";"); }
         else emitLine(s[1] + " = " + expr(s[2], 0) + ";");
         ii += 1;
         continue;
@@ -22184,7 +22207,8 @@ function makeBasicJSEmitter(report) {
         needs.dim = true;
         let fill = s[1].charAt(s[1].length - 1) === "$" ? '""' : "0";
         let sizes = s[2].map(function(e) { return expr(e, 0); }).join(", ");
-        if (!declared[s[1]]) { declared[s[1]] = true; emitLine("let " + s[1] + " = __basic_dim([" + sizes + "], " + fill + ");"); }
+        hoistDecl(s[1]);
+        if (!declared[s[1]]) { declared[s[1]] = true; emitLine((dispatchDecl() ? "" : "let ") + s[1] + " = __basic_dim([" + sizes + "], " + fill + ");"); }
         else emitLine(s[1] + " = __basic_dim([" + sizes + "], " + fill + ");");
         ii += 1;
         continue;
@@ -22196,11 +22220,12 @@ function makeBasicJSEmitter(report) {
           let name = s[2][jj];
           let prompt = jj === 0 ? s[1] : null;
           let call = "__basic_input(" + (prompt === null ? "null" : JSON.stringify(prompt)) + ")";
+          hoistDecl(name);
           if (name.charAt(name.length - 1) === "$") {
-            if (!declared[name]) { declared[name] = true; emitLine("let " + name + " = " + call + ";"); }
+            if (!declared[name]) { declared[name] = true; emitLine((dispatchDecl() ? "" : "let ") + name + " = " + call + ";"); }
             else emitLine(name + " = " + call + ";");
           } else {
-            if (!declared[name]) { declared[name] = true; emitLine("let " + name + " = Number(" + call + ");"); }
+            if (!declared[name]) { declared[name] = true; emitLine((dispatchDecl() ? "" : "let ") + name + " = Number(" + call + ");"); }
             else emitLine(name + " = Number(" + call + ");");
           }
         }
@@ -22241,7 +22266,8 @@ function makeBasicJSEmitter(report) {
           continue;
         }
         let varName = s[1];
-        if (!declared[varName]) { declared[varName] = true; emitLine("let " + varName + ";"); }
+        hoistDecl(varName);
+        if (!declared[varName]) { declared[varName] = true; emitLine((dispatchDecl() ? "" : "let ") + varName + ";"); }
         let stepExpr = s[4] === null || s[4] === void 0 ? "1" : expr(s[4], 0);
         let stepVal = s[4] === null || s[4] === void 0 ? 1 : (s[4][0] === "num" ? s[4][1] : null);
         let stepIsLiteral = stepVal !== null;
@@ -22254,7 +22280,7 @@ function makeBasicJSEmitter(report) {
           stepName = "__basic_step_" + stepCounter;
           test = "(" + stepName + " >= 0 ? " + varName + " <= " + expr(s[3], 0) + " : " + varName + " >= " + expr(s[3], 0) + ")";
         }
-        if (!stepIsLiteral) emitLine("let " + stepName + " = " + stepExpr + ";");
+        if (!stepIsLiteral) { hoistDecl(stepName); emitLine((dispatchDecl() ? "" : "let ") + stepName + " = " + stepExpr + ";"); }
         emitLine("for (" + varName + " = " + expr(s[2], 0) + "; " + test + "; " + varName + " += " + (stepIsLiteral ? stepExpr : stepName) + ") {");
         indentLevel += 1;
         emitSeq(items, ii + 1, nextIdx, subRanges, inSub, isFlat);
@@ -22313,7 +22339,24 @@ function makeBasicJSEmitter(report) {
         continue;
       }
       if (kind === "goto") {
-        stubStmt("GOTO line " + s[1] + " is not in the v1 scope (the pc-dispatch transform is the follow-up)", "GOTO");
+        // Amendment A7 (2026-11-22): a GOTO lowers through the
+        // program-counter dispatch machine (a __pcw while/switch),
+        // the transform the v1 stub always named as the follow-up.
+        // The plan is computed in run(): anything the machine
+        // cannot represent (a jump into a loop body or a GOSUB
+        // subroutine) stays a loud stub, never a silent guess.
+        if (gotoPlan && !inSub) {
+          let ti = gotoPlan.byTarget[s[1]];
+          if (ti && ti.ok) {
+            emitLine("__pc = " + ti.slot + "; continue __pcw;");
+            return to; // dead code after an unconditional jump in this range
+          }
+          stubStmt(ti ? ti.reason : "GOTO line " + s[1] + " is not in the v1 scope", "GOTO");
+        } else if (gotoPlan && inSub) {
+          stubStmt("a GOTO inside a GOSUB subroutine is not in the v1 scope (it cannot leave the subroutine)", "GOTO");
+        } else {
+          stubStmt("GOTO line " + s[1] + " is not in the v1 scope (the pc-dispatch transform is the follow-up)", "GOTO");
+        }
         ii += 1;
         continue;
       }
@@ -22337,6 +22380,120 @@ function makeBasicJSEmitter(report) {
     let items = [];
     for (let ii = 0; ii < stmts.length; ++ii) items.push({ stmt: stmts[ii] });
     emitSeq(items, 0, items.length, subRanges, inSub, false);
+  }
+  // -------------------------------------------------- A7 pc-dispatch
+  // A GOTO statement can appear as a top-level slot ("goto", n) or
+  // as the IF shortcut (if, cond, [("goto", n)], null); nested IF
+  // parts can carry the shortcut too, so the scan recurses.
+  function collectIfGotos(stmts, acc) {
+    if (!stmts) return acc;
+    for (let ii = 0; ii < stmts.length; ++ii) {
+      let st = stmts[ii];
+      if (!st) continue;
+      if (st[0] === "goto") acc.push(st[1]);
+      if (st[0] === "if") { collectIfGotos(st[2], acc); collectIfGotos(st[3], acc); }
+    }
+    return acc;
+  }
+  function makeGotoPlan(flat, lineMap, subRanges) {
+    let targets = [];
+    for (let ii = 0; ii < flat.length; ++ii) {
+      if (flat[ii].stmt[0] === "goto") targets.push(flat[ii].stmt[1]);
+      if (flat[ii].stmt[0] === "if") { collectIfGotos(flat[ii].stmt[2], targets); collectIfGotos(flat[ii].stmt[3], targets); }
+    }
+    if (targets.length === 0) return null;
+    let subs = Object.keys(subRanges).map(function(k) { return subRanges[k]; });
+    // Loop pairs, the way basic.py's load() pairs FOR/NEXT and
+    // WHILE/WEND by nesting. A jump target inside a pair's body
+    // (after the header, through the NEXT/WEND) is not
+    // representable — the body lowers to structured JavaScript —
+    // so it stays a loud stub.
+    let pairs = [];
+    let fstack = [];
+    let wstack = [];
+    for (let ii = 0; ii < flat.length; ++ii) {
+      let k = flat[ii].stmt[0];
+      if (k === "for") fstack.push(ii);
+      else if (k === "next" && fstack.length) pairs.push([fstack.pop(), ii]);
+      else if (k === "while") wstack.push(ii);
+      else if (k === "wend" && wstack.length) pairs.push([wstack.pop(), ii]);
+    }
+    let byTarget = {};
+    let caseSet = {};
+    for (let ii = 0; ii < targets.length; ++ii) {
+      let t = targets[ii];
+      if (byTarget[t] !== void 0) continue;
+      let slot = lineMap[t];
+      if (slot === void 0) {
+        byTarget[t] = { slot: -1, ok: false, reason: "GOTO line " + t + " does not exist" };
+        continue;
+      }
+      let inSub = false;
+      for (let kk = 0; kk < subs.length; ++kk) {
+        if (slot >= subs[kk].start && slot < subs[kk].end) { inSub = true; break; }
+      }
+      if (inSub) {
+        byTarget[t] = { slot: slot, ok: false, reason: "a GOTO cannot target line " + t + " because the GOSUB subroutine lives there (subroutines lower to functions, so the line cannot be jumped into in the v1 scope)" };
+        continue;
+      }
+      let inBody = false;
+      for (let kk = 0; kk < pairs.length; ++kk) {
+        if (slot > pairs[kk][0] && slot <= pairs[kk][1]) { inBody = true; break; }
+      }
+      if (inBody) {
+        byTarget[t] = { slot: slot, ok: false, reason: "a GOTO cannot target line " + t + " inside a loop body in the v1 scope (the body lowers to structured JavaScript; entering it without the loop header is not representable)" };
+        continue;
+      }
+      byTarget[t] = { slot: slot, ok: true };
+      caseSet[slot] = true;
+    }
+    // The machine's first case is the first main-flow slot (the
+    // sub-ranges are hoisted functions above it).
+    let mainStart = 0;
+    for (; mainStart < flat.length; ++mainStart) {
+      let inside = false;
+      for (let kk = 0; kk < subs.length; ++kk) {
+        if (mainStart >= subs[kk].start && mainStart < subs[kk].end) { inside = true; break; }
+      }
+      if (!inside) break;
+    }
+    let caseStarts = Object.keys(caseSet).map(Number).sort(function(a, b) { return a - b; });
+    for (let ii = caseStarts.length - 1; ii >= 0; --ii) if (caseStarts[ii] === mainStart) caseStarts.splice(ii, 1);
+    caseStarts.unshift(mainStart);
+    return { byTarget: byTarget, caseStarts: caseStarts, decls: [] };
+  }
+  function emitDispatch(flat, subRanges, plan) {
+    if (plan.declSpliceAt === void 0) plan.declSpliceAt = lines.length;
+    emitLine("// pc-dispatch machine (Amendment A7): __pc walks the flat line slots, the way");
+    emitLine("// basic.py's interpreter does; a GOTO is a jump of __pc, nothing more.");
+    emitLine("var __pc = " + plan.caseStarts[0] + ";");
+    emitLine("__pcw: while (true) {");
+    indentLevel += 1;
+    emitLine("switch (__pc) {");
+    indentLevel += 1;
+    for (let ii = 0; ii < plan.caseStarts.length; ++ii) {
+      let start = plan.caseStarts[ii];
+      let next = ii + 1 < plan.caseStarts.length ? plan.caseStarts[ii + 1] : flat.length;
+      let cmt = (flat[start].line !== null && flat[start].line !== void 0) ? "  // line " + flat[start].line : "";
+      emitLine("case " + start + ":" + cmt);
+      emitSeq(flat, start, next, subRanges, false, true);
+      if (ii + 1 < plan.caseStarts.length) emitLine("__pc = " + next + "; continue __pcw;");
+      else emitLine("break __pcw;");
+    }
+    emitLine("default: break __pcw;");
+    indentLevel -= 1;
+    emitLine("}");
+    indentLevel -= 1;
+    emitLine("}");
+    // Hoist the machine's declarations ahead of it: a case can be
+    // re-entered, and a `let` inside the machine would redeclare.
+    let seen = {};
+    let decls = [];
+    for (let ii = 0; ii < plan.decls.length; ++ii) {
+      let n = plan.decls[ii];
+      if (!seen[n]) { seen[n] = true; decls.push("var " + n + ";"); }
+    }
+    if (decls.length > 0) lines.splice.apply(lines, [plan.declSpliceAt, 0].concat(decls));
   }
   function run(prog) {
     let flat = [];
@@ -22367,6 +22524,13 @@ function makeBasicJSEmitter(report) {
       subRanges[target] = { start: start, end: end };
       counts.functions += 1;
     }
+    // Amendment A7 (2026-11-22): the plan is computed before any
+    // emission (a GOTO inside a subroutine body reports against
+    // the plan too), and the interpreter is a pc machine — basic.py
+    // walks _slots with pc arithmetic — so the machine mirrors it:
+    // one case per basic block, a case start exactly at every valid
+    // GOTO target's line slot, __pc the program counter.
+    gotoPlan = makeGotoPlan(flat, lineMap, subRanges);
     for (let ii = 0; ii < gosubTargets.length; ++ii) {
       let target = gosubTargets[ii];
       let range = subRanges[target];
@@ -22379,9 +22543,14 @@ function makeBasicJSEmitter(report) {
     }
     if (gosubTargets.length > 0) lines.push("");
     subTargets = gosubTargets;
+    if (gotoPlan) {
+      noteOnce("goto-dispatch", "the BASIC program uses GOTO: the mainline lowers to a program-counter dispatch machine (a __pcw while/switch on __pc); a jump into a loop body or a GOSUB subroutine, a GOTO inside a subroutine, and a GOTO to an undefined line stay loud stubs in the v1 scope");
+      emitDispatch(flat, subRanges, gotoPlan);
+    } else {
     // Mainline: one pass over the flat slots; emitSeq skips the
     // subroutine ranges itself.
-    emitSeq(flat, 0, flat.length, subRanges, false, true);
+      emitSeq(flat, 0, flat.length, subRanges, false, true);
+    }
     let header = [];
     if (needs.pymod) {
       header.push("function __iroh_pymod(a, b) { return ((a % b) + b) % b; }");
