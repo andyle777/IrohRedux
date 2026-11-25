@@ -1,0 +1,22 @@
+{
+  "format": "iroh.release-lineage.v1",
+  "version": "1.2.1",
+  "base": "78a5fc5065fbb5d733315c9defd9a4f25f5931b0",
+  "maintenanceSources": [
+    {
+      "branch": "1.0.1-patch",
+      "sha": "d39715df9c30b13d6aa3034c6050e4d87a74898d"
+    },
+    {
+      "branch": "1.1.0-patch",
+      "sha": "0814ebecea47d15f505c51a5a5bd25e6c0d6bdae"
+    },
+    {
+      "branch": "1.1.1-patch",
+      "sha": "20b5696619e70b94b28bdc84c9f2067898ba2ef4"
+    }
+  ],
+  "strategy": "selective forward integration; not a literal Git merge",
+  "status": "candidate",
+  "releaseArtifacts": "not published"
+}

@@ -1,8 +1,10 @@
+> **1.2.1 OmniBridge integration candidate:** combines maintenance lineages on the newer engine. See [release lineage](RELEASE-LINEAGE.md) and [AI integration](integrations/README.md). No 1.2.1 tag or binary has been published. Use trusted code only.
+
 ![IrohRedux — Watch your code run. Change it while it runs.](assets/banner.png)
 
 <p align="center">
   <a href="https://github.com/andyle777/IrohRedux/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/version-1.1.1-orange.svg?style=flat-square" alt="Version 1.1.1" />
+  <img src="https://img.shields.io/badge/version-1.2.1-orange.svg?style=flat-square" alt="Version 1.2.1" />
   <img src="https://img.shields.io/badge/node-%3E%3D%2022-339933.svg?style=flat-square" alt="Node >= 22" />
   <img src="https://img.shields.io/badge/python-%3E%3D%203.9-3776AB.svg?style=flat-square" alt="Python >= 3.9" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg?style=flat-square" alt="C++17" />
@@ -77,7 +79,7 @@ Works offline — no network required. Nothing in the app or the
 binaries phones home, checks for updates, or downloads at first run.
 The APK manifest does not even request internet permission.
 
-## Download — 1.1.1 patched (current)
+## Historical downloads — 1.1.1 patched
 
 Direct links to the [v1.1.1 release](https://github.com/andyle777/IrohRedux/releases/tag/v1.1.1). These are the patched assets, re-uploaded to the existing release — no new version, no new tag.
 
@@ -328,7 +330,7 @@ Honest limits, in one place.
 
 Newest first. Hashes live on the release page, not in this file.
 
-- **1.1.1 (patched, 20 Nov 2026) — this tree.** Same version,
+- **1.1.1 (patched, 20 Nov 2026) — historical generation.** Same version,
   patched in place: no 1.1.2, no version bump. The Python
   translator no longer emits f-strings for template literals
   (concatenation instead — the old output was a SyntaxError on
@@ -368,7 +370,7 @@ Newest first. Hashes live on the release page, not in this file.
 
 Dated 20 Nov 2026. "Present" means the defect is in that
 generation as shipped; "patched" means fixed in the 1.1.1 patched
-rebuild (same version, this tree). The machine-readable form is
+rebuild (same historical version). The machine-readable form is
 `generations.json` in this repo.
 
 | Defect | 1.0.1 | 1.1.0 | 1.1.1 | 1.1.1 patched |
@@ -426,8 +428,7 @@ fact here disagrees with a prose paragraph above, this section wins
 
 ## Engine identity
 
-- Engine: IrohRedux 1.1.1 (patched in place, 20 Nov 2026).
-  No 1.1.2. No version bump.
+- Engine: IrohRedux 1.2.1 source candidate.
 - `dist/iroh-node.js` SHA-256:
   `57e042c374ccc377b4250631fee507bda4bffda94ed9776ca168e09d7f48a46a`
 - The dist is self-contained: the parser and codegen dependencies
@@ -435,7 +436,7 @@ fact here disagrees with a prose paragraph above, this section wins
   runtime. A fresh source checkout runs the CLI with no npm install,
   so a restricted AI sandbox needs nothing but Node on PATH:
   `node cli/iroh.js program.js --analyze`
-- `iroh --version` prints `iroh 1.1.1 (engine dist iroh-node.js
+- `iroh --version` prints `iroh 1.2.1 (engine dist iroh-node.js
   57e042c374cc, runtime node v18.5.0)` inside a packaged binary
   (runtime is the embedded Node; on npm it is the local node).
 - `iroh doctor` prints the dist hashes, the toolchains, the last

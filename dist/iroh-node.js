@@ -12,7 +12,7 @@ function extend(cls, prot) {
     }
   }}
 
-var version$1="1.1.1";
+var version$1="1.2.1";
 
 // indent factor
 const INDENT_FACTOR = 1;

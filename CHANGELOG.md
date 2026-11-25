@@ -1,3 +1,9 @@
+## 1.2.1 — OmniBridge integration candidate (25 Nov 2026)
+
+- Forward-port native runner limits from 1.0.1/1.1.0; retain latest 1.1.1 engine, worker hardening, capability tests and security workflows.
+- Ten-platform local bridge, function declarations, MCP subset and text handoff.
+- Align npm, Python and generated engine versions. Source candidate; live provider integration, sandboxing and release binaries not certified.
+
 # Changelog
 
 ## Unreleased

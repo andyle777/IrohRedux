@@ -1,7 +1,7 @@
 {
   "format": "iroh.generations.v1",
-  "asOf": "2026-11-20",
-  "current": "1.1.1-patched",
+  "asOf": "2026-11-25",
+  "current": "1.2.1",
   "generations": [
     {
       "id": "1.0.1",
@@ -26,8 +26,14 @@
       "version": "1.1.1",
       "label": "1.1.1 patched",
       "tests": 716,
-      "current": true,
       "note": "Patched in place; no 1.1.2 version or new tag."
+    },
+    {
+      "id": "1.2.1",
+      "version": "1.2.1",
+      "label": "1.2.1 OmniBridge integration candidate",
+      "current": true,
+      "note": "Selective forward port; live provider and release binaries not verified."
     }
   ],
   "defects": [
@@ -38,7 +44,8 @@
         "1.0.1": "present",
         "1.1.0": "present",
         "1.1.1": "present",
-        "1.1.1-patched": "fixed (Fix B)"
+        "1.1.1-patched": "fixed (Fix B)",
+        "1.2.1": "not independently verified"
       }
     },
     {
@@ -48,7 +55,8 @@
         "1.0.1": "present",
         "1.1.0": "present",
         "1.1.1": "fixed",
-        "1.1.1-patched": "fixed"
+        "1.1.1-patched": "fixed",
+        "1.2.1": "not independently verified"
       }
     },
     {
@@ -58,7 +66,8 @@
         "1.0.1": "present",
         "1.1.0": "present",
         "1.1.1": "present",
-        "1.1.1-patched": "fixed (concatenation)"
+        "1.1.1-patched": "fixed (concatenation)",
+        "1.2.1": "not independently verified"
       }
     },
     {
@@ -68,7 +77,8 @@
         "1.0.1": "present",
         "1.1.0": "present",
         "1.1.1": "present",
-        "1.1.1-patched": "fixed"
+        "1.1.1-patched": "fixed",
+        "1.2.1": "not independently verified"
       }
     },
     {
@@ -78,7 +88,8 @@
         "1.0.1": "unchecked",
         "1.1.0": "unchecked",
         "1.1.1": "verified",
-        "1.1.1-patched": "stated honestly by doctor, --version, and README"
+        "1.1.1-patched": "stated honestly by doctor, --version, and README",
+        "1.2.1": "not independently verified"
       }
     },
     {
@@ -88,7 +99,8 @@
         "1.0.1": "unchecked",
         "1.1.0": "unchecked",
         "1.1.1": "verified",
-        "1.1.1-patched": "fixed (generated from API.md and checked in CI)"
+        "1.1.1-patched": "fixed (generated from API.md and checked in CI)",
+        "1.2.1": "not independently verified"
       }
     },
     {
@@ -98,7 +110,8 @@
         "1.0.1": "present",
         "1.1.0": "present",
         "1.1.1": "present",
-        "1.1.1-patched": "fixed"
+        "1.1.1-patched": "fixed",
+        "1.2.1": "not independently verified"
       }
     },
     {
@@ -108,7 +121,8 @@
         "1.0.1": "present",
         "1.1.0": "present",
         "1.1.1": "present",
-        "1.1.1-patched": "present (unchanged)"
+        "1.1.1-patched": "present (unchanged)",
+        "1.2.1": "not independently verified"
       }
     }
   ]

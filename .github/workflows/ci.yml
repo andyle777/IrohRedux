@@ -27,6 +27,8 @@ jobs:
           python-version: "3.12"
       - run: npm ci
       - run: npm test
+      - name: Native bounds and version parity
+        run: node --test tests/native-bounds.test.cjs tests/release-version.test.cjs
       - name: AI interoperability contract and local execution
         run: node --test tests/ai-bridge.test.cjs
       - run: npm run check:summary

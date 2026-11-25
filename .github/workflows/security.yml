@@ -42,7 +42,7 @@ jobs:
           python-version: "3.12"
       - run: npm ci
       - name: Run local server regressions
-        run: node --test tests/server.test.js
+        run: node --test tests/server.test.js tests/native-bounds.test.cjs tests/ai-bridge.test.cjs
       - name: Report verification scope
         if: always()
         run: |
