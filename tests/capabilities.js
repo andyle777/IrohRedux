@@ -6,7 +6,7 @@
 // Usage in a test file:
 //   const { skipIfMissing } = require("./capabilities");
 //   test("RegExp modifiers trace", (t) => {
-//     skipIfMissing(t, "regexpModifiers");
+//     if (!skipIfMissing(t, "regexpModifiers")) return;
 //     ...
 //   });
 
@@ -15,8 +15,8 @@ const { FEATURES, has, featureRows } = require("../lib/capabilities");
 // Skip the current test (via its context t) when the feature is
 // missing, with a reason naming the feature and the Node version
 // that has it. Returns true when the test should proceed, false
-// when it was skipped (t.skip throws a skip, so in practice this
-// either returns true or does not return at all).
+// when it was skipped. t.skip does not exit the test callback;
+// callers must return immediately when this helper returns false.
 function skipIfMissing(t, feature) {
   if (has(feature)) return true;
   let def = FEATURES[feature];

@@ -51,8 +51,13 @@ test("skipIfMissing does not skip when the feature is present", (t) => {
   // true and the test proceeds. The skip path (returning false via
   // t.skip) is exercised on Node 22, where the 8 Node-24 feature
   // tests skip with a reason naming the feature and Node 24.
-  assert.equal(skipIfMissing(t, "regexpModifiers"), true);
-  assert.equal(skipIfMissing(t, "usingDeclarations"), true);
+  for (const feature of ["regexpModifiers", "usingDeclarations"]) {
+    const reasons = [];
+    const result = skipIfMissing({ skip(reason) { reasons.push(reason); } }, feature);
+    assert.equal(result, has(feature));
+    assert.equal(reasons.length, result ? 0 : 1);
+    if (!result) assert.match(reasons[0], /needs Node/);
+  }
 });
 
 test("language legs report what is actually on PATH", () => {
