@@ -27,6 +27,8 @@ jobs:
           python-version: "3.12"
       - run: npm ci
       - run: npm test
+      - name: AI interoperability contract and local execution
+        run: node --test tests/ai-bridge.test.cjs
       - run: npm run check:summary
       - run: npm run check:dist
       - run: npm run test:types

@@ -1,0 +1,62 @@
+{
+  "format": "iroh.ai-bridge.v1",
+  "tools": [
+    {
+      "name": "iroh_capabilities",
+      "description": "Read actual local IrohRedux engine capabilities; does not execute supplied code.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "iroh_run",
+      "description": "Execute operator-approved trusted code using the local IrohRedux engine. All operations can execute code, including translation verification. Never submit untrusted code.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "trace",
+              "analyze",
+              "scan",
+              "translate"
+            ]
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "javascript",
+              "python",
+              "cpp",
+              "irohscript",
+              "basic"
+            ]
+          },
+          "code": {
+            "type": "string",
+            "maxLength": 65536
+          },
+          "target": {
+            "type": "string",
+            "enum": [
+              "javascript",
+              "python",
+              "cpp",
+              "irohscript",
+              "basic"
+            ]
+          }
+        },
+        "required": [
+          "operation",
+          "language",
+          "code"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}
