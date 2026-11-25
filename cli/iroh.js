@@ -128,7 +128,8 @@ const CXX = process.env.IROH_CXX || "g++";
 // ~4 MB of events and would die with ENOBUFS and zero events. 512 MiB
 // is far above any sane trace (and the run would OOM on events long
 // before that, since they are all held in memory anyway).
-const MAX_BUFFER = 512 * 1024 * 1024;
+const MAX_BUFFER = 64 * 1024 * 1024;
+const NATIVE_TIMEOUT_MS = 120000;
 const TRACE_PY = path.join(__dirname, "..", "python", "iroh", "trace.py");
 const CPP_RT = path.join(__dirname, "..", "cpp", "iroh_trace_rt.cpp");
 
@@ -226,6 +227,8 @@ function runPython(file, eventsArg) {
   let proc = spawnSync(PYTHON, [TRACE_PY, "--events", eventsArg, file], {
     encoding: "utf8",
     maxBuffer: MAX_BUFFER,
+      timeout: NATIVE_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     stdio: ["inherit", "pipe", "inherit"],
   });
   if (proc.error) {
@@ -258,6 +261,8 @@ function runCpp(file, eventsArg) {
     let rt = spawnSync(CXX, ["-std=c++17", "-O0", "-c", CPP_RT, "-o", rtObj], {
       encoding: "utf8",
       maxBuffer: MAX_BUFFER,
+      timeout: NATIVE_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     });
     if (rt.error) {
       return { events: [], result: null, error: errorLine(rt.error, "Could not run " + CXX + ": " + rt.error.message) };
@@ -268,6 +273,8 @@ function runCpp(file, eventsArg) {
     let comp = spawnSync(CXX, ["-std=c++17", "-O0", "-finstrument-functions", "-rdynamic", "-g", file, rtObj, "-o", bin, "-ldl"], {
       encoding: "utf8",
       maxBuffer: MAX_BUFFER,
+      timeout: NATIVE_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     });
     if (comp.error) {
       return { events: [], result: null, error: errorLine(comp.error, "Could not run " + CXX + ": " + comp.error.message) };
@@ -284,6 +291,8 @@ function runCpp(file, eventsArg) {
     let run = spawnSync(bin, [], {
       encoding: "utf8",
       maxBuffer: MAX_BUFFER,
+      timeout: NATIVE_TIMEOUT_MS,
+      killSignal: "SIGKILL",
       stdio: ["inherit", "pipe", "pipe"],
     });
     if (run.stdout) process.stderr.write(run.stdout);
