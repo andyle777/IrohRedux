@@ -1,0 +1,47 @@
+# Credential-free checks; no APIsec account or secrets.
+name: Security
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '19 6 * * 6'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Audit all locked dependencies (high and critical gate)
+        run: npm audit --audit-level=high
+
+  execution-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Verify native runner bound configuration
+        run: node --test tests/native-bounds.test.cjs
+      - name: Report verification scope
+        if: always()
+        run: |
+          echo "Native timeout/output configuration checks only; no distributed server in this generation."
+          echo "No external penetration test or OS sandbox verification."
