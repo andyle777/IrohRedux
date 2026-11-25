@@ -1,16 +1,11 @@
-# Security verification
+# Security workflow verification
 
-The repository's automated security workflow uses the public npm vulnerability advisory service and local server regression tests. It requires no APIsec account, credentials or project configuration.
+No APIsec account, secrets, paid scanner, or SARIF upload is required.
 
-Run locally with Node 24, Python 3 and the supported native toolchain:
+The Security workflow has independent dependency-audit and execution-regressions jobs. It audits all locked npm dependencies (including development dependencies), with a high/critical failure threshold. An unavailable advisory service is a failed audit. The audit installation disables lifecycle scripts. Workflow actions are pinned to the full commits observed in the successful earlier Security run, and checkout does not persist credentials.
 
-```sh
-npm ci
-npm audit --audit-level=high
-node --test tests/server.test.js
-npm test
-```
+The execution-regressions job runs the branch's existing server test suite on Node 24.  Full project CI remains separate and unchanged.
 
-The audit includes development dependencies and fails on high or critical advisories; lower severity findings are reported by npm. Network or audit-service errors are failures, not passes. The workflow does not certify absence of vulnerabilities and does not perform external API penetration testing.
+Pushes and pull requests run the checks; manual and weekly scheduled runs are also configured. GitHub scheduled workflows execute on the default branch, not independently on maintenance branches.
 
-The server executes trusted code only. OS isolation, complete process-tree containment, encrypted transport and independently verified release artifacts remain separate deployment requirements.
+These checks are not an external API penetration test, general static analysis, secret scanner, or OS sandbox certification. Execute only trusted code; independent containment, encrypted transport, release provenance and repository protection remain separate requirements.
