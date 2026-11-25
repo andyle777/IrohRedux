@@ -1,0 +1,39 @@
+# Credential-free security checks. No hosted API scanner or APIsec secrets.
+# These checks are not a substitute for sandboxing or external penetration testing.
+name: Security
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '19 6 * * 6'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Audit locked dependencies
+        run: npm audit --audit-level=high
+      - name: Run local server security regressions
+        run: node --test tests/server.test.js
+      - name: Report coverage boundary
+        if: always()
+        run: |
+          echo "Dependency audit and local server regression tests only."
+          echo "External API penetration testing and OS sandbox verification are not performed."
