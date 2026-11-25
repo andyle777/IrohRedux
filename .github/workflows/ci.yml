@@ -24,6 +24,7 @@ jobs:
           python-version: "3.12"
       - run: npm ci
       - run: npm test
+      - run: node --test tests/native-bounds.test.cjs
       - run: npm run test:types
       - run: npm run test:python
       - run: npm run test:cpp
