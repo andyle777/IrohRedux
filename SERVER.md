@@ -1,3 +1,5 @@
+> **Maintenance security notice:** This service is trusted-code only, not an OS sandbox. Default binding is now loopback; explicit non-loopback binding requires a token of at least 32 characters. HTTP is plaintext: use a trusted isolated network or authenticated encrypted tunnel. Updated workers require a server-issued session and per-job lease. Older workers and Android launchers may need updating. Execution concurrency is limited to four operations and captured output to 8 MiB per server-run leg. POSIX process-group termination is best effort, not complete isolation; Windows child-tree containment is not implemented. The historical examples below describe the original protocol and must not be used as a security guarantee.
+
 # IrohRedux server & node — the phone is a local server, the laptop is a local node
 
 Everything here runs on the local network only. No internet is
@@ -35,7 +37,7 @@ iroh serve [--port 8471] [--host 0.0.0.0] [--token T] [--timeout-ms 120000]
 ```
 
 - `--port` — default **8471**, override with `--port N`.
-- `--host` — default `0.0.0.0` (every local interface, so a laptop
+- `--host` — default `127.0.0.1`; explicitly select `0.0.0.0` with a strong token (every local interface, so a laptop
   on the same Wi-Fi reaches it). `--host 127.0.0.1` is loopback-only.
 - `--token` — when set, every executing route and every node route
   requires the header `x-iroh-token: <token>` (401 without it).
