@@ -31,12 +31,12 @@ test("RegExp v flag traces", () => {
 });
 
 test("RegExp modifiers trace", (t) => {
-  skipIfMissing(t, "regexpModifiers");
+  if (!skipIfMissing(t, "regexpModifiers")) return;
   assert.equal(run("const r = /(?i:a)b/; r.test('Ab');"), true);
 });
 
 test("using declarations trace, and disposal runs", (t) => {
-  skipIfMissing(t, "usingDeclarations");
+  if (!skipIfMissing(t, "usingDeclarations")) return;
   assert.equal(
     run("{ using x = { [Symbol.dispose]() { globalThis.__m1 = true; } }; 1; } globalThis.__m1;"),
     true
@@ -48,7 +48,7 @@ test("using declarations trace, and disposal runs", (t) => {
 });
 
 test("using declarations fire VAR events", (t) => {
-  skipIfMissing(t, "usingDeclarations");
+  if (!skipIfMissing(t, "usingDeclarations")) return;
   let stage = new Iroh.Stage("{ using x = { [Symbol.dispose]() {} }; 1; }");
   let names = [];
   stage.addListener(Iroh.VAR).on("before", (e) => names.push(e.name));
@@ -57,7 +57,7 @@ test("using declarations fire VAR events", (t) => {
 });
 
 test("await using traces", async (t) => {
-  skipIfMissing(t, "awaitUsing");
+  if (!skipIfMissing(t, "awaitUsing")) return;
   let result = await runAsync(
     "async function f() { await using x = { [Symbol.asyncDispose]() { return Promise.resolve(); } }; return 9; } f();"
   );
@@ -65,8 +65,6 @@ test("await using traces", async (t) => {
 });
 
 test("runtime features that needed no syntax change still trace", (t) => {
-  skipIfMissing(t, "promiseTry");
-  skipIfMissing(t, "regexpEscape");
   // Object.groupBy returns a null-prototype object, so compare through
   // JSON rather than deepEqual (which checks prototypes in strict mode).
   assert.deepEqual(
@@ -74,8 +72,16 @@ test("runtime features that needed no syntax change still trace", (t) => {
     { 0: [2], 1: [1, 3] }
   );
   assert.equal(run("[1,2,3].findLast(v => v > 1);"), 3);
-  assert.equal(run("Promise.try(() => 42);") instanceof Promise, true);
   assert.deepEqual(run("[1,2,3].values().map(v => v * 2).toArray();"), [2, 4, 6]);
+
+});
+
+test("Promise.try traces when supported", (t) => {
+  if (!skipIfMissing(t, "promiseTry")) return;
+  assert.equal(run("Promise.try(() => 42);") instanceof Promise, true);
+});
+test("RegExp.escape traces when supported", (t) => {
+  if (!skipIfMissing(t, "regexpEscape")) return;
   assert.equal(run("RegExp.escape('a+b');"), "\\x61\\+b");
 });
 
@@ -92,7 +98,7 @@ test("bare blocks return their completion value", () => {
 });
 
 test("Stage constructor honours parser options", (t) => {
-  skipIfMissing(t, "usingDeclarations");
+  if (!skipIfMissing(t, "usingDeclarations")) return;
   // The constructor used to take `opt` and silently drop it.
   let code = "function f() { using x = { [Symbol.dispose]() {} }; return 1; } f();";
   assert.throws(() => new Iroh.Stage(code, { ecmaVersion: 2022 }), { name: "SyntaxError" });
@@ -117,8 +123,7 @@ test("new on a non-constructor throws exactly like untraced code (OP_NEW parity)
   }
 });
 
-test("ES2026: the three features Node 24 already has trace correctly", async (t) => {
-  skipIfMissing(t, "errorIsError");
+test("ES2026: Array.fromAsync and JSON raw source trace correctly", async (t) => {
   // Array.fromAsync (Node 22+): async iterable -> array.
   assert.deepEqual(
     await runAsync("async function* gen() { yield 1; yield 2; yield 3; } Array.fromAsync(gen());"),
@@ -131,7 +136,10 @@ test("ES2026: the three features Node 24 already has trace correctly", async (t)
     run("JSON.parse('{\"n\": 9007199254740993}', (key, value, context) => key === 'n' ? context.source : value);"),
     { n: "9007199254740993" }
   );
-  // Error.isError (Node 24.3+).
+});
+
+test("ES2026: Error.isError traces when supported", (t) => {
+  if (!skipIfMissing(t, "errorIsError")) return;
   assert.deepEqual(
     run("[Error.isError(new Error('x')), Error.isError(new TypeError()), Error.isError({}), Error.isError('boom')];"),
     [true, true, false, false]
@@ -152,7 +160,7 @@ test("ES2026: calls to methods the runtime lacks throw the natural TypeError", (
   const missing = [
     ["Uint8Array.fromBase64('aGk=');", typeof Uint8Array.fromBase64],
     ["let m = new Map(); m.getOrInsert('k', 1);", typeof Map.prototype.getOrInsert],
-    ["Iterator.concat([1].values(), [2].values()).toArray();", typeof Iterator.concat],
+    ["Iterator.concat([1].values(), [2].values()).toArray();", typeof globalThis.Iterator?.concat],
     ["Math.sumPrecise([0.1, 0.2]);", typeof Math.sumPrecise],
   ];
   for (const [code, type] of missing) {
