@@ -26,13 +26,18 @@ jobs:
       APISEC_PASSWORD: ${{ secrets.apisec_password }}
 
     steps:
+      - name: Require configured IrohRedux target
+        env:
+          APISEC_PROJECT: ${{ vars.APISEC_PROJECT }}
+        run: |
+          test -n "$APISEC_USERNAME" && test -n "$APISEC_PASSWORD" && test "$APISEC_PROJECT" = "IrohRedux" || { echo "APIsec NOT VERIFIED: configure credentials and IrohRedux project"; exit 1; }
       - name: APIsec scan
         if: ${{ env.APISEC_USERNAME != '' && env.APISEC_PASSWORD != '' }}
         uses: apisec-inc/apisec-run-scan@025432089674a28ba8fb55f8ab06c10215e772ea
         with:
           apisec-username: ${{ secrets.apisec_username }}
           apisec-password: ${{ secrets.apisec_password }}
-          apisec-project: "VAmPI"
+          apisec-project: ${{ vars.APISEC_PROJECT }}
           sarif-result-file: "apisec-results.sarif"
 
       - name: Import results

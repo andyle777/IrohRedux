@@ -237,3 +237,18 @@ test("server: bad input is a 400, unknown routes are 404", async (t) => {
   let unknown = await request(handle.port, "GET", "/nope");
   assert.equal(unknown.status, 404);
 });
+
+
+test("security: unauthenticated non-loopback bind is refused", async () => {
+  await assert.rejects(async () => startServer({host:"0.0.0.0",port:0,quiet:true}), /token/);
+});
+test("security: worker polling requires its issued session", async t => {
+  const h = await startServer({port:0,quiet:true});
+  t.after(() => h.close());
+  assert.equal(h.host,"127.0.0.1");
+  const r = await request(h.port,"POST","/nodes",{id:"test-worker",legs:[]});
+  assert.equal(r.status,200);
+  assert.equal(typeof r.body.session,"string");
+  assert.equal((await request(h.port,"GET","/jobs?node=test-worker")).status,403);
+  assert.equal((await request(h.port,"POST","/nodes",{id:"test-worker",legs:[]})).status,409);
+});
