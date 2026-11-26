@@ -215,3 +215,14 @@ test("trace() with a bad maxEvents throws a clear error before running", () => {
   assert.throws(() => Iroh.trace("let x = 1; x;", { maxEvents: 1.5 }), /positive integer/);
   assert.throws(() => Iroh.trace("let x = 1; x;", { maxEvents: "100" }), /positive integer/);
 });
+
+test("trace() handles optional catch binding (catch without a parameter)", () => {
+  // Self-scan finding (26 Nov 2026): STAGE3.CatchClause walked
+  // `node.param` with no guard, and `catch {}` has param null — the
+  // whole trace threw. integrations/bridge.cjs uses `catch {}`.
+  let { events, result } = Iroh.trace(
+    `let caught = false;\ntry { throw new Error("x"); } catch { caught = true; }\ncaught;`
+  );
+  assert.equal(result, true);
+  assert.ok(events.length > 0);
+});
