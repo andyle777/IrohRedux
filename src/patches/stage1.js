@@ -172,7 +172,7 @@ STAGE1.FunctionDeclaration = function(node, patcher) {
   if (node.magic) {
     patcher.pushScope(node);
     // just walk
-    patcher.walk(node.id, patcher, patcher.stage);
+    if (node.id !== null) patcher.walk(node.id, patcher, patcher.stage);
     node.params.map((param) => { patcher.walk(param, patcher, patcher.stage); });
     patcher.walk(node.body, patcher, patcher.stage);
     patcher.popScope();
@@ -180,7 +180,22 @@ STAGE1.FunctionDeclaration = function(node, patcher) {
   }
   node.magic = true;
   patcher.pushScope(node);
-  let name = node.id.name;
+  // Anonymous default exports (`export default function() {}`) have
+  // no id: give them a synthetic one, the same way FunctionExpression
+  // does, so the patcher never reads `node.id.name` of null. The
+  // export still binds the function as the default; only its recorded
+  // name is synthetic. The uid is consumed only for the anonymous
+  // case, so named declarations keep their exact generated names.
+  let name;
+  if (node.id === null) {
+    name = "$$ANON_" + uid();
+    node.id = {
+      magic: true,
+      type: "Identifier",
+      name: name
+    };
+  }
+  name = node.id.name;
   patcher.symbols[name] = cloneNode(node);
   patcher.walk(node.id, patcher, patcher.stage);
   node.params.map((param) => { patcher.walk(param, patcher, patcher.stage); });
@@ -268,6 +283,21 @@ STAGE1.CallExpression = function(node, patcher) {
     });
     return;
   }
+  // A constructor `super(...)` call is stage5's job (it records the
+  // super index on the enclosing function and rewrites the arguments
+  // through DEBUG_SUPER). Stage1 must not rewrite it: resolveCallee
+  // would return the bare `super` node as the call object, and bare
+  // `super` as an argument is a SyntaxError ("'super' keyword
+  // unexpected here"). Walk the arguments so nested expressions are
+  // still patched, but leave the call itself alone and do not set
+  // magic — stage5 needs magic false to claim it.
+  if (node.callee && node.callee.type === "Super") {
+    patcher.walk(node.callee, patcher, patcher.stage);
+    node.arguments.map((arg) => {
+      patcher.walk(arg, patcher, patcher.stage);
+    });
+    return;
+  }
   node.magic = true;
   patcher.walk(node.callee, patcher, patcher.stage);
   node.arguments.map((arg) => {
@@ -280,6 +310,18 @@ STAGE1.CallExpression = function(node, patcher) {
     node: cloneNode(node)
   };
   let callee = resolveCallee(node.callee);
+  // A `super.m(...)` call: `super` is not a value and cannot be passed
+  // bare as the call object (SyntaxError, same as above). The receiver
+  // of a super call is `this`, and the callable is the member
+  // expression itself — `super.m` as an argument is a valid
+  // SuperProperty read. DEBUG_FUNCTION_CALL treats a function `call`
+  // argument as the callee and applies it to `object`, which is the
+  // same shape the private-method branch below already uses.
+  let isSuperCall = node.callee.type === "MemberExpression" &&
+    node.callee.object.type === "Super";
+  if (isSuperCall) {
+    callee = parseExpression("this");
+  }
   let call = {
     magic: true,
     type: "CallExpression",
@@ -294,6 +336,12 @@ STAGE1.CallExpression = function(node, patcher) {
       callee,
       (() => {
         if (node.callee.type === "MemberExpression") {
+          // super method call (`super.m()`): pass the member expression
+          // itself as the callee (see above) — `super.m` reads the
+          // parent method, and DEBUG_FUNCTION_CALL applies it to `this`.
+          if (node.callee.object.type === "Super") {
+            return node.callee;
+          }
           let property = node.callee.property;
           // identifier
           if (property.type === "Identifier") {
@@ -596,6 +644,19 @@ STAGE1.ObjectExpression = function(node, patcher) {
 
 STAGE1.MemberExpression = function(node, patcher) {
   if (node.magic) {
+    patcher.walk(node.object, patcher, patcher.stage);
+    patcher.walk(node.property, patcher, patcher.stage);
+    return;
+  }
+  // `super` is not a value: it is only legal as `super.prop` /
+  // `super[expr]`. Decomposing a super member into
+  // `DEBUG_MEMBER_EXPR(hash, super, "m").m` passes bare `super` as an
+  // argument, which is a SyntaxError. Leave super members native —
+  // no MEMBER event fires for the read, and a `super.m()` call is
+  // handled by the CallExpression handler instead (receiver `this`,
+  // callable the member itself). Same class of problem as the
+  // PrivateIdentifier case below.
+  if (node.object.type === "Super") {
     patcher.walk(node.object, patcher, patcher.stage);
     patcher.walk(node.property, patcher, patcher.stage);
     return;
