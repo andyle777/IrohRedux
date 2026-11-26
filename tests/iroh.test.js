@@ -102,6 +102,26 @@ test("class methods run without printing to stdout", () => {
   assert.deepEqual(lines, []);
 });
 
+test("super calls trace: super.m(), super(), super.m as a value, super[x]()", () => {
+  // Self-scan finding (26 Nov 2026): ANY code using `super` failed the
+  // whole trace with "'super' keyword unexpected here". `super` is not
+  // a value, so the patcher passing it bare as an argument to
+  // DEBUG_MEMBER_EXPR / DEBUG_FUNCTION_CALL is a SyntaxError in the
+  // generated code. The only class-inheritance test before this was a
+  // subclass that never called super, so the gap was invisible.
+  // super.m() — the receiver is `this`, the callable is `super.m`.
+  assert.equal(run(`class A { m() { return 1; } } class B extends A { m() { return super.m() + 1; } } new B().m();`), 2);
+  // super() in a constructor — stage5's DEBUG_SUPER path, left alone
+  // by stage1 so stage5 can claim it.
+  assert.equal(run(`class A { constructor() { this.x = 1; } } class B extends A { constructor() { super(); this.y = 2; } } const b = new B(); b.x + b.y;`), 3);
+  // super.m as a value (member read, left native — no MEMBER event).
+  assert.equal(run(`class A { m() { return 7; } } class B extends A { get() { return super.m; } } const b = new B(); b.get()();`), 7);
+  // computed super[x]().
+  assert.equal(run(`class A { m() { return 5; } } class B extends A { get() { let k = "m"; return super[k](); } } new B().get();`), 5);
+  // a three-deep chain: each super call must bind the right parent.
+  assert.equal(run(`class A { v() { return 10; } } class B extends A { v() { return super.v() + 1; } } class C extends B { v() { return super.v() + 1; } } new C().v();`), 12);
+});
+
 test("modern syntax: optional chaining, nullish, logical assignment", () => {
   assert.equal(run(`let o = { a: { b: 5 } }; o?.a?.b;`), 5);
   assert.equal(run(`let o = null; o?.a?.b;`), undefined);

@@ -407,6 +407,16 @@ let irohStagesUsers = 0;
 let irohStagesHadPrevious = false;
 let irohStagesPrevious = void 0;
 
+// Temp-file sequence for traceModule()/directModule(): never reset.
+// Stage keys repeat across traces in one process (resetPatchCounters
+// restores the uid counter per patch, for byte-stable hashes), so a
+// temp filename built from the stage key alone repeats too — and
+// Node's ESM loader caches modules by URL, so a repeat returns the
+// FIRST trace's module without executing the new code (a later trace
+// of the same file then "succeeds" with 0 events). The sequence keeps
+// every temp file URL unique while the stage key stays deterministic.
+let tracedModuleSeq = 0;
+
 // The import half of traceModule(), shared with directModule():
 // write the instrumented module to a temp .mjs file and dynamic-
 // import it, with the globalThis.__irohStages registry the generated
@@ -446,7 +456,7 @@ function importTracedModule(iroh, run, options) {
       dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-trace-"));
       ownDir = true;
     }
-    let file = path.join(dir, ".iroh-trace-" + run.stage.key + ".mjs");
+    let file = path.join(dir, ".iroh-trace-" + run.stage.key + "-" + (tracedModuleSeq++) + ".mjs");
     fs.writeFileSync(file, script, "utf8");
     // Register the stages object for the generated module's header.
     // Snapshot whatever was there (normally nothing) only when this
