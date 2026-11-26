@@ -185,6 +185,10 @@ function main() {
       path.join(stage, "txt", "API.txt"),
     ]);
 
+    for (const name of ["contract.json", "platforms.json", "README.md", "HANDOFF.md"]) {
+      copyFile(path.join(root, "integrations", name), path.join(stage, "integrations", name));
+    }
+
     const files = listFiles(stage).map((file) => ({
       path: path.relative(stage, file).split(path.sep).join("/"),
       sha256: sha256(fs.readFileSync(file)),

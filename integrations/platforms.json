@@ -1,0 +1,76 @@
+{
+  "format": "iroh.ai-platforms.v1",
+  "status": "adapter contract; live provider conformance not verified",
+  "platforms": [
+    {
+      "id": "mistral-vibe",
+      "name": "Mistral Vibe",
+      "primary": "local MCP stdio (legacy negotiation)",
+      "fallback": "JSON or handoff",
+      "source": "https://docs.mistral.ai/vibe/code/cli/mcp-servers"
+    },
+    {
+      "id": "chatgpt",
+      "name": "ChatGPT",
+      "primary": "text/file handoff; local host function adapter for OpenAI API",
+      "fallback": "remote MCP requires separately deployed authenticated service",
+      "source": "https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt"
+    },
+    {
+      "id": "muse",
+      "name": "Muse",
+      "primary": "host JSON/function adapter if supported by selected Muse harness",
+      "fallback": "text handoff",
+      "source": "https://www.musemuse.dev/docs/agent-frameworks"
+    },
+    {
+      "id": "ilands",
+      "name": "iLands",
+      "primary": "text handoff; local adapter through operator-managed BYOA where permitted",
+      "fallback": "no assumed native tool installation",
+      "source": "https://ilands.ai/platform"
+    },
+    {
+      "id": "grok",
+      "name": "Grok",
+      "primary": "host function adapter via API",
+      "fallback": "text handoff",
+      "source": "https://docs.x.ai/developers/tools/function-calling"
+    },
+    {
+      "id": "qwen",
+      "name": "Qwen",
+      "primary": "host function adapter via supported API",
+      "fallback": "text handoff",
+      "source": "https://docs.qwencloud.com/developer-guides/tool-calling/function-calling"
+    },
+    {
+      "id": "copilot",
+      "name": "GitHub Copilot",
+      "primary": "local MCP stdio (legacy negotiation)",
+      "fallback": "JSON or handoff",
+      "source": "https://code.visualstudio.com/docs/agent-customization/mcp-servers"
+    },
+    {
+      "id": "nomi",
+      "name": "Nomi AI",
+      "primary": "text handoff or operator-managed message relay",
+      "fallback": "no native tool execution assumed",
+      "source": "https://api.nomi.ai/docs/"
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini",
+      "primary": "Gemini CLI local MCP stdio; host API function adapter",
+      "fallback": "text handoff",
+      "source": "https://geminicli.com/docs/tools/mcp-server/"
+    },
+    {
+      "id": "kimi",
+      "name": "Kimi",
+      "primary": "host function adapter via supported API",
+      "fallback": "text handoff",
+      "source": "https://moonshot-ai.gitbook.io/moonshot-ai/getting-started-guide/use-kimi-api-for-tool-calls"
+    }
+  ]
+}
