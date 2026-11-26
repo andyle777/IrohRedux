@@ -177,10 +177,13 @@ test("server: a leg no node can run returns an honest 503, never a faked result"
 
 test("server+node: a Python leg delegated to a node matches a local run", async (t) => {
   let handle = await startServer({ host: "127.0.0.1", port: 0, longPollMs: 1000, quiet: true, localLegs: ["javascript"] });
-  t.after(() => handle.close());
   let nodeProc = spawn(process.execPath, [CLI, "node", "--server", "127.0.0.1:" + handle.port], {
     stdio: ["ignore", "pipe", "pipe"],
   });
+  // Teardown order matters (t.after runs in registration order):
+  // kill the node first, then close the server. Closing first
+  // used to hang: server.close() waits for the node's keep-alive
+  // long-poll socket, and the node re-polls on it at once.
   t.after(() => {
     try {
       nodeProc.kill("SIGTERM");
@@ -188,6 +191,7 @@ test("server+node: a Python leg delegated to a node matches a local run", async 
       // Already gone.
     }
   });
+  t.after(() => handle.close());
   // Wait until the server sees the node (registration is the proof
   // the long-poll loop is alive).
   await waitFor(async () => {
@@ -211,6 +215,47 @@ test("server+node: a Python leg delegated to a node matches a local run", async 
   }
   assert.deepEqual(stripHashes(res.body.events), stripHashes(local.events));
   assert.deepEqual(res.body.result, local.result);
+});
+
+test("server: close() resolves while a node is still long-polling", async (t) => {
+  // Regression: close() used to hang forever when a node was
+  // mid-poll, because server.close() waits for the keep-alive
+  // poll socket and the node re-polls on it at once. The node is
+  // deliberately left alive here — close() must resolve anyway.
+  let handle = await startServer({ host: "127.0.0.1", port: 0, longPollMs: 1000, quiet: true, localLegs: ["javascript"] });
+  let nodeProc = spawn(process.execPath, [CLI, "node", "--server", "127.0.0.1:" + handle.port], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  t.after(() => {
+    try { nodeProc.kill("SIGTERM"); } catch (e) { /* already gone */ }
+  });
+  await waitFor(async () => {
+    let health = await request(handle.port, "GET", "/health");
+    return health.body.nodes === 1;
+  }, 15000, "node registration");
+  // The node's first poll starts right after registration and is
+  // held for longPollMs (1000 ms), so 100 ms in it is definitely
+  // in flight — the state close() used to deadlock on.
+  await new Promise((r) => setTimeout(r, 100));
+  // Assert the race outcome, not the later state: a close() that
+  // only resolves once the node is killed must still fail here.
+  // The timeout is unref'd: a ref'd 10 s timer would hold the
+  // test file's process open for the full 10 s even after the
+  // test passes (the listening server keeps the loop alive until
+  // the race settles, so the timer still fires on old code).
+  let timer;
+  let outcome = await Promise.race([
+    handle.close().then(() => "closed"),
+    new Promise((r) => { timer = setTimeout(() => r("timeout"), 10000); if (timer.unref) timer.unref(); }),
+  ]);
+  if (outcome === "timeout") {
+    // Old code: close() never resolves while the node polls. Kill
+    // the node so the server can still shut down cleanly, then
+    // report the failure instead of hanging the file.
+    nodeProc.kill("SIGTERM");
+    await handle.close();
+  }
+  assert.equal(outcome, "closed", "handle.close() did not resolve while a node was polling");
 });
 
 test("server: --token requires x-iroh-token on executing routes, /health stays open", async (t) => {

@@ -27,6 +27,21 @@ test("trace events are identical even after tracing another program in between",
   assert.equal(JSON.stringify(again), JSON.stringify(first));
 });
 
+test("trace events are identical across two traces of a program that touches Iroh", () => {
+  // The program's `Iroh` is the engine instance itself: before the
+  // fix its MEMBER_EXPR event embedded the live singleton (stages
+  // map, assertion record), so two traces were never byte-identical.
+  // The serialized line now carries the stable token "[Iroh]".
+  let prog = "Iroh.assert(\"one is one\", 1 === 1); let x = 1; x;";
+  let first = Iroh.trace(prog);
+  let second = Iroh.trace(prog);
+  assert.equal(JSON.stringify(second), JSON.stringify(first));
+  let member = first.events.find((e) => e.event === "MEMBER_EXPR");
+  assert.ok(member);
+  assert.equal(member.object, "[Iroh]");
+  assert.ok(!JSON.stringify(first).includes("$$STx"), "serialized Iroh singleton leaked into the trace");
+});
+
 test("analyzeTrace output is identical across two calls in one process", () => {
   let first = Iroh.analyzeTrace(PROG);
   let second = Iroh.analyzeTrace(PROG);
