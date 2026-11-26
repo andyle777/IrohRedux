@@ -95,7 +95,11 @@ STAGE3.BlockStatement = function(node, patcher) {
 STAGE3.CatchClause = function(node, patcher) {
   if (node.magic) return;
   patcher.pushScope(node);
-  patcher.walk(node.param, patcher, patcher.stage);
+  // Optional catch binding (`catch {}`) has no param: walk it only
+  // when it exists, or the walker reads `.type` of null and the whole
+  // trace throws. The catch body is unaffected — there is simply no
+  // binding to declare.
+  if (node.param !== null) patcher.walk(node.param, patcher, patcher.stage);
   patcher.walk(node.body, patcher, patcher.stage);
 
   let hash = uBranchHash();
