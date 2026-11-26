@@ -48,7 +48,7 @@ function parseNodeOutput(text) {
       skips.push(m[1] + " — " + m[2]);
     }
     // TAP skip: `not ok N - <name> # SKIP <reason>`
-    else if ((m = line.match(/^not ok \d+ - (.+?) # SKIP (.*)$/))) {
+    else if ((m = line.match(/^(?:not )?ok \d+ - (.+?) # SKIP (.*)$/))) {
       skips.push(m[1] + " — " + m[2]);
     }
   }
