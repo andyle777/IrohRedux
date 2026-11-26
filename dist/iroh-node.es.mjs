@@ -14556,6 +14556,522 @@ let irohStagesPrevious = void 0;
 // every temp file URL unique while the stage key stays deterministic.
 let tracedModuleSeq = 0;
 
+// traceModule import-specifier rewriting (1.1.1): Node's ESM loader
+// rejects extensionless relative imports and JSON imports without
+// `with { type: "json" }`, and a JSON module only provides a default
+// export — so a traced module (or anything it imports) using those
+// forms fails at link time, even though the code is valid in the
+// bundler's eyes. The self-scan scratch copy fixed this by
+// hand-rewriting all 109 extensionless imports in the src tree;
+// traceModule now does the same rewrite itself, in the temp copy
+// only — the original files are never touched. The rewrite covers
+// the whole reachable graph, not just the traced file: a dependency
+// is loaded by Node as-is, so its own extensionless imports would
+// fail at the second hop. When nothing in the graph needs rewriting,
+// the current single-temp-file path is used unchanged. The rewrite
+// is best-effort: a file that does not parse is left alone, and the
+// trace then fails exactly as it would without the rewrite — never
+// a new failure mode.
+
+// Resolve a relative import specifier against the real filesystem:
+// "./foo" -> ./foo.js if that file exists, else ./foo/index.js.
+// Already-suffixed specifiers resolve as-is. Returns the absolute
+// path, or null when nothing on disk matches.
+function resolveRelativeTarget(fs, path, baseDir, spec) {
+  let candidate = path.resolve(baseDir, spec);
+  try {
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+  } catch (e) { /* fall through to the .js / index.js tries */ }
+  let withJs = candidate + ".js";
+  try {
+    if (fs.existsSync(withJs) && fs.statSync(withJs).isFile()) return withJs;
+  } catch (e) { /* fall through */ }
+  let indexJs = path.join(candidate, "index.js");
+  try {
+    if (fs.existsSync(indexJs) && fs.statSync(indexJs).isFile()) return indexJs;
+  } catch (e) { /* fall through */ }
+  return null;
+}
+
+// Resolve a bare specifier (a package name) to an absolute file path
+// through Node's own resolution, for use inside the mirror — the
+// mirror has no node_modules of its own. Returns null when it does
+// not resolve, or when it resolves to a builtin (which needs no
+// rewriting). Only used when a mirror is being built.
+function resolveBareSpecifier(ctx, baseDir, spec) {
+  try {
+    let req = ctx.createRequire(ctx.path.join(baseDir, "package.json"));
+    let resolved = req.resolve(spec);
+    if (typeof resolved !== "string" || !ctx.path.isAbsolute(resolved)) return null;
+    return resolved;
+  } catch (e) {
+    return null;
+  }
+}
+
+// The relative specifier from one file's directory to another,
+// always in ./x form so it stays relative in the mirror (the mirror
+// preserves absolute paths, so relative imports between mirrored
+// files resolve exactly as in the real tree).
+function relativeSpecifier(path, baseDir, absPath) {
+  let rel = path.relative(baseDir, absPath);
+  rel = rel.split(path.sep).join("/");
+  if (rel.charAt(0) !== ".") rel = "./" + rel;
+  return rel;
+}
+
+// Recursive AST walk: visit every node object. Acorn ASTs are trees
+// (no parent pointers), so plain recursion is safe. `loc` is skipped:
+// it only holds numbers.
+function walkAstNodes(node, visit) {
+  if (node === null || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (let ii = 0; ii < node.length; ++ii) walkAstNodes(node[ii], visit);
+    return;
+  }
+  visit(node);
+  let keys = Object.keys(node);
+  for (let ii = 0; ii < keys.length; ++ii) {
+    if (keys[ii] === "loc" || keys[ii] === "range") continue;
+    walkAstNodes(node[keys[ii]], visit);
+  }
+}
+
+// Does this parsed module use module-only syntax — a static import
+// or export, import.meta, or a top-level await? Node's format
+// detection (containsModuleSyntax) counts exactly these: a dynamic
+// import() alone does not count, and neither does an await inside a
+// function. Used to decide whether a mirrored .js file must be
+// renamed to .mjs (see buildModuleMirror).
+function hasModuleSyntax(ast) {
+  let found = false;
+  function visit(node, inFunction) {
+    if (found || node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (let ii = 0; ii < node.length; ++ii) visit(node[ii], inFunction);
+      return;
+    }
+    let t = node.type;
+    if (t === "ImportDeclaration" || t === "ExportNamedDeclaration" ||
+        t === "ExportDefaultDeclaration" || t === "ExportAllDeclaration") {
+      found = true;
+      return;
+    }
+    if (t === "MetaProperty" && node.meta && node.meta.name === "import" &&
+        node.property && node.property.name === "meta") {
+      found = true;
+      return;
+    }
+    if (t === "AwaitExpression" && !inFunction) {
+      found = true;
+      return;
+    }
+    let childInFunction = inFunction ||
+      t === "FunctionDeclaration" || t === "FunctionExpression" ||
+      t === "ArrowFunctionExpression";
+    let keys = Object.keys(node);
+    for (let ii = 0; ii < keys.length; ++ii) {
+      if (keys[ii] === "loc" || keys[ii] === "range") continue;
+      visit(node[keys[ii]], childInFunction);
+    }
+  }
+  visit(ast, false);
+  return found;
+}
+
+// The mirrored path of a resolved file: renamed to .mjs when the
+// mirror renames it (see buildModuleMirror), else itself. Only used
+// when a mirror is being built (ctx.rename is set); bare specifiers
+// resolve outside the mirror and never map.
+function mirroredPath(ctx, resolved) {
+  if (ctx.rename && ctx.rename[resolved]) return ctx.rename[resolved];
+  return resolved;
+}
+
+// Is `node` the DEBUG-literal wrapper the patcher puts around a
+// dynamic import's specifier in generated code —
+// `import($$STx1.$30(10, "./dyn"))`? The wrapper is always a call
+// `<stage>.$<n>(<id>, <literal>)`: a member call with a numeric id
+// first and the literal second. Returns the inner string literal, or
+// null. The match is on the shape, not on which DEBUG number it is,
+// so it does not depend on the instruction table.
+function debugLiteralArg(node) {
+  if (!node || node.type !== "CallExpression") return null;
+  let callee = node.callee;
+  if (!callee || callee.type !== "MemberExpression") return null;
+  if (!callee.object || callee.object.type !== "Identifier") return null;
+  let prop = callee.property;
+  let isDebugProp = false;
+  if (prop && prop.type === "Identifier" && /^\$\d+$/.test(prop.name)) isDebugProp = true;
+  if (prop && prop.type === "Literal" && typeof prop.value === "string" && /^\$\d+$/.test(prop.value)) isDebugProp = true;
+  if (!isDebugProp) return null;
+  if (!node.arguments || node.arguments.length !== 2) return null;
+  if (!node.arguments[0] || node.arguments[0].type !== "Literal" || typeof node.arguments[0].value !== "number") return null;
+  let lit = node.arguments[1];
+  if (!lit || lit.type !== "Literal" || typeof lit.value !== "string") return null;
+  return lit;
+}
+
+// A name in an import/export specifier: an Identifier's name, or a
+// Literal's string value (string export names).
+function specifierName(n) {
+  if (!n) return "";
+  if (n.type === "Literal") return String(n.value);
+  return n.name || "";
+}
+
+// One entry of a destructuring pattern binding an imported JSON
+// member: shorthand when the names match and the name is a bindable
+// identifier (never "default" — `const { default } = x` is a
+// SyntaxError), otherwise `"name": local`.
+function destructureEntry(importedName, localName) {
+  if (importedName === localName && importedName !== "default" && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(importedName)) {
+    return importedName;
+  }
+  return JSON.stringify(importedName) + ": " + localName;
+}
+
+// A member access on a JSON object for a member name: dot form for
+// plain identifiers, bracket form otherwise.
+function jsonMemberAccess(name) {
+  if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) return "." + name;
+  return "[" + JSON.stringify(name) + "]";
+}
+
+// A fresh `__iroh_json_<n>` binding name that does not occur in
+// `source`, for the default import a named-JSON rewrite introduces.
+function freshJsonName(source, state) {
+  let name;
+  do {
+    name = "__iroh_json_" + (state.jsonCounter++);
+  } while (source.indexOf(name) !== -1);
+  return name;
+}
+
+function hasImportAttributes(node) {
+  if (node.attributes && node.attributes.length > 0) return true;
+  if (node.assertions && node.assertions.length > 0) return true;
+  return false;
+}
+
+// Plan the edit for a static import/export statement whose source
+// resolves to a JSON file. `newSpec` is the rewritten specifier.
+// Returns nothing; appends to `edits` and sets the state flags when
+// an edit is made. Named imports become a default import plus a
+// destructure; namespace imports become a default import plus an
+// alias; export-from forms become an import plus re-exports of temp
+// bindings (which handles string export names and `as default`
+// uniformly); a default-only or side-effect import just gains the
+// `with { type: "json" }` attribute.
+function planJsonEdit(node, newSpec, source, state, edits) {
+  let quoted = JSON.stringify(newSpec);
+  let attr = hasImportAttributes(node) ? "" : ' with { type: "json" }';
+  if (node.type === "ImportDeclaration") {
+    let specs = node.specifiers || [];
+    let hasNamed = false;
+    let hasNamespace = false;
+    let defaultLocal = null;
+    let nsLocal = null;
+    for (let ii = 0; ii < specs.length; ++ii) {
+      if (specs[ii].type === "ImportSpecifier") hasNamed = true;
+      else if (specs[ii].type === "ImportNamespaceSpecifier") { hasNamespace = true; nsLocal = specs[ii].local.name; }
+      else if (specs[ii].type === "ImportDefaultSpecifier") defaultLocal = specs[ii].local.name;
+    }
+    if (!hasNamed && !hasNamespace) {
+      if (attr === "" && quoted === JSON.stringify(node.source.value)) return;
+      edits.push({ start: node.source.start, end: node.source.end, text: quoted + attr });
+      state.needed = true;
+      state.relativeNeeded = true;
+      return;
+    }
+    let importLocal = defaultLocal !== null ? defaultLocal : freshJsonName(source, state);
+    let parts = ["import " + importLocal + " from " + quoted + ' with { type: "json" };'];
+    if (hasNamed) {
+      let entries = [];
+      for (let ii = 0; ii < specs.length; ++ii) {
+        if (specs[ii].type !== "ImportSpecifier") continue;
+        entries.push(destructureEntry(specifierName(specs[ii].imported), specs[ii].local.name));
+      }
+      parts.push("const { " + entries.join(", ") + " } = " + importLocal + ";");
+    }
+    if (hasNamespace) {
+      parts.push("const " + nsLocal + " = " + importLocal + ";");
+    }
+    edits.push({ start: node.start, end: node.end, text: parts.join(" ") });
+    state.needed = true;
+    state.relativeNeeded = true;
+    return;
+  }
+  if (node.type === "ExportNamedDeclaration") {
+    let specs = node.specifiers || [];
+    if (specs.length === 0) {
+      if (attr === "" && quoted === JSON.stringify(node.source.value)) return;
+      edits.push({ start: node.source.start, end: node.source.end, text: quoted + attr });
+      state.needed = true;
+      state.relativeNeeded = true;
+      return;
+    }
+    let jsonName = freshJsonName(source, state);
+    let parts = ["import " + jsonName + " from " + quoted + ' with { type: "json" };'];
+    let exportList = [];
+    for (let ii = 0; ii < specs.length; ++ii) {
+      let local = specifierName(specs[ii].local);
+      let exported = specifierName(specs[ii].exported);
+      let temp = jsonName + "_e" + ii;
+      parts.push("const " + temp + " = " + jsonName + jsonMemberAccess(local) + ";");
+      // `export { x as "default" }` is valid syntax, so "default" as
+      // the exported name goes through the same list, quoted.
+      exportList.push(temp + " as " + (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(exported) && exported !== "default" ? exported : JSON.stringify(exported)));
+    }
+    parts.push("export { " + exportList.join(", ") + " };");
+    edits.push({ start: node.start, end: node.end, text: parts.join(" ") });
+    state.needed = true;
+    state.relativeNeeded = true;
+    return;
+  }
+  if (node.type === "ExportAllDeclaration") {
+    let jsonName = freshJsonName(source, state);
+    let text = "import " + jsonName + " from " + quoted + ' with { type: "json" };';
+    // `export * from` a JSON module re-exports nothing (the default
+    // is excluded), so the import alone is equivalent. `export * as
+    // ns from` keeps the namespace as an alias of the default.
+    if (node.exported) {
+      text += " export const " + specifierName(node.exported) + " = " + jsonName + ";";
+    }
+    edits.push({ start: node.start, end: node.end, text: text });
+    state.needed = true;
+    state.relativeNeeded = true;
+    return;
+  }
+}
+
+// Plan the edit for one static import/export statement. `node.source`
+// is the specifier literal. Appends to `edits` when the specifier
+// changes, records the resolved absolute path in `state.edges` for
+// the graph walk, and sets the state flags.
+function planStaticEdit(node, spec, baseDir, ctx, source, state, edits) {
+  if (spec.charAt(0) === ".") {
+    let resolved = resolveRelativeTarget(ctx.fs, ctx.path, baseDir, spec);
+    if (resolved === null) return;
+    state.edges.push(resolved);
+    let newSpec = relativeSpecifier(ctx.path, baseDir, mirroredPath(ctx, resolved));
+    if (/\.json$/i.test(resolved)) {
+      planJsonEdit(node, newSpec, source, state, edits);
+    } else if (newSpec !== spec) {
+      edits.push({ start: node.source.start, end: node.source.end, text: JSON.stringify(newSpec) });
+      state.needed = true;
+      state.relativeNeeded = true;
+    }
+    return;
+  }
+  if (ctx.forMirror && spec.indexOf("node:") !== 0 && spec.charAt(0) !== "/") {
+    let resolved = resolveBareSpecifier(ctx, baseDir, spec);
+    if (resolved === null) return;
+    let newSpec = ctx.url.pathToFileURL(resolved).href;
+    if (/\.json$/i.test(resolved)) {
+      planJsonEdit(node, newSpec, source, state, edits);
+    } else if (newSpec !== spec) {
+      edits.push({ start: node.source.start, end: node.source.end, text: JSON.stringify(newSpec) });
+      state.needed = true;
+    }
+    return;
+  }
+}
+
+// Plan the edit for a dynamic import(). The specifier is the literal
+// argument — or, in generated code, the literal inside the
+// DEBUG-literal wrapper around it. A JSON target keeps the wrapper
+// and gains the attribute as the second import() argument; any other
+// target rewrites just the literal, keeping the instrumentation.
+function planDynamicEdit(node, baseDir, ctx, source, state, edits) {
+  let arg = node.source;
+  if (!arg) return;
+  let lit = null;
+  if (arg.type === "Literal" && typeof arg.value === "string") {
+    lit = arg;
+  } else {
+    lit = debugLiteralArg(arg);
+  }
+  if (lit === null) return;
+  let spec = lit.value;
+  let newSpec = null;
+  let isJson = false;
+  if (spec.charAt(0) === ".") {
+    let resolved = resolveRelativeTarget(ctx.fs, ctx.path, baseDir, spec);
+    if (resolved === null) return;
+    state.edges.push(resolved);
+    newSpec = relativeSpecifier(ctx.path, baseDir, mirroredPath(ctx, resolved));
+    isJson = /\.json$/i.test(resolved);
+  } else if (ctx.forMirror && spec.indexOf("node:") !== 0 && spec.charAt(0) !== "/") {
+    let resolved = resolveBareSpecifier(ctx, baseDir, spec);
+    if (resolved === null) return;
+    newSpec = ctx.url.pathToFileURL(resolved).href;
+    isJson = /\.json$/i.test(resolved);
+  } else {
+    return;
+  }
+  if (isJson) {
+    // Keep the DEBUG wrapper (if any) on the specifier: in generated
+    // code the specifier literal sits inside a DEBUG_LITERAL call,
+    // and replacing the whole import() dropped it — so no LITERAL
+    // event fired for this import. The attribute is added as the
+    // second import() argument instead, and it is always synthesized:
+    // the code generator drops import options, so the generated code
+    // never carries any to preserve.
+    let argText;
+    if (arg.type === "Literal") {
+      argText = JSON.stringify(newSpec);
+    } else {
+      let text = source.slice(arg.start, arg.end);
+      argText = text.slice(0, lit.start - arg.start) + JSON.stringify(newSpec) + text.slice(lit.end - arg.start);
+    }
+    edits.push({ start: node.start, end: node.end, text: "import(" + argText + ', { with: { type: "json" } })' });
+    state.needed = true;
+    state.relativeNeeded = true;
+  } else if (newSpec !== spec) {
+    edits.push({ start: lit.start, end: lit.end, text: JSON.stringify(newSpec) });
+    state.needed = true;
+    state.relativeNeeded = true;
+  }
+}
+
+// Rewrite the import specifiers in one module's source so Node's ESM
+// loader accepts it. `baseDir` is the directory the specifiers
+// resolve against (the file's real directory); `ctx` carries the
+// node builtins (`fs`, `path`, `url`, `createRequire`) and
+// `forMirror` — bare specifiers are only resolved when a mirror is
+// being built, since in place they already resolve through
+// node_modules. Returns { code, needed, relativeNeeded, edges,
+// moduleSyntax, parseFailed }: `needed` is true when any specifier changed,
+// `relativeNeeded` when a relative or JSON specifier changed (the
+// part that forces a mirror — a bare-only change never does),
+// `edges` lists the absolute paths of the relative imports, for the
+// graph walk, and `moduleSyntax` is true when the source uses
+// module-only syntax (a static import or export, import.meta, or a
+// top-level await).
+function rewriteModuleSource(source, baseDir, ctx) {
+  let ast;
+  try {
+    ast = parse(source, { locations: true, sourceType: "module", ecmaVersion: "latest" });
+  } catch (e) {
+    return { code: source, needed: false, relativeNeeded: false, edges: [], moduleSyntax: false, parseFailed: true };
+  }
+  let state = { needed: false, relativeNeeded: false, edges: [], jsonCounter: 0 };
+  let edits = [];
+  walkAstNodes(ast, function(node) {
+    if (node.type === "ImportDeclaration" || node.type === "ExportNamedDeclaration" || node.type === "ExportAllDeclaration") {
+      if (!node.source || node.source.type !== "Literal" || typeof node.source.value !== "string") return;
+      planStaticEdit(node, node.source.value, baseDir, ctx, source, state, edits);
+    } else if (node.type === "ImportExpression") {
+      planDynamicEdit(node, baseDir, ctx, source, state, edits);
+    }
+  });
+  edits.sort(function(a, b) { return b.start - a.start; });
+  let code = source;
+  for (let ii = 0; ii < edits.length; ++ii) {
+    let edit = edits[ii];
+    code = code.slice(0, edit.start) + edit.text + code.slice(edit.end);
+  }
+  return { code: code, needed: state.needed, relativeNeeded: state.relativeNeeded, edges: state.edges, moduleSyntax: hasModuleSyntax(ast), parseFailed: false };
+}
+
+// Build a rewritten mirror of the module graph reachable from the
+// traced entry, when any file in the graph needs a specifier rewrite.
+// `entryScript` is the generated script (post header rewrite);
+// `entryAbsPath` is the entry file's absolute path. Returns null
+// when nothing needs rewriting (the caller then uses the current
+// single-temp-file path), else { root, entryDir, entryCode }: `root`
+// is the temp mirror dir (the caller deletes it after the import
+// settles), `entryDir` is the mirrored directory of the entry file,
+// `entryCode` is the rewritten generated script to write there. The
+// mirror preserves absolute paths (root + absPath), so relative
+// imports between mirrored files resolve exactly as in the real
+// tree. JSON and other non-JS files are copied verbatim; bare
+// specifiers are resolved to absolute file URLs at rewrite time,
+// because the mirror has no node_modules of its own. Two phases: the
+// first decides whether a mirror is needed at all (bare specifiers
+// left alone, so a bare-only module keeps today's path); the second
+// rewrites everything for the mirror.
+//
+// Mirrored .js files with module-only syntax are renamed to .mjs:
+// Node warns [MODULE_TYPELESS_PACKAGE_JSON] when such a file is
+// loaded from a scope whose package.json has no "type" — and the
+// mirror copies the package.json in (a JSON import can pull it into
+// the graph), so the warning fired for mirrored traces. The .mjs
+// extension is unconditionally ESM, so no package.json lookup happens
+// and no warning fires. CJS files stay .js and keep loading as CJS,
+// so mixed graphs are unaffected; forcing "type": "module" on the
+// mirror would have broken them instead. A rename is skipped when
+// the .mjs path is itself a graph file — the warning may remain for
+// that rare file, but the graph stays intact.
+function buildModuleMirror(fs, os, path, url, createRequire, entryScript, entryAbsPath) {
+  let ctx1 = { fs: fs, path: path, url: url, createRequire: createRequire, forMirror: false };
+  let entry = rewriteModuleSource(entryScript, path.dirname(entryAbsPath), ctx1);
+  if (entry.parseFailed) return null;
+  let files = {};
+  let pending = [];
+  let seen = {};
+  let anyNeeded = entry.relativeNeeded;
+  function enqueue(absPath) {
+    if (!seen[absPath]) {
+      seen[absPath] = true;
+      pending.push(absPath);
+    }
+  }
+  for (let ii = 0; ii < entry.edges.length; ++ii) enqueue(entry.edges[ii]);
+  for (let qi = 0; qi < pending.length; ++qi) {
+    let absPath = pending[qi];
+    let source;
+    try {
+      source = fs.readFileSync(absPath, "utf8");
+    } catch (e) {
+      continue; // Unreadable: left out; the import fails as today.
+    }
+    if (!/\.m?js$/i.test(absPath)) {
+      files[absPath] = { source: source, needed: false, edges: [], moduleSyntax: false };
+      continue;
+    }
+    let rewritten = rewriteModuleSource(source, path.dirname(absPath), ctx1);
+    if (rewritten.parseFailed) {
+      files[absPath] = { source: source, needed: false, edges: [], moduleSyntax: false };
+      continue;
+    }
+    files[absPath] = { source: source, needed: rewritten.relativeNeeded, edges: rewritten.edges, moduleSyntax: rewritten.moduleSyntax };
+    if (rewritten.relativeNeeded) anyNeeded = true;
+    for (let jj = 0; jj < rewritten.edges.length; ++jj) enqueue(rewritten.edges[jj]);
+  }
+  if (!anyNeeded) return null;
+  let rename = {};
+  let allPaths = Object.keys(files);
+  for (let ii = 0; ii < allPaths.length; ++ii) {
+    let absPath = allPaths[ii];
+    if (!/\.js$/i.test(absPath)) continue;
+    if (!files[absPath].moduleSyntax) continue;
+    let renamed = absPath.replace(/\.js$/i, ".mjs");
+    if (files[renamed] !== undefined) continue;
+    rename[absPath] = renamed;
+  }
+  let ctx2 = { fs: fs, path: path, url: url, createRequire: createRequire, forMirror: true, rename: rename };
+  let root = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-trace-graph-"));
+  let entry2 = rewriteModuleSource(entryScript, path.dirname(entryAbsPath), ctx2);
+  let paths = Object.keys(files);
+  for (let ii = 0; ii < paths.length; ++ii) {
+    let absPath = paths[ii];
+    let content = files[absPath].source;
+    if (/\.m?js$/i.test(absPath)) {
+      let rewritten = rewriteModuleSource(content, path.dirname(absPath), ctx2);
+      if (!rewritten.parseFailed) content = rewritten.code;
+    }
+    let writePath = rename[absPath] || absPath;
+    let mirrored = path.join(root, writePath);
+    fs.mkdirSync(path.dirname(mirrored), { recursive: true });
+    fs.writeFileSync(mirrored, content, "utf8");
+  }
+  let entryDir = path.dirname(path.join(root, entryAbsPath));
+  fs.mkdirSync(entryDir, { recursive: true });
+  return { root: root, entryDir: entryDir, entryCode: entry2.code };
+}
+
 // The import half of traceModule(), shared with directModule():
 // write the instrumented module to a temp .mjs file and dynamic-
 // import it, with the globalThis.__irohStages registry the generated
@@ -14582,21 +15098,39 @@ function importTracedModule(iroh, run, options) {
     nodeImport$1("node:os"),
     nodeImport$1("node:path"),
     nodeImport$1("node:url"),
+    nodeImport$1("node:module"),
   ]).then(function(mods) {
     let fs = mods[0];
     let os = mods[1];
     let path = mods[2];
     let url = mods[3];
+    let createRequire = mods[4].createRequire;
+    // Rewrite the specifiers when the traced module (or anything it
+    // imports) uses extensionless relative imports or JSON imports:
+    // buildModuleMirror returns null when nothing needs rewriting,
+    // and the current single-temp-file path below is used unchanged.
+    // A build failure inside it also falls back to that path — the
+    // rewrite is best-effort, never a new failure mode.
+    let mirror = null;
+    if (options.filename) {
+      try {
+        mirror = buildModuleMirror(fs, os, path, url, createRequire, script, path.resolve(options.filename));
+      } catch (e) {
+        mirror = null;
+      }
+    }
     let dir;
     let ownDir = false;
-    if (options.filename) {
+    if (mirror) {
+      dir = mirror.entryDir;
+    } else if (options.filename) {
       dir = path.dirname(path.resolve(options.filename));
     } else {
       dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-trace-"));
       ownDir = true;
     }
     let file = path.join(dir, ".iroh-trace-" + run.stage.key + "-" + (tracedModuleSeq++) + ".mjs");
-    fs.writeFileSync(file, script, "utf8");
+    fs.writeFileSync(file, mirror ? mirror.entryCode : script, "utf8");
     // Register the stages object for the generated module's header.
     // Snapshot whatever was there (normally nothing) only when this
     // is the first in-flight call; restore it once no call is in
@@ -14634,6 +15168,15 @@ function importTracedModule(iroh, run, options) {
           // Best effort.
         }
       }
+      if (mirror) {
+        // The temp file sits inside the mirror; remove the whole
+        // mirrored graph now that the import has settled.
+        try {
+          fs.rmSync(mirror.root, { recursive: true, force: true });
+        } catch (e) {
+          // Best effort: a leftover temp mirror is not a trace failure.
+        }
+      }
     }
     let fileUrl = url.pathToFileURL(file).href;
     return nodeImport$1(fileUrl).then(
@@ -14669,6 +15212,18 @@ function importTracedModule(iroh, run, options) {
 // resolve against a fresh temp directory under os.tmpdir() and will
 // usually fail. `import.meta.url` in traced code is the temp file's
 // URL. The temp file is deleted after the import settles.
+//
+// Import-specifier rewriting (1.1.1): extensionless relative imports
+// (`./foo` -> `./foo.js` or `./foo/index.js`) and JSON imports
+// (named imports become a default import, and the `with
+// { type: "json" }` attribute is added where missing) are rewritten
+// in the temp copy — across the whole reachable graph, since a
+// dependency is loaded by Node as-is. The original files are never
+// touched; when nothing needs rewriting the plain temp-file path
+// above is used. A dynamic JSON import keeps its DEBUG wrapper (the
+// attribute is added as the second import() argument), and mirrored
+// .js files with module-only syntax are renamed to .mjs, so no
+// typeless-package warning fires (CJS files stay .js).
 //
 // Options: events, onEvent, stageOptions (sourceType is forced to
 // "module"), filename (base path for relative imports). A parse error
