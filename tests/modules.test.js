@@ -139,3 +139,43 @@ test("traceModule() traces a decorated exported class", async () => {
   );
   assert.equal(result.tagged, true);
 });
+
+test("traceModule() traces an anonymous default-exported function", async () => {
+  // Self-scan finding (26 Nov 2026): STAGE1.FunctionDeclaration read
+  // `node.id.name` with no guard, and `export default function() {}`
+  // has id null — the whole trace threw. The engine's own
+  // src/extend.js is exactly that shape. The anonymous export must be
+  // in the traced module itself: an imported one loads natively and is
+  // never patched, so it would not exercise the bug.
+  let { events, result } = await Iroh.traceModule(
+    `export default function(a, b) { return a + b; }\nexport const v = 1;`,
+    { filename: path.join(os.tmpdir(), "iroh-anon-default.mjs") }
+  );
+  assert.equal(result.v, 1);
+  assert.equal(typeof result.default, "function");
+  assert.ok(events.length > 0);
+});
+
+test("traceModule() re-executes the same file on repeated traces", async () => {
+  // Self-scan finding (26 Nov 2026): stage keys repeat across traces
+  // in one process (resetPatchCounters), so the temp .mjs filename
+  // repeated too — and Node's ESM loader caches modules by URL, so
+  // the third and later traces of the same file returned the cached
+  // module without executing it (0 events, stale result).
+  let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-retrace-"));
+  try {
+    let file = path.join(dir, "main.mjs");
+    let code = `globalThis.__retraceCount = (globalThis.__retraceCount || 0) + 1;\nexport const n = globalThis.__retraceCount;`;
+    let start = globalThis.__retraceCount || 0;
+    let seen = [];
+    for (let ii = 0; ii < 4; ii++) {
+      let { events, result } = await Iroh.traceModule(code, { filename: file });
+      seen.push(result.n);
+      assert.ok(events.length > 0, "trace " + (ii + 1) + " produced no events");
+    }
+    assert.deepEqual(seen, [start + 1, start + 2, start + 3, start + 4]);
+  } finally {
+    delete globalThis.__retraceCount;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
