@@ -8147,8 +8147,14 @@ var iroh = (function () {
     return String(category);
   }
 
-  function safeValue(value, depth, seen) {
+  function safeValue(value, depth, seen, owner) {
     if (value === null) { return null; }
+    // A traced program's `Iroh` is the engine instance itself: serializing
+    // the live singleton embeds its mutable state (the stages map, the
+    // assertion record), so two traces of one program are never
+    // byte-identical. Emit a stable token instead. `owner` is the instance
+    // eventToJSON was called on; callers that pass none keep the old shape.
+    if (owner !== void 0 && value === owner) { return "[Iroh]"; }
     switch (typeof value) {
       case "undefined": return null;
       case "function": return "[Function " + (value.name || "anonymous") + "]";
@@ -8165,7 +8171,7 @@ var iroh = (function () {
     if (seen.has(value)) { return "[Circular]"; }
     seen.add(value);
     if (Array.isArray(value)) {
-      return value.map(function (v) { return safeValue(v, depth - 1, seen); });
+      return value.map(function (v) { return safeValue(v, depth - 1, seen, owner); });
     }
     var out = {};
     // Indexed loop, not for...of: the browser bundle is transpiled by
@@ -8174,7 +8180,7 @@ var iroh = (function () {
     for (var ii = 0; ii < keys.length; ++ii) {
       var key = keys[ii];
       try {
-        out[key] = safeValue(value[key], depth - 1, seen);
+        out[key] = safeValue(value[key], depth - 1, seen, owner);
       } catch (e) {
         out[key] = "[Unserializable]";
       }
@@ -8200,7 +8206,11 @@ var iroh = (function () {
     for (var ii = 0; ii < TRACE_EVENT_FIELDS.length; ++ii) {
       var field = TRACE_EVENT_FIELDS[ii];
       if (event[field] !== void 0 && event[field] !== null) {
-        line[field] = safeValue(event[field], 3, new Set());
+        // `this` is the Iroh instance eventToJSON was called on (it is a
+        // prototype method): pass it as the owner so the instance itself
+        // serializes as "[Iroh]" instead of its mutable state. Called
+        // unbound, `this` is undefined and the shape is unchanged.
+        line[field] = safeValue(event[field], 3, new Set(), this);
       }
     }
     return line;
