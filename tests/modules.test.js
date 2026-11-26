@@ -16,7 +16,9 @@ async function withModuleDir(files, fn) {
   let dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-modules-test-"));
   try {
     for (let name of Object.keys(files)) {
-      fs.writeFileSync(path.join(dir, name), files[name]);
+      let target = path.join(dir, name);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, files[name]);
     }
     return await fn(dir);
   } finally {
@@ -138,4 +140,162 @@ test("traceModule() traces a decorated exported class", async () => {
     { events: ["CALL"] }
   );
   assert.equal(result.tagged, true);
+});
+
+// traceModule import-specifier rewriting (26 Nov 2026): Node's ESM
+// loader rejects extensionless relative imports and JSON imports
+// without `with { type: "json" }`, and a JSON module only provides a
+// default export — so a traced module using those forms failed at link
+// time. traceModule now rewrites the specifiers in the temp copy
+// (the original files are never touched). Each test below fails on
+// the old dist and passes on the fixed one.
+
+test("traceModule() resolves extensionless relative imports", async () => {
+  let { result } = await withModuleDir(
+    { "helper.js": "export function add(a, b) { return a + b; }\n" },
+    (dir) => Iroh.traceModule(
+      `import { add } from "./helper";\nexport const total = add(2, 3);`,
+      { filename: path.join(dir, "main.mjs") }
+    )
+  );
+  assert.equal(result.total, 5);
+});
+
+test("traceModule() resolves extensionless directory imports", async () => {
+  let { result } = await withModuleDir(
+    { "sub/index.js": "export const v = 7;\n" },
+    (dir) => Iroh.traceModule(
+      `import { v } from "./sub";\nexport const w = v * 2;`,
+      { filename: path.join(dir, "main.mjs") }
+    )
+  );
+  assert.equal(result.w, 14);
+});
+
+test("traceModule() resolves extensionless imports transitively", async () => {
+  // The rewrite has to cover the whole reachable graph, not just the
+  // traced file: a.js is loaded by Node as-is, so its own
+  // extensionless import of ./b must be rewritten too — otherwise the
+  // trace dies at the second hop.
+  let { result } = await withModuleDir(
+    {
+      "a.js": "import { y } from \"./b\";\nexport const x = y;\n",
+      "b.js": "export const y = 41;\n",
+    },
+    (dir) => Iroh.traceModule(
+      `import { x } from "./a";\nexport const v = x + 1;`,
+      { filename: path.join(dir, "main.mjs") }
+    )
+  );
+  assert.equal(result.v, 42);
+});
+
+test("traceModule() rewrites named JSON imports to a default import", async () => {
+  let { result } = await withModuleDir(
+    { "data.json": JSON.stringify({ n: 99, version: "1.2.3" }) },
+    (dir) => Iroh.traceModule(
+      `import { version as VV } from "./data.json";\nexport const v = VV;`,
+      { filename: path.join(dir, "main.mjs") }
+    )
+  );
+  assert.equal(result.v, "1.2.3");
+});
+
+test("traceModule() adds the JSON import attribute for default JSON imports", async () => {
+  // A default JSON import with no attribute also fails on Node 24
+  // (ERR_IMPORT_ATTRIBUTE_MISSING) — the attribute is part of the
+  // rewrite, not just the named-import fix.
+  let { result } = await withModuleDir(
+    { "data.json": JSON.stringify({ n: 99 }) },
+    (dir) => Iroh.traceModule(
+      `import data from "./data.json";\nexport const n = data.n;`,
+      { filename: path.join(dir, "main.mjs") }
+    )
+  );
+  assert.equal(result.n, 99);
+});
+
+test("traceModule() traces the engine's own src/setup.js", async () => {
+  // End-to-end proof: setup.js imports ./labels, ./cfg and ./helpers
+  // extensionless, and cfg.js has a named JSON import — the whole
+  // closure has to resolve for this to trace.
+  let file = path.join(__dirname, "..", "src", "setup.js");
+  let code = fs.readFileSync(file, "utf8");
+  let { events, result } = await Iroh.traceModule(code, { filename: file });
+  assert.ok(events.length > 0, "expected events from tracing setup.js");
+  assert.equal(typeof result.trace, "function");
+  assert.equal(typeof result.traceModule, "function");
+});
+
+test("traceModule() traces the engine's own src/index.js", async () => {
+  // The full engine entry: index.js imports the whole src tree
+  // extensionless. Tracing it executes the module (a second Iroh
+  // singleton is built inside the traced module) and returns its
+  // namespace — the default export is that singleton.
+  let file = path.join(__dirname, "..", "src", "index.js");
+  let code = fs.readFileSync(file, "utf8");
+  let { events, result } = await Iroh.traceModule(code, { filename: file });
+  assert.ok(events.length > 0, "expected events from tracing index.js");
+  assert.equal(typeof result.default.trace, "function");
+});
+
+// Two caveats fixed (26 Nov 2026): a dynamic JSON import lost its
+// DEBUG wrapper, and mirrored .js files printed Node's
+// typeless-package warning. Each test below fails on the old dist
+// and passes on the fixed one.
+
+test("traceModule() keeps the DEBUG wrapper on a dynamic JSON import", async () => {
+  // The rewrite used to replace the whole import() call with an
+  // attributed one, dropping the DEBUG_LITERAL wrapper the patcher
+  // puts around the specifier — so no LITERAL event fired for it,
+  // even though the import itself still ran. The wrapper is kept
+  // now and the attribute is added as the second import() argument.
+  let { events, result } = await withModuleDir(
+    { "data.json": JSON.stringify({ n: 99 }) },
+    (dir) => Iroh.traceModule(
+      `const m = await import("./data.json");\nexport const n = m.default.n;`,
+      { filename: path.join(dir, "main.mjs") }
+    )
+  );
+  assert.equal(result.n, 99);
+  let literals = events.filter((e) => e.event === "LITERAL").map((e) => e.value);
+  assert.ok(literals.indexOf("./data.json") !== -1,
+    "expected a LITERAL event for ./data.json, got " + JSON.stringify(literals));
+});
+
+test("traceModule() mirror emits no typeless-package warning and traces mixed CJS/ESM graphs", async () => {
+  // The temp mirror used to hold .js files with ESM syntax under a
+  // typeless package.json (copied in through the JSON import), so
+  // Node warned [MODULE_TYPELESS_PACKAGE_JSON] on stderr. ESM .js
+  // files are now mirrored as .mjs — CJS files stay .js — so no
+  // warning fires and mixed graphs still trace.
+  let warnings = [];
+  function onWarning(w) { warnings.push(w); }
+  process.on("warning", onWarning);
+  let v;
+  try {
+    let out = await withModuleDir(
+      {
+        "esm.js": "export const e = 3;\n",
+        "cjs.js": "module.exports = { c: 4 };\n",
+        "data.json": JSON.stringify({ n: 99 }),
+        "package.json": JSON.stringify({ name: "test-pkg", version: "1.0.0" }),
+      },
+      (dir) => Iroh.traceModule(
+        `import { e } from "./esm";\nimport cjs from "./cjs.js";\nimport data from "./data.json";\nimport pkg from "./package.json";\nexport const v = e + cjs.c + data.n;\nexport const pv = pkg.version;`,
+        { filename: path.join(dir, "main.mjs") }
+      )
+    );
+    v = out.result;
+    // process.emitWarning delivers the 'warning' event on a later
+    // tick (stderr prints immediately); let it land before the
+    // listener is detached, or a real warning would be missed.
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    process.removeListener("warning", onWarning);
+  }
+  assert.equal(v.v, 106);
+  assert.equal(v.pv, "1.0.0");
+  let typeless = warnings.filter((w) => w.code === "MODULE_TYPELESS_PACKAGE_JSON");
+  assert.deepEqual(typeless, []);
 });
