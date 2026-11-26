@@ -9096,7 +9096,7 @@ var iroh = (function () {
     if (node.magic) {
       patcher.pushScope(node);
       // just walk
-      patcher.walk(node.id, patcher, patcher.stage);
+      if (node.id !== null) { patcher.walk(node.id, patcher, patcher.stage); }
       node.params.map(function (param) { patcher.walk(param, patcher, patcher.stage); });
       patcher.walk(node.body, patcher, patcher.stage);
       patcher.popScope();
@@ -9104,7 +9104,22 @@ var iroh = (function () {
     }
     node.magic = true;
     patcher.pushScope(node);
-    var name = node.id.name;
+    // Anonymous default exports (`export default function() {}`) have
+    // no id: give them a synthetic one, the same way FunctionExpression
+    // does, so the patcher never reads `node.id.name` of null. The
+    // export still binds the function as the default; only its recorded
+    // name is synthetic. The uid is consumed only for the anonymous
+    // case, so named declarations keep their exact generated names.
+    var name;
+    if (node.id === null) {
+      name = "$$ANON_" + uid();
+      node.id = {
+        magic: true,
+        type: "Identifier",
+        name: name
+      };
+    }
+    name = node.id.name;
     patcher.symbols[name] = cloneNode(node);
     patcher.walk(node.id, patcher, patcher.stage);
     node.params.map(function (param) { patcher.walk(param, patcher, patcher.stage); });
@@ -9192,6 +9207,21 @@ var iroh = (function () {
       });
       return;
     }
+    // A constructor `super(...)` call is stage5's job (it records the
+    // super index on the enclosing function and rewrites the arguments
+    // through DEBUG_SUPER). Stage1 must not rewrite it: resolveCallee
+    // would return the bare `super` node as the call object, and bare
+    // `super` as an argument is a SyntaxError ("'super' keyword
+    // unexpected here"). Walk the arguments so nested expressions are
+    // still patched, but leave the call itself alone and do not set
+    // magic — stage5 needs magic false to claim it.
+    if (node.callee && node.callee.type === "Super") {
+      patcher.walk(node.callee, patcher, patcher.stage);
+      node.arguments.map(function (arg) {
+        patcher.walk(arg, patcher, patcher.stage);
+      });
+      return;
+    }
     node.magic = true;
     patcher.walk(node.callee, patcher, patcher.stage);
     node.arguments.map(function (arg) {
@@ -9204,6 +9234,18 @@ var iroh = (function () {
       node: cloneNode(node)
     };
     var callee = resolveCallee(node.callee);
+    // A `super.m(...)` call: `super` is not a value and cannot be passed
+    // bare as the call object (SyntaxError, same as above). The receiver
+    // of a super call is `this`, and the callable is the member
+    // expression itself — `super.m` as an argument is a valid
+    // SuperProperty read. DEBUG_FUNCTION_CALL treats a function `call`
+    // argument as the callee and applies it to `object`, which is the
+    // same shape the private-method branch below already uses.
+    var isSuperCall = node.callee.type === "MemberExpression" &&
+      node.callee.object.type === "Super";
+    if (isSuperCall) {
+      callee = parseExpression("this");
+    }
     var call = {
       magic: true,
       type: "CallExpression",
@@ -9218,6 +9260,12 @@ var iroh = (function () {
         callee,
         (function () {
           if (node.callee.type === "MemberExpression") {
+            // super method call (`super.m()`): pass the member expression
+            // itself as the callee (see above) — `super.m` reads the
+            // parent method, and DEBUG_FUNCTION_CALL applies it to `this`.
+            if (node.callee.object.type === "Super") {
+              return node.callee;
+            }
             var property = node.callee.property;
             // identifier
             if (property.type === "Identifier") {
@@ -9512,6 +9560,19 @@ var iroh = (function () {
 
   STAGE1.MemberExpression = function(node, patcher) {
     if (node.magic) {
+      patcher.walk(node.object, patcher, patcher.stage);
+      patcher.walk(node.property, patcher, patcher.stage);
+      return;
+    }
+    // `super` is not a value: it is only legal as `super.prop` /
+    // `super[expr]`. Decomposing a super member into
+    // `DEBUG_MEMBER_EXPR(hash, super, "m").m` passes bare `super` as an
+    // argument, which is a SyntaxError. Leave super members native —
+    // no MEMBER event fires for the read, and a `super.m()` call is
+    // handled by the CallExpression handler instead (receiver `this`,
+    // callable the member itself). Same class of problem as the
+    // PrivateIdentifier case below.
+    if (node.object.type === "Super") {
       patcher.walk(node.object, patcher, patcher.stage);
       patcher.walk(node.property, patcher, patcher.stage);
       return;
@@ -10038,7 +10099,11 @@ var iroh = (function () {
   STAGE3.CatchClause = function(node, patcher) {
     if (node.magic) { return; }
     patcher.pushScope(node);
-    patcher.walk(node.param, patcher, patcher.stage);
+    // Optional catch binding (`catch {}`) has no param: walk it only
+    // when it exists, or the walker reads `.type` of null and the whole
+    // trace throws. The catch body is unaffected — there is simply no
+    // binding to declare.
+    if (node.param !== null) { patcher.walk(node.param, patcher, patcher.stage); }
     patcher.walk(node.body, patcher, patcher.stage);
 
     var hash = uBranchHash();
@@ -14480,6 +14545,16 @@ var iroh = (function () {
   var irohStagesHadPrevious = false;
   var irohStagesPrevious = void 0;
 
+  // Temp-file sequence for traceModule()/directModule(): never reset.
+  // Stage keys repeat across traces in one process (resetPatchCounters
+  // restores the uid counter per patch, for byte-stable hashes), so a
+  // temp filename built from the stage key alone repeats too — and
+  // Node's ESM loader caches modules by URL, so a repeat returns the
+  // FIRST trace's module without executing the new code (a later trace
+  // of the same file then "succeeds" with 0 events). The sequence keeps
+  // every temp file URL unique while the stage key stays deterministic.
+  var tracedModuleSeq = 0;
+
   // The import half of traceModule(), shared with directModule():
   // write the instrumented module to a temp .mjs file and dynamic-
   // import it, with the globalThis.__irohStages registry the generated
@@ -14518,7 +14593,7 @@ var iroh = (function () {
         dir = fs.mkdtempSync(path.join(os.tmpdir(), "iroh-trace-"));
         ownDir = true;
       }
-      var file = path.join(dir, ".iroh-trace-" + run.stage.key + ".mjs");
+      var file = path.join(dir, ".iroh-trace-" + run.stage.key + "-" + (tracedModuleSeq++) + ".mjs");
       fs.writeFileSync(file, script, "utf8");
       // Register the stages object for the generated module's header.
       // Snapshot whatever was there (normally nothing) only when this
